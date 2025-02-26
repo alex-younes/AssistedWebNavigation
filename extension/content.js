@@ -15,7 +15,7 @@ window.addEventListener('load', function() {
     // If we're recording, inform the background script of navigation
     if (isRecording && sessionId) {
         chrome.runtime.sendMessage({
-            action: "tabNavigated",
+            action: "tabNavigated", 
             previousUrl: previousUrl,
             isReload: isReload,
             currentUrl: window.location.href

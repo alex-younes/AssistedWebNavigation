@@ -5,7 +5,11 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "nodemon server.js"
+    "dev": "nodemon server.js",
+    "generate-env": "node utils/generateEnv.js",
+    "build-frontend": "cd ../frontend && npm install && npm run build",
+    "prepare-all": "npm run generate-env && npm run build-frontend",
+    "deploy": "npm run prepare-all && npm start"
   },
   "keywords": [],
   "author": "",

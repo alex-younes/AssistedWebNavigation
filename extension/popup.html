@@ -135,6 +135,83 @@
       background-color: #ecf0f1;
       margin: 16px 0;
     }
+    .settings-input {
+      width: 100%;
+      padding: 8px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      margin-bottom: 8px;
+      font-size: 14px;
+    }
+    .settings-input:focus {
+      border-color: #3498db;
+      outline: none;
+    }
+    .settings-save {
+      background-color: #2ecc71;
+    }
+    .settings-save:hover {
+      background-color: #27ae60;
+    }
+    .server-status {
+      display: flex;
+      align-items: center;
+      margin-bottom: 12px;
+      padding: 8px;
+      background: #f8f9fa;
+      border-radius: 4px;
+    }
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background-color: #95a5a6;
+      margin-right: 8px;
+    }
+    .status-dot.connected {
+      background-color: #2ecc71;
+    }
+    .status-dot.error {
+      background-color: #e74c3c;
+    }
+    .status-text {
+      font-size: 12px;
+      color: #666;
+    }
+    .button-group {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    .button-group .btn {
+      flex: 1;
+      margin-bottom: 0;
+    }
+    .btn-secondary {
+      background-color: #7f8c8d;
+    }
+    .btn-secondary:hover {
+      background-color: #6c7a7d;
+    }
+    #openFrontendContainer {
+      margin-top: 12px;
+    }
+    
+    .btn-primary {
+      background-color: #3498db;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+    
+    .btn-primary:hover {
+      background-color: #2980b9;
+    }
+    
+    .btn-icon {
+      font-size: 16px;
+    }
   </style>
 </head>
 <body>
@@ -169,6 +246,26 @@
     <div>Session ID: <span id="sessionId">-</span></div>
     <div>Interactions: <span id="interactionCount">0</span></div>
     <div>Duration: <span id="duration">0s</span></div>
+  </div>
+  
+  <div class="card">
+    <div class="card-title">Server Settings</div>
+    <div class="server-status" id="serverStatusIndicator">
+      <span class="status-dot"></span>
+      <span class="status-text">Not Connected</span>
+    </div>
+    <input type="text" id="serverIp" class="settings-input" placeholder="Enter server IP (e.g., 192.168.1.104:3001)" />
+    <div class="button-group">
+      <button id="testConnectionBtn" class="btn btn-secondary">Test Connection</button>
+      <button id="saveSettingsBtn" class="btn settings-save">Save Settings</button>
+    </div>
+    <div id="openFrontendContainer" style="display: none;">
+      <button id="openFrontendBtn" class="btn btn-primary">
+        <span class="btn-icon">🌐</span>
+        Open Frontend
+      </button>
+    </div>
+    <div id="settingsStatus" class="status" style="display: none;"></div>
   </div>
   
   <script src="popup.js"></script>

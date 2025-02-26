@@ -5,6 +5,7 @@
   "description": "Record and analyze interactions on web pages",
   "permissions": [
     "activeTab",
+    "storage",
     "scripting",
     "tabs"
   ],

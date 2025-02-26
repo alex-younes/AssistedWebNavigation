@@ -2,8 +2,14 @@
  * Global configuration for the DOM Visualizer frontend
  */
 
-// API Base URL for backend communication
-export const API_BASE_URL = 'http://localhost:3001/api';
+// Get the API URLs from environment variables
+const apiUrl = process.env.REACT_APP_API_URL;
+const serverUrl = process.env.REACT_APP_SERVER_URL;
+const wsUrl = process.env.REACT_APP_WS_URL;
+
+if (!apiUrl || !serverUrl || !wsUrl) {
+  console.error('Environment variables for API URLs are not set!');
+}
 
 // Polling interval (in ms) for checking interaction updates
 export const INTERACTION_POLLING_INTERVAL = 500;
@@ -17,7 +23,9 @@ export const DEBUG_MODE = true;
 
 // Update your frontend config to point to the extension endpoints
 const config = {
-  API_BASE_URL: 'http://localhost:3001/api',
+  API_BASE_URL: apiUrl,
+  SERVER_URL: serverUrl,
+  WS_URL: wsUrl,
   EXTENSION_ROUTES: {
     CAPTURE: '/extension/capture',
     INTERACTIONS: '/extension/interactions'

@@ -1,6 +1,7 @@
 import axios from 'axios';
+import config from '../config';
 
-const API_BASE_URL = 'http://localhost:3001/api';
+const API_BASE_URL = config.API_BASE_URL;
 
 const handleError = (error) => {
     console.error('API Error:', error);

@@ -1,7 +1,7 @@
 // Background script for communication between content script and backend
 
 // Config 
-const API_BASE_URL = 'http://localhost:3001/api';
+let API_BASE_URL = null;
 let currentSessionId = null;
 let recordingTabId = null;
 let recordingStatus = 'idle'; // 'idle', 'recording', 'paused', 'error'
@@ -9,9 +9,37 @@ let interactionBuffer = []; // Buffer to store interactions if connection fails
 let interactionCount = 0;
 let lastSyncTime = null;
 
+// Initialize API URL from storage
+chrome.storage.sync.get(['serverConfig'], (result) => {
+  if (result.serverConfig) {
+    const { ip, port } = result.serverConfig;
+    API_BASE_URL = `http://${ip}:${port}/api`;
+    console.log('[Extension] Using API URL:', API_BASE_URL);
+  } else {
+    console.warn('[Extension] No server configuration found. Please configure server settings.');
+  }
+});
+
+// Listen for changes to server config
+chrome.storage.onChanged.addListener((changes, namespace) => {
+  if (namespace === 'sync' && changes.serverConfig) {
+    const { ip, port } = changes.serverConfig.newValue;
+    API_BASE_URL = `http://${ip}:${port}/api`;
+    console.log('[Extension] Updated API URL:', API_BASE_URL);
+  }
+});
+
+// Helper function to check if API URL is configured
+const checkApiUrl = () => {
+  if (!API_BASE_URL) {
+    throw new Error('Server not configured. Please set server IP and port in extension settings.');
+  }
+};
+
 // Helper to send interactions to backend with retry logic
 const sendInteractionsToBackend = async (interactions) => {
   try {
+    checkApiUrl();
     if (!interactions || interactions.length === 0) return;
     
     // Send batch of interactions

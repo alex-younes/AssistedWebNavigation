@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>DOM Analyzer Extension</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      width: 320px;
+      padding: 16px;
+      margin: 0;
+      background-color: #f7f9fc;
+      color: #333;
+    }
+    .header {
+      text-align: center;
+      margin-bottom: 20px;
+    }
+    h1 {
+      font-size: 18px;
+      margin: 0 0 8px 0;
+      color: #2c3e50;
+    }
+    .subtitle {
+      font-size: 12px;
+      color: #7f8c8d;
+      margin: 0;
+    }
+    .card {
+      background-color: white;
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 16px;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    }
+    .card-title {
+      font-size: 14px;
+      font-weight: bold;
+      margin-top: 0;
+      margin-bottom: 12px;
+      color: #2c3e50;
+    }
+    .btn {
+      display: block;
+      width: 100%;
+      padding: 10px 16px;
+      border: none;
+      border-radius: 4px;
+      background-color: #3498db;
+      color: white;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      margin-bottom: 8px;
+      transition: background-color 0.2s;
+    }
+    .btn:hover {
+      background-color: #2980b9;
+    }
+    .btn:active {
+      background-color: #1c6ea4;
+    }
+    .btn:disabled {
+      background-color: #bdc3c7;
+      cursor: not-allowed;
+    }
+    .btn-danger {
+      background-color: #e74c3c;
+    }
+    .btn-danger:hover {
+      background-color: #c0392b;
+    }
+    .btn-danger:active {
+      background-color: #a93226;
+    }
+    .status {
+      background-color: #f8f9fa;
+      border-radius: 4px;
+      padding: 12px;
+      margin-top: 16px;
+      font-size: 13px;
+      color: #555;
+      border-left: 4px solid #3498db;
+    }
+    .status.error {
+      border-left-color: #e74c3c;
+      color: #e74c3c;
+    }
+    .status.success {
+      border-left-color: #2ecc71;
+      color: #27ae60;
+    }
+    .status.recording {
+      border-left-color: #e74c3c;
+      color: #e74c3c;
+    }
+    .status-label {
+      display: inline-block;
+      border-radius: 3px;
+      padding: 3px 6px;
+      font-size: 10px;
+      font-weight: bold;
+      text-transform: uppercase;
+      margin-bottom: 8px;
+    }
+    .status-label.recording {
+      background-color: #e74c3c;
+      color: white;
+    }
+    .status-label.idle {
+      background-color: #95a5a6;
+      color: white;
+    }
+    .status-label.success {
+      background-color: #2ecc71;
+      color: white;
+    }
+    .counter {
+      display: inline-block;
+      background-color: #ecf0f1;
+      padding: 2px 8px;
+      border-radius: 10px;
+      font-size: 12px;
+      margin-left: 10px;
+    }
+    .actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 16px;
+    }
+    .actions .btn {
+      margin-bottom: 0;
+    }
+    .divider {
+      height: 1px;
+      background-color: #ecf0f1;
+      margin: 16px 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>Web Interaction Recorder</h1>
+    <p class="subtitle">Record user interactions on the current tab</p>
+  </div>
+  
+  <div class="card" id="statusCard">
+    <div class="card-title">
+      <span>Status</span>
+      <span id="statusLabel" class="status-label idle">Idle</span>
+    </div>
+    <div id="status" class="status">
+      Ready to analyze or record the current tab.
+    </div>
+  </div>
+  
+  <div class="card">
+    <div class="card-title">Recorder Controls</div>
+    <button id="startRecordingBtn" class="btn">Start Recording</button>
+    <button id="stopRecordingBtn" class="btn btn-danger" disabled>Stop Recording</button>
+    
+    <div class="divider"></div>
+    
+    <div class="card-title">DOM Analysis</div>
+    <button id="captureBtn" class="btn">Capture DOM Structure</button>
+  </div>
+  
+  <div class="card" id="statsCard" style="display: none;">
+    <div class="card-title">Recording Statistics</div>
+    <div>Session ID: <span id="sessionId">-</span></div>
+    <div>Interactions: <span id="interactionCount">0</span></div>
+    <div>Duration: <span id="duration">0s</span></div>
+  </div>
+  
+  <script src="popup.js"></script>
+</body>
+</html> 

@@ -33,7 +33,17 @@ function setupInteractionRecording() {
     if (window._interactionHandler) return;
 
     window._interactionHandler = function(event) {
-        if (!isRecording) return;
+        if (!isRecording) {
+            console.log('[Extension] Event ignored - not recording');
+            return;
+        }
+        
+        if (!sessionId || !window._recordingUserId) {
+            console.error('[Extension] Missing sessionId or userId:', { sessionId, userId: window._recordingUserId });
+            return;
+        }
+        
+        console.log(`[Extension] Capturing ${event.type} event`);
         
         try {
             const now = new Date();
@@ -42,6 +52,7 @@ function setupInteractionRecording() {
             // Create basic interaction data
             const interaction = {
                 sessionId: sessionId,
+                userId: window._recordingUserId,
                 type: event.type,
                 timestamp: timestamp,
                 url: window.location.href,
@@ -96,10 +107,18 @@ function setupInteractionRecording() {
                 interaction.details.formData = formData;
             }
             
+            console.log('[Extension] Sending interaction to background script:', interaction);
+            
             // Send the interaction to the background script
             chrome.runtime.sendMessage({
                 action: "saveInteraction",
                 interaction: interaction
+            }, response => {
+                if (chrome.runtime.lastError) {
+                    console.error('[Extension] Error sending interaction:', chrome.runtime.lastError);
+                } else {
+                    console.log('[Extension] Interaction sent successfully');
+                }
             });
             
             interactionCount++;
@@ -188,7 +207,10 @@ function setupInteractionRecording() {
         }
     }, { passive: true });
     
-    console.log('[Extension] Interaction recording set up');
+    console.log('[Extension] Interaction recording handlers set up');
+    
+    // Record initial page load
+    recordPageInfo();
 }
 
 // Helper function to get XPath of an element
@@ -290,45 +312,29 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     console.log('[Extension] Content script received message:', request);
     
     if (request.action === 'startRecording') {
-        isRecording = true;
-        sessionId = request.sessionId;
-        
-        const isPageReload = request.isPageReload || false;
-        if (!isPageReload) {
-            // Only reset interaction count if it's a new recording session
-            interactionCount = 0;
+        if (!request.sessionId || !request.userId) {
+            console.error('[Extension] Missing sessionId or userId in startRecording request');
+            sendResponse({ success: false, error: 'Missing sessionId or userId' });
+            return;
         }
         
+        sessionId = request.sessionId;
+        window._recordingUserId = request.userId;
+        isRecording = true;
         setupInteractionRecording();
         
-        // Record initial page info
-        recordPageInfo();
-        
-        sendResponse({ 
-            success: true, 
-            message: isPageReload ? 'Recording resumed after navigation' : 'Recording started' 
-        });
-    }
-    
-    if (request.action === 'stopRecording') {
+        console.log(`[Extension] Started recording for session ${sessionId}`);
+        sendResponse({ success: true });
+    } else if (request.action === 'stopRecording') {
         isRecording = false;
-        
-        // Remove event listeners
         if (window._interactionHandler) {
             document.removeEventListener('click', window._interactionHandler, true);
             document.removeEventListener('submit', window._interactionHandler, true);
             delete window._interactionHandler;
+            delete window._recordingUserId;
         }
-        
-        const finalInteractionCount = interactionCount;
-        sessionId = null;
-        interactionCount = 0;
-        
-        sendResponse({ 
-            success: true, 
-            message: 'Recording stopped',
-            interactionCount: finalInteractionCount
-        });
+        console.log('[Extension] Stopped recording');
+        sendResponse({ success: true });
     }
     
     if (request.action === 'captureDom') {

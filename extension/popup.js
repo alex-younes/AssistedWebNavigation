@@ -145,11 +145,38 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     // Add frontend button handler
-    document.getElementById('openFrontendBtn').addEventListener('click', () => {
-        if (serverConfig.ip && serverConfig.port) {
-            // Frontend typically runs on port 3000
-            const frontendUrl = `http://${serverConfig.ip}:3000`;
+    document.getElementById('openFrontendBtn').addEventListener('click', async () => {
+        try {
+            // Get server config
+            const config = await new Promise(resolve => {
+                chrome.storage.sync.get(['serverConfig'], result => resolve(result.serverConfig));
+            });
+            
+            if (!config) {
+                alert('Please configure server settings first');
+                return;
+            }
+            
+            // Get user ID
+            const userData = await new Promise(resolve => {
+                chrome.storage.local.get(['userId'], result => resolve(result));
+            });
+            
+            if (!userData.userId) {
+                alert('User ID not found. Please try reloading the extension.');
+                return;
+            }
+            
+            // Construct frontend URL with user ID - using port 3000 for frontend
+            const frontendUrl = `http://${config.ip}:3000?userId=${userData.userId}`;
+            console.log('[Extension] Opening frontend URL:', frontendUrl);
+            
+            // Open in new tab
             chrome.tabs.create({ url: frontendUrl });
+            
+        } catch (error) {
+            console.error('Error opening frontend:', error);
+            alert('Error opening frontend. Please check your configuration.');
         }
     });
 

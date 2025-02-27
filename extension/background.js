@@ -9,6 +9,9 @@ let interactionBuffer = []; // Buffer to store interactions if connection fails
 let interactionCount = 0;
 let lastSyncTime = null;
 
+// User identification management
+let userId = null;
+
 // Initialize API URL from storage
 chrome.storage.sync.get(['serverConfig'], (result) => {
   if (result.serverConfig) {
@@ -36,35 +39,76 @@ const checkApiUrl = () => {
   }
 };
 
+// Initialize user ID on extension install or startup
+const initializeUserId = async () => {
+  try {
+    // Try to get existing user ID
+    const data = await chrome.storage.local.get('userId');
+    if (data.userId) {
+      userId = data.userId;
+      console.log('[Extension] Retrieved existing user ID:', userId);
+    } else {
+      // Generate new user ID if none exists
+      userId = 'user_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+      await chrome.storage.local.set({ userId });
+      console.log('[Extension] Generated new user ID:', userId);
+    }
+  } catch (error) {
+    console.error('[Extension] Error initializing user ID:', error);
+  }
+};
+
+// Initialize user ID when extension loads
+initializeUserId();
+
 // Helper to send interactions to backend with retry logic
 const sendInteractionsToBackend = async (interactions) => {
-  try {
-    checkApiUrl();
-    if (!interactions || interactions.length === 0) return;
-    
-    // Send batch of interactions
-    const response = await fetch(`${API_BASE_URL}/extension/recorder/saveInteractions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ 
-        interactions,
-        sessionId: currentSessionId
-      })
-    });
-    
-    const data = await response.json();
-    if (data.success) {
-      console.log(`[Extension] Sent ${interactions.length} interactions to backend`);
-      lastSyncTime = Date.now();
-      return true;
+    try {
+        checkApiUrl();
+        if (!interactions || interactions.length === 0) return;
+        
+        // Ensure we have a user ID
+        if (!userId) {
+            await initializeUserId();
+        }
+        
+        console.log(`[Extension] Sending ${interactions.length} interactions to backend for session ${currentSessionId} and user ${userId}`);
+        console.log('[Extension] Sample interaction:', interactions[0]);
+        
+        // Send batch of interactions with user ID
+        const response = await fetch(`${API_BASE_URL}/extension/recorder/saveInteractions`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ 
+                interactions,
+                sessionId: currentSessionId,
+                userId: userId
+            })
+        });
+        
+        if (!response.ok) {
+            const errorData = await response.json();
+            console.error('[Extension] Failed to save interactions:', errorData);
+            return false;
+        }
+        
+        const data = await response.json();
+        if (data.success) {
+            console.log(`[Extension] Successfully sent ${interactions.length} interactions to backend`);
+            lastSyncTime = Date.now();
+            return true;
+        }
+        
+        console.error('[Extension] Backend reported failure saving interactions:', data);
+        return false;
+    } catch (error) {
+        console.error('[Extension] Error sending interactions:', error);
+        // Log the actual interactions that failed to send
+        console.error('[Extension] Failed interactions:', JSON.stringify(interactions, null, 2));
+        return false;
     }
-    return false;
-  } catch (error) {
-    console.error('[Extension] Error sending interactions:', error);
-    return false;
-  }
 };
 
 // Send any buffered interactions
@@ -138,94 +182,115 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   
   // Handle start recording request from popup
   if (request.action === "startRecording") {
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      const activeTab = tabs[0];
-      recordingTabId = activeTab.id;
-      
-      // Reset counters
-      interactionCount = 0;
-      interactionBuffer = [];
-      lastSyncTime = Date.now();
-      
-      // Create a new recording session on the backend
-      fetch(`${API_BASE_URL}/extension/recorder/saveSession`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          sessionId: `ext-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-          url: activeTab.url,
-          title: activeTab.title,
-          startTime: new Date().toISOString(),
-          source: 'extension'
-        })
-      })
-      .then(response => response.json())
-      .then(data => {
-        if (data.success) {
-          currentSessionId = data.sessionId;
-          recordingStatus = 'recording';
-          
-          // Start recording on the content script
-          chrome.tabs.sendMessage(activeTab.id, { 
-            action: 'startRecording',
-            sessionId: currentSessionId
-          }, (response) => {
-            if (chrome.runtime.lastError) {
-              console.error('[Extension] Error starting recording:', chrome.runtime.lastError);
-              recordingStatus = 'error';
-              sendResponse({ 
-                success: false, 
-                error: chrome.runtime.lastError.message || 'Failed to communicate with page' 
-              });
-              return;
+    chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
+        try {
+            if (!tabs || !tabs[0]) {
+                console.error('[Extension] No active tab found');
+                sendResponse({ 
+                    success: false, 
+                    error: 'No active tab found' 
+                });
+                return;
+            }
+
+            const activeTab = tabs[0];
+            recordingTabId = activeTab.id;
+            
+            // Reset counters
+            interactionCount = 0;
+            interactionBuffer = [];
+            lastSyncTime = Date.now();
+            
+            // Ensure we have a user ID
+            if (!userId) {
+                await initializeUserId();
             }
             
-            // Update popup with recording status
-            sendResponse({ 
-              success: true, 
-              sessionId: currentSessionId,
-              status: recordingStatus,
-              message: 'Recording started'
+            // Create a new session ID
+            const newSessionId = `ext-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+            
+            // Create a new recording session on the backend
+            const response = await fetch(`${API_BASE_URL}/extension/recorder/saveSession`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    sessionId: newSessionId,
+                    userId: userId,
+                    url: activeTab.url,
+                    title: activeTab.title,
+                    startTime: new Date().toISOString(),
+                    source: 'extension'
+                })
             });
             
-            // Notify the backend that we've started recording
-            fetch(`${API_BASE_URL}/extension/recorder/notifyRecordingStatus`, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json'
-              },
-              body: JSON.stringify({
-                status: 'recording',
-                sessionId: currentSessionId,
-                tabUrl: activeTab.url,
-                tabTitle: activeTab.title
-              })
-            }).catch(err => console.error('[Extension] Failed to notify recording status:', err));
+            const data = await response.json();
             
-            // Update the recording status in backend
-            updateRecordingStatus('recording');
-          });
-        } else {
-          recordingStatus = 'error';
-          sendResponse({ 
-            success: false, 
-            error: data.error || 'Failed to create recording session'
-          });
+            if (data.success) {
+                currentSessionId = newSessionId;
+                recordingStatus = 'recording';
+                
+                // Start recording on the content script
+                chrome.tabs.sendMessage(activeTab.id, { 
+                    action: 'startRecording',
+                    sessionId: currentSessionId,
+                    userId: userId
+                }, (response) => {
+                    if (chrome.runtime.lastError) {
+                        console.error('[Extension] Error starting recording:', chrome.runtime.lastError);
+                        recordingStatus = 'error';
+                        sendResponse({ 
+                            success: false, 
+                            error: chrome.runtime.lastError.message || 'Failed to communicate with page' 
+                        });
+                        return;
+                    }
+                    
+                    // Update popup with recording status
+                    sendResponse({ 
+                        success: true, 
+                        sessionId: currentSessionId,
+                        status: recordingStatus,
+                        message: 'Recording started'
+                    });
+                    
+                    // Notify the backend that we've started recording
+                    fetch(`${API_BASE_URL}/extension/recorder/notifyRecordingStatus`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            status: 'recording',
+                            sessionId: currentSessionId,
+                            userId: userId,
+                            tabUrl: activeTab.url,
+                            tabTitle: activeTab.title
+                        })
+                    }).catch(err => console.error('[Extension] Failed to notify recording status:', err));
+                    
+                    // Update the recording status in backend
+                    updateRecordingStatus('recording');
+                });
+            } else {
+                recordingStatus = 'error';
+                sendResponse({ 
+                    success: false, 
+                    error: data.error || 'Failed to create recording session'
+                });
+            }
+        } catch (error) {
+            console.error('[Extension] Error creating recording session:', error);
+            recordingStatus = 'error';
+            sendResponse({ 
+                success: false, 
+                error: error.toString() 
+            });
         }
-      })
-      .catch(error => {
-        console.error('[Extension] Error creating recording session:', error);
-        recordingStatus = 'error';
-        sendResponse({ 
-          success: false, 
-          error: error.toString() 
-        });
-      });
     });
     
-    return true;
+    return true; // Keep the message channel open for the async response
   }
   
   // Handle stop recording request from popup
@@ -315,20 +380,41 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "saveInteraction" && sender.tab) {
     const interaction = request.interaction;
     
+    console.log('[Extension] Received interaction from content script:', {
+        type: interaction?.type,
+        sessionId: interaction?.sessionId,
+        userId: interaction?.userId
+    });
+    
     if (!interaction || !interaction.sessionId) {
-      console.error('[Extension] Invalid interaction data:', interaction);
-      return false;
+        console.error('[Extension] Invalid interaction data:', interaction);
+        return false;
+    }
+    
+    if (!currentSessionId) {
+        console.error('[Extension] No active recording session');
+        return false;
+    }
+    
+    if (interaction.sessionId !== currentSessionId) {
+        console.error('[Extension] Session ID mismatch:', {
+            received: interaction.sessionId,
+            current: currentSessionId
+        });
+        return false;
     }
     
     // Increment counter
     interactionCount++;
+    console.log(`[Extension] Added interaction to buffer. Total count: ${interactionCount}`);
     
     // Add to buffer for batch sending
     interactionBuffer.push(interaction);
     
     // If we have enough interactions or it's been a while, flush immediately
     if (interactionBuffer.length >= 5 || (lastSyncTime && Date.now() - lastSyncTime > 2000)) {
-      flushInteractionBuffer();
+        console.log('[Extension] Triggering immediate buffer flush');
+        flushInteractionBuffer();
     }
     
     return false; // No response needed
@@ -387,9 +473,11 @@ function updateRecordingStatus(status) {
     const requestData = {
       status: status,
       sessionId: currentSessionId,
+      userId: userId,
       sessionData: {
         interactionCount: interactionCount,
-        lastSyncTime: lastSyncTime
+        lastSyncTime: lastSyncTime,
+        userId: userId
       }
     };
     

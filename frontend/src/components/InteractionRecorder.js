@@ -36,6 +36,7 @@ import { browserApi } from '../services/browserApi';
 import InteractionList from './InteractionList';
 import StarRating from './StarRating';
 import TaskManager from './TaskManager';
+import { useLocation, useNavigate } from 'react-router-dom';
 
 const ITEMS_PER_PAGE = 10;
 const POLLING_INTERVAL = 1000; // 1 second
@@ -47,6 +48,8 @@ const INTERACTION_FILTERS = {
 };
 
 const InteractionRecorder = ({ targetUrl }) => {
+    const location = useLocation();
+    const navigate = useNavigate();
     const [isRecording, setIsRecording] = useState(false);
     const [interactions, setInteractions] = useState([]);
     const [pollingInterval, setPollingInterval] = useState(null);
@@ -57,21 +60,18 @@ const InteractionRecorder = ({ targetUrl }) => {
     const [currentPage, setCurrentPage] = useState(1);
     const [loading, setLoading] = useState(false);
     const [selectedMode, setSelectedMode] = useState('extension'); // 'browser' or 'extension'
-    const [extensionStatus, setExtensionStatus] = useState({
-        isConnected: false,
-        status: 'unknown',
-        currentSession: null
-    });
+    const [extensionStatus, setExtensionStatus] = useState({ status: 'unknown' });
     const [extensionSessions, setExtensionSessions] = useState([]);
-    const [selectedExtensionSession, setSelectedExtensionSession] = useState(null);
+    const [selectedSession, setSelectedSession] = useState(null);
     const [lastFetchedCount, setLastFetchedCount] = useState(0);
     const [interactionFilter, setInteractionFilter] = useState(INTERACTION_FILTERS.HIDE_PAGE_LOADS);
     // Add a ref to store seen interaction IDs that persists between renders
     const seenInteractionIdsRef = useRef(new Set());
-    const [statusPollingInterval, setStatusPollingInterval] = useState(null);
     // Add a new state variable to count non-page load interactions
     const [nonPageLoadCount, setNonPageLoadCount] = useState(0);
     const [error, setError] = useState(null);
+    const [forcedUserId, setForcedUserId] = useState(null);
+    const [statusInterval, setStatusInterval] = useState(null);
 
     const totalPages = Math.ceil(interactions.length / ITEMS_PER_PAGE);
 
@@ -89,79 +89,63 @@ const InteractionRecorder = ({ targetUrl }) => {
             .then(response => setRatingCriteria(response))
             .catch(console.error);
 
-        // Get extension sessions on mount
-        loadExtensionSessions();
+        // Get userId from URL parameters
+        const params = new URLSearchParams(location.search);
+        const urlUserId = params.get('userId');
+        if (urlUserId) {
+            setForcedUserId(urlUserId);
+            loadExtensionSessions(urlUserId);
+        }
 
         // Check recording status on mount
         checkRecordingStatus();
         
-        // Set up regular status polling to detect when recording is stopped from the extension
-        const statusInterval = setInterval(() => {
-            if (selectedMode === 'extension') {
-                checkRecordingStatus();
-            }
+        // Set up polling for status updates
+        const interval = setInterval(() => {
+            checkRecordingStatus();
         }, 3000); // Check every 3 seconds
         
-        setStatusPollingInterval(statusInterval);
-
+        setStatusInterval(interval);
+        
         return () => {
             cleanupPolling();
-            if (statusPollingInterval) {
-                clearInterval(statusPollingInterval);
+            if (statusInterval) {
+                clearInterval(statusInterval);
             }
         };
-    }, []);
+    }, [location]);
 
     // Cleanup status polling when component unmounts
     useEffect(() => {
         return () => {
-            if (statusPollingInterval) {
-                clearInterval(statusPollingInterval);
-                setStatusPollingInterval(null);
+            if (statusInterval) {
+                clearInterval(statusInterval);
             }
         };
-    }, [statusPollingInterval]);
+    }, [statusInterval]);
 
     // Separate effect for starting polling if we're recording
     useEffect(() => {
         // If we are recording with the extension, set up polling
-        if (isRecording && extensionStatus.status === 'recording' && extensionStatus.currentSession) {
+        if (extensionStatus.status === 'recording' && extensionStatus.currentSession) {
             console.log('Setting up polling for extension interactions');
             // Clean up any existing polling first
             cleanupPolling();
-            // Start new polling
+            
+            // Update selected session with current session
+            setSelectedSession(extensionStatus.currentSession);
+            
+            // Start polling for interactions
             startPollingExtensionInteractions(extensionStatus.currentSession.sessionId);
-        } else if (!isRecording || extensionStatus.status !== 'recording') {
-            // Stop polling if we're not recording
-            console.log('Stopping polling because recording status changed:', extensionStatus.status);
-            cleanupPolling();
             
-            // If we were recording and now we're not, update UI state
-            if (isRecording && extensionStatus.status !== 'recording') {
-                console.log('Recording was stopped from the extension');
-                setIsRecording(false);
-            }
-        }
-        
-        // Validate that the selected session exists in the available sessions
-        if (selectedExtensionSession && extensionSessions.length > 0) {
-            const sessionExists = extensionSessions.some(
-                session => session.sessionId === selectedExtensionSession.sessionId
-            );
-            
-            if (!sessionExists) {
-                console.log(`Selected session ${selectedExtensionSession.sessionId} is not in the available sessions list`);
-                // If we're not recording, reset the selected session
-                if (!isRecording) {
-                    setSelectedExtensionSession(null);
-                }
-            }
-        }
-
-        return () => {
+            // Set recording state
+            setIsRecording(true);
+        } else if (extensionStatus.status !== 'recording') {
+            console.log('Not recording, cleaning up polling');
             cleanupPolling();
-        };
-    }, [isRecording, extensionStatus, extensionSessions, selectedExtensionSession]);
+            setIsRecording(false);
+        }
+    }, [extensionStatus]);
 
     // Reset the seen interactions when session changes or when manually clearing interactions
     useEffect(() => {
@@ -181,63 +165,61 @@ const InteractionRecorder = ({ targetUrl }) => {
 
     const checkRecordingStatus = async () => {
         try {
-            const status = await browserApi.getExtensionRecordingStatus();
+            // Get current userId from state or localStorage
+            let currentUserId = forcedUserId || localStorage.getItem('recordingUserId');
+            
+            let status = await browserApi.getExtensionRecordingStatus(currentUserId);
             console.log('Extension status:', status);
             
-            const previousStatus = extensionStatus.status;
-            
-            // Update local state with the extension status
-            setExtensionStatus({
-                isConnected: status.isExtensionConnected || false,
-                status: status.status || 'idle',
-                currentSession: status.currentSession || null
-            });
+            // If we need a userId and don't have one, generate one and persist it
+            if (status.needsUserId && !currentUserId) {
+                currentUserId = `user_${Date.now()}_${Math.random().toString(36).substring(2)}`;
+                localStorage.setItem('recordingUserId', currentUserId);
+                setForcedUserId(currentUserId);
+                
+                // Retry with new userId
+                status = await browserApi.getExtensionRecordingStatus(currentUserId);
+            }
 
-            // If recording was stopped from the extension, update our state
-            if (previousStatus === 'recording' && status.status !== 'recording') {
-                console.log('Recording was stopped from the extension');
-                setIsRecording(false);
-                cleanupPolling();
+            // If we have a userId but no sessions loaded, load them
+            if (currentUserId && extensionSessions.length === 0) {
+                await loadExtensionSessions(currentUserId);
             }
             
-            // If already recording, update UI and start polling
+            // Update extension status
+            setExtensionStatus(prevStatus => ({
+                ...prevStatus,
+                ...status,
+                isConnected: true, // Set to true since we got a response
+                userId: currentUserId || status.userId || status.sessionData?.userId,
+                currentSession: status.currentSession || null
+            }));
+
+            // If we have an active recording session, make sure it's in our sessions list
+            // and start polling for interactions
             if (status.status === 'recording' && status.currentSession) {
-                setIsRecording(true);
-                setSelectedMode('extension');
+                setExtensionSessions(prev => {
+                    const sessionExists = prev.some(s => s.sessionId === status.currentSession.sessionId);
+                    if (!sessionExists) {
+                        return [status.currentSession, ...prev];
+                    }
+                    return prev;
+                });
                 
-                // Check if this session exists in our list before setting it
-                const sessionExists = extensionSessions.some(
-                    session => session.sessionId === status.currentSession.sessionId
-                );
+                // Set the current session as selected
+                setSelectedSession(status.currentSession);
                 
-                // If not yet in our list, refresh the session list first
-                if (!sessionExists) {
-                    await loadExtensionSessions();
+                // Start polling for this session's interactions
+                if (!pollingInterval) {
+                    startPollingExtensionInteractions(status.currentSession.sessionId);
                 }
-                
-                // Set selected session
-                setSelectedExtensionSession(status.currentSession);
-                
-                // Load initial interactions
-                const result = await browserApi.getExtensionInteractions(status.currentSession.sessionId);
-                if (result && result.interactions) {
-                    // Initialize the seen interactions set with the initial interactions
-                    const initialIds = new Set();
-                    result.interactions.forEach(interaction => {
-                        const id = getInteractionId(interaction);
-                        initialIds.add(id);
-                    });
-                    seenInteractionIdsRef.current = initialIds;
-                    
-                    setInteractions(result.interactions);
-                    setTotalCount(result.interactions.length);
-                    setLastFetchedCount(result.interactions.length);
-                }
-                
-                // Don't start polling here - it will be handled by the useEffect
             }
         } catch (error) {
-            console.error('Error checking extension status:', error);
+            console.error('Error checking recording status:', error);
+            setExtensionStatus(prev => ({
+                ...prev,
+                isConnected: false
+            }));
         }
     };
 
@@ -248,63 +230,72 @@ const InteractionRecorder = ({ targetUrl }) => {
     };
 
     const startPollingExtensionInteractions = (sessionId) => {
-        if (!sessionId) return;
+        if (!sessionId) {
+            console.log('No session ID provided for polling');
+            return;
+        }
         
-        console.log(`Starting to poll for interactions in session ${sessionId}`);
+        console.log('Starting to poll interactions for session:', sessionId);
+        
         const interval = setInterval(async () => {
             try {
-                const result = await browserApi.getExtensionInteractions(sessionId);
-                if (!result) return;
+                const response = await browserApi.getExtensionInteractions(
+                    sessionId,
+                    extensionStatus.userId || forcedUserId
+                );
                 
-                const { interactions: fetchedInteractions } = result;
-                
-                // Only process if we have interactions
-                if (fetchedInteractions && fetchedInteractions.length > 0) {
-                    // Filter out interactions we've already seen using our ref
-                    const newInteractions = fetchedInteractions.filter(interaction => {
-                        const interactionId = getInteractionId(interaction);
-                        return !seenInteractionIdsRef.current.has(interactionId);
-                    });
-                    
-                    if (newInteractions.length > 0) {
-                        console.log(`Found ${newInteractions.length} new interactions out of ${fetchedInteractions.length} total`);
-                        
-                        // Add new interaction IDs to our seen set
-                        newInteractions.forEach(interaction => {
-                            const interactionId = getInteractionId(interaction);
-                            seenInteractionIdsRef.current.add(interactionId);
-                        });
-                        
-                        // Update the interactions list with new interactions only
-                        setInteractions(prev => [...prev, ...newInteractions]);
-                        
-                        // Update lastFetchedCount to match the total length
-                        setLastFetchedCount(fetchedInteractions.length);
-                    } else {
-                        console.log(`No new interactions in the ${fetchedInteractions.length} fetched interactions`);
-                    }
+                if (response && response.interactions) {
+                    console.log(`Received ${response.interactions.length} interactions`);
+                    setInteractions(response.interactions);
                 }
             } catch (error) {
-                console.error('Error polling for interactions:', error);
-                setErrorCount(prevCount => prevCount + 1);
-                if (errorCount > 5) {
-                    console.log('Too many errors, stopping polling');
-                    clearInterval(interval);
-                    setPollingInterval(null);
-                }
+                console.error('Error polling interactions:', error);
             }
-        }, POLLING_INTERVAL);
+        }, 1000);
         
         setPollingInterval(interval);
-        return interval;
+        
+        return () => clearInterval(interval);
     };
 
-    const loadExtensionSessions = async () => {
+    const loadExtensionSessions = async (userId = forcedUserId) => {
+        if (!userId) {
+            console.log('No userId provided for loading sessions');
+            return;
+        }
+        
         try {
-            const sessions = await browserApi.getExtensionSessions();
-            setExtensionSessions(sessions);
+            console.log('Loading sessions for user:', userId);
+            const sessions = await browserApi.getExtensionSessions(userId);
+            console.log('Loaded sessions:', sessions);
+            
+            if (Array.isArray(sessions)) {
+                setExtensionSessions(sessions);
+                
+                // If we have sessions and none selected, select the first one
+                if (sessions.length > 0 && !selectedSession) {
+                    const latestSession = sessions[0];
+                    setSelectedSession(latestSession);
+                    await loadExtensionSession(latestSession.sessionId, userId);
+                }
+            } else {
+                console.error('Invalid sessions response:', sessions);
+            }
         } catch (error) {
             console.error('Error loading extension sessions:', error);
+        }
+    };
+
+    const loadExtensionSession = async (sessionId, userId = forcedUserId) => {
+        if (!sessionId || !userId) return;
+        
+        try {
+            const response = await browserApi.getExtensionInteractions(sessionId, userId);
+            if (response && response.interactions) {
+                setInteractions(response.interactions);
+            }
+        } catch (error) {
+            console.error('Error loading session:', error);
         }
     };
 
@@ -389,50 +380,6 @@ const InteractionRecorder = ({ targetUrl }) => {
         }
     };
 
-    const loadExtensionSession = async (sessionId) => {
-        if (!sessionId) return;
-        
-        setLoading(true);
-        try {
-            // Clear any existing polling
-            cleanupPolling();
-            
-            // Reset seen interactions cache
-            seenInteractionIdsRef.current = new Set();
-            
-            const result = await browserApi.getExtensionInteractions(sessionId);
-            if (result && result.interactions) {
-                // Initialize seen interactions for this session
-                result.interactions.forEach(interaction => {
-                    const id = getInteractionId(interaction);
-                    seenInteractionIdsRef.current.add(id);
-                });
-                
-                setInteractions(result.interactions);
-                setTotalCount(result.interactions.length);
-                setLastFetchedCount(result.interactions.length);
-                setCurrentPage(1);
-                
-                // Find the session in the list to get more details
-                const session = extensionSessions.find(s => s.sessionId === sessionId);
-                if (session) {
-                    setSelectedExtensionSession(session);
-                }
-                
-                // If this is the currently recording session, start polling
-                if (extensionStatus.status === 'recording' && 
-                    extensionStatus.currentSession && 
-                    extensionStatus.currentSession.sessionId === sessionId) {
-                    startPollingExtensionInteractions(sessionId);
-                }
-            }
-        } catch (error) {
-            console.error('Failed to load extension session:', error);
-        } finally {
-            setLoading(false);
-        }
-    };
-
     const handleExtensionSessionChange = (event) => {
         const sessionId = event.target.value;
         loadExtensionSession(sessionId);
@@ -445,14 +392,14 @@ const InteractionRecorder = ({ targetUrl }) => {
         
         // After loading sessions, check if the currently selected session still exists
         // If not, reset the selection to avoid MUI "out-of-range value" errors
-        if (selectedExtensionSession) {
+        if (selectedSession) {
             const sessionStillExists = extensionSessions.some(
-                session => session.sessionId === selectedExtensionSession.sessionId
+                session => session.sessionId === selectedSession.sessionId
             );
             
             if (!sessionStillExists) {
-                console.log(`Selected session ${selectedExtensionSession.sessionId} no longer exists in the available sessions`);
-                setSelectedExtensionSession(null);
+                console.log(`Selected session ${selectedSession.sessionId} no longer exists in the available sessions`);
+                setSelectedSession(null);
             }
         }
         
@@ -486,9 +433,8 @@ const InteractionRecorder = ({ targetUrl }) => {
 
     // Add a new function to clear interactions
     const clearInteractions = async () => {
-        if (!selectedExtensionSession) return;
+        if (!selectedSession || !forcedUserId) return;
         
-        // Prevent clearing while recording is active
         if (isRecording) {
             console.log('Cannot clear interactions while recording is active');
             setError('Please stop recording before clearing interactions');
@@ -497,10 +443,11 @@ const InteractionRecorder = ({ targetUrl }) => {
         
         setLoading(true);
         try {
-            // Call the API to clear interactions on the backend
-            await browserApi.clearExtensionInteractions(selectedExtensionSession.sessionId);
+            await browserApi.clearExtensionInteractions(
+                selectedSession.sessionId,
+                forcedUserId
+            );
             
-            // Clear the frontend state
             setInteractions([]);
             setTotalCount(0);
             setNonPageLoadCount(0);
@@ -606,26 +553,33 @@ const InteractionRecorder = ({ targetUrl }) => {
                                 </Alert>
                             )}
                             
+                            {extensionStatus.status === 'recording' && extensionStatus.currentSession && (
+                                <Alert severity="info" icon={<FiberManualRecord />}>
+                                    Recording session: {extensionStatus.currentSession.sessionId}
+                                </Alert>
+                            )}
+                            
                             <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
                                 <FormControl fullWidth size="small">
                                     <InputLabel>Extension Session</InputLabel>
                                     <Select
-                                        value={selectedExtensionSession?.sessionId || ''}
+                                        value={selectedSession?.sessionId || ''}
                                         label="Extension Session"
                                         onChange={handleExtensionSessionChange}
                                         disabled={loading || extensionSessions.length === 0}
                                     >
-                                        {extensionSessions.length === 0 && (
+                                        {extensionSessions.length === 0 ? (
                                             <MenuItem value="">
                                                 <em>No sessions available</em>
                                             </MenuItem>
+                                        ) : (
+                                            extensionSessions.map(session => (
+                                                <MenuItem key={session.sessionId} value={session.sessionId}>
+                                                    {session.sessionId} - {new Date(session.startTime).toLocaleString()}
+                                                    {extensionStatus.currentSession?.sessionId === session.sessionId && ' (Active)'}
+                                                </MenuItem>
+                                            ))
                                         )}
-                                        {extensionSessions.map(session => (
-                                            <MenuItem key={session.sessionId} value={session.sessionId}>
-                                                {new Date(session.startTime).toLocaleString()} - {session.title?.substring(0, 30) || 'Unnamed Session'}
-                                                {extensionStatus.currentSession?.sessionId === session.sessionId && ' (Active)'}
-                                            </MenuItem>
-                                        ))}
                                     </Select>
                                 </FormControl>
                                 <Button

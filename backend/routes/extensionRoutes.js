@@ -35,11 +35,24 @@ const captureStore = {
   captures: []
 };
 
-// Global variable to track current recording status
-let currentRecordingStatus = {
-    status: 'idle',
-    isExtensionConnected: false,
-    currentSession: null
+// Global variable to track recording status per user
+const recordingStatusStore = {
+    users: {}
+};
+
+// Helper function to get or create user status
+const getUserStatus = (userId) => {
+    if (!userId) return null;
+    
+    if (!recordingStatusStore.users[userId]) {
+        recordingStatusStore.users[userId] = {
+            status: 'idle',
+            isExtensionConnected: false,
+            userId: userId,
+            currentSession: null
+        };
+    }
+    return recordingStatusStore.users[userId];
 };
 
 // Endpoint to save a recording session
@@ -48,21 +61,32 @@ router.post('/recorder/saveSession', async (req, res) => {
     debug('Received recording session data');
     const sessionData = req.body;
     
-    if (!sessionData || !sessionData.sessionId) {
+    if (!sessionData || !sessionData.sessionId || !sessionData.userId) {
       debug('Missing required session data');
       return res.status(400).json({
         success: false,
-        error: 'Missing session ID or data'
+        error: 'Missing session ID, user ID, or data'
       });
     }
     
-    // Store session data
-    interactionStore.sessions[sessionData.sessionId] = {
+    // Store session data with user ID
+    if (!interactionStore.users) {
+      interactionStore.users = {};
+    }
+    
+    if (!interactionStore.users[sessionData.userId]) {
+      interactionStore.users[sessionData.userId] = {
+        sessions: {},
+        interactions: []
+      };
+    }
+    
+    interactionStore.users[sessionData.userId].sessions[sessionData.sessionId] = {
       ...sessionData,
       interactions: [] // Will be populated as interactions come in
     };
     
-    debug(`Saved recording session: ${sessionData.sessionId}`);
+    debug(`Saved recording session: ${sessionData.sessionId} for user: ${sessionData.userId}`);
     
     res.json({
       success: true,
@@ -79,85 +103,103 @@ router.post('/recorder/saveSession', async (req, res) => {
 });
 
 // Endpoint to save an interaction
-router.post('/recorder/saveInteraction', async (req, res) => {
-  try {
-    const { interaction } = req.body;
-    console.log('[Backend] Received interaction:', JSON.stringify(interaction).substring(0, 200) + '...');
-    
-    if (!interaction || !interaction.sessionId) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid interaction data: missing sessionId'
-      });
+router.post('/recorder/saveInteractions', async (req, res) => {
+    try {
+        const { interactions, sessionId, userId } = req.body;
+        console.log(`[Backend] Received ${interactions?.length} interactions for session ${sessionId} user ${userId}`);
+        
+        if (!interactions || !sessionId || !userId) {
+            console.error('[Backend] Missing required data:', { interactions: !!interactions, sessionId, userId });
+            return res.status(400).json({
+                success: false,
+                error: 'Missing required data (interactions, sessionId, or userId)'
+            });
+        }
+        
+        // Initialize user store if needed
+        if (!interactionStore.users) {
+            interactionStore.users = {};
+        }
+        
+        // Initialize user data if needed
+        if (!interactionStore.users[userId]) {
+            interactionStore.users[userId] = {
+                sessions: {},
+                interactions: []
+            };
+        }
+        
+        // Initialize session if needed
+        if (!interactionStore.users[userId].sessions[sessionId]) {
+            interactionStore.users[userId].sessions[sessionId] = {
+                sessionId,
+                userId,
+                interactions: []
+            };
+        }
+        
+        // Add interactions to the session
+        const userSession = interactionStore.users[userId].sessions[sessionId];
+        interactions.forEach(interaction => {
+            userSession.interactions.push({
+                ...interaction,
+                sessionId,
+                userId,
+                timestamp: interaction.timestamp || new Date().toISOString()
+            });
+        });
+        
+        console.log(`[Backend] Saved ${interactions.length} interactions for session ${sessionId} user ${userId}`);
+        console.log(`[Backend] Total interactions for session: ${userSession.interactions.length}`);
+        
+        res.json({
+            success: true,
+            count: interactions.length,
+            totalCount: userSession.interactions.length
+        });
+    } catch (error) {
+        console.error('[Backend] Error saving interactions:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Server error saving interactions'
+        });
     }
-    
-    // Store the interaction in memory
-    interactionStore.interactions.push(interaction);
-    
-    // If this is the first interaction for this session, create a session entry
-    if (!interactionStore.sessions[interaction.sessionId]) {
-      interactionStore.sessions[interaction.sessionId] = {
-        sessionId: interaction.sessionId,
-        url: interaction.url,
-        startTime: Date.now(),
-        interactionCount: 0
-      };
-    }
-    
-    // Increment the interaction count for this session
-    interactionStore.sessions[interaction.sessionId].interactionCount = 
-      (interactionStore.sessions[interaction.sessionId].interactionCount || 0) + 1;
-    
-    console.log(`[Backend] Saved interaction for session ${interaction.sessionId}. Total interactions: ${interactionStore.sessions[interaction.sessionId].interactionCount}`);
-    
-    return res.json({
-      success: true,
-      message: 'Interaction saved',
-      interactionCount: interactionStore.sessions[interaction.sessionId].interactionCount
-    });
-  } catch (error) {
-    console.error('[Backend] Error saving interaction:', error);
-    return res.status(500).json({
-      success: false,
-      error: 'Error saving interaction: ' + error.message
-    });
-  }
 });
 
 // Endpoint to get interactions for a session
 router.get('/recorder/interactions/:sessionId', async (req, res) => {
-  try {
-    const { sessionId } = req.params;
-    console.log(`[Backend] Getting interactions for session ${sessionId}`);
-    
-    if (!sessionId) {
-      return res.status(400).json({
-        success: false,
-        error: 'Session ID is required'
-      });
+    try {
+        const { sessionId } = req.params;
+        const { userId } = req.query;
+        
+        console.log(`[Backend] Getting interactions for session ${sessionId} user ${userId}`);
+        
+        if (!sessionId || !userId) {
+            return res.status(400).json({
+                success: false,
+                error: 'Session ID and User ID are required'
+            });
+        }
+        
+        // Get interactions for the specific user and session
+        const userStore = interactionStore.users?.[userId];
+        const sessionStore = userStore?.sessions?.[sessionId];
+        const interactions = sessionStore?.interactions || [];
+        
+        console.log(`[Backend] Found ${interactions.length} interactions for session ${sessionId} user ${userId}`);
+        
+        res.json({
+            success: true,
+            interactions: interactions,
+            count: interactions.length
+        });
+    } catch (error) {
+        console.error('[Backend] Error getting interactions:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Server error getting interactions'
+        });
     }
-    
-    // Get the session data
-    const sessionData = interactionStore.sessions[sessionId] || null;
-    
-    // Get interactions for this session
-    const interactions = interactionStore.interactions.filter(i => i.sessionId === sessionId)
-      .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-    
-    console.log(`[Backend] Found ${interactions.length} interactions for session ${sessionId}`);
-    
-    return res.json({
-      success: true,
-      sessionData,
-      interactions
-    });
-  } catch (error) {
-    console.error('[Backend] Error getting interactions:', error);
-    return res.status(500).json({
-      success: false,
-      error: 'Error getting interactions: ' + error.message
-    });
-  }
 });
 
 // Extension integration endpoint
@@ -347,18 +389,51 @@ router.get('/recorder/sessions', async (req, res) => {
 // Route to update extension recording status
 router.post('/recorder/status', async (req, res) => {
     try {
-        const { status, sessionId, sessionData } = req.body;
-        console.log(`[Extension] Status update received: ${status}`);
+        const { status, sessionId, userId, sessionData } = req.body;
         
-        // Update the current status
-        currentRecordingStatus = {
-            status: status,
-            isExtensionConnected: true,
-            currentSession: sessionId ? {
+        if (!userId) {
+            return res.status(400).json({
+                success: false,
+                error: 'User ID is required'
+            });
+        }
+        
+        console.log(`[Extension] Status update received for user ${userId}: ${status}`);
+        
+        // Get or create user status
+        const userStatus = getUserStatus(userId);
+        
+        // Update the status for this specific user
+        userStatus.status = status;
+        userStatus.isExtensionConnected = true;
+        
+        // Only update session if one is provided
+        if (sessionId) {
+            userStatus.currentSession = {
                 sessionId,
+                userId,
                 ...sessionData
-            } : null
-        };
+            };
+            
+            // Ensure session exists in interaction store
+            if (!interactionStore.users?.[userId]?.sessions?.[sessionId]) {
+                if (!interactionStore.users) {
+                    interactionStore.users = {};
+                }
+                if (!interactionStore.users[userId]) {
+                    interactionStore.users[userId] = {
+                        sessions: {},
+                        interactions: []
+                    };
+                }
+                interactionStore.users[userId].sessions[sessionId] = {
+                    sessionId,
+                    userId,
+                    interactions: [],
+                    ...sessionData
+                };
+            }
+        }
         
         res.json({ success: true });
     } catch (error) {
@@ -369,7 +444,38 @@ router.post('/recorder/status', async (req, res) => {
 
 // Route to get extension recording status
 router.get('/recorder/status', (req, res) => {
-    res.json(currentRecordingStatus);
+    const { userId } = req.query;
+    
+    // If no userId is provided, return a default status
+    if (!userId) {
+        return res.json({
+            status: 'idle',
+            isExtensionConnected: false,
+            userId: null,
+            currentSession: null,
+            needsUserId: true
+        });
+    }
+    
+    // Get status for specific user
+    const userStatus = getUserStatus(userId);
+    
+    if (!userStatus) {
+        return res.json({
+            status: 'idle',
+            isExtensionConnected: false,
+            userId: userId,
+            currentSession: null
+        });
+    }
+    
+    res.json({
+        ...userStatus,
+        sessionData: {
+            ...userStatus.currentSession,
+            userId: userStatus.userId
+        }
+    });
 });
 
 // New endpoint to store results directly from content script
@@ -772,55 +878,6 @@ function processHTML(html) {
     };
   }
 }
-
-// Add new endpoint to save multiple interactions in one request
-router.post('/recorder/saveInteractions', async (req, res) => {
-  try {
-    const { interactions, sessionId } = req.body;
-    console.log(`[Backend] Received batch of ${interactions.length} interactions for session ${sessionId}`);
-    
-    if (!interactions || !Array.isArray(interactions) || interactions.length === 0) {
-      return res.status(400).json({
-        success: false,
-        error: 'Missing or invalid interactions data'
-      });
-    }
-    
-    // Save all interactions
-    for (const interaction of interactions) {
-      // Store the interaction in memory
-      interactionStore.interactions.push(interaction);
-      
-      // If this is the first interaction for this session, create a session entry
-      if (!interactionStore.sessions[interaction.sessionId]) {
-        interactionStore.sessions[interaction.sessionId] = {
-          sessionId: interaction.sessionId,
-          url: interaction.url,
-          startTime: Date.now(),
-          interactionCount: 0
-        };
-      }
-      
-      // Increment the interaction count for this session
-      interactionStore.sessions[interaction.sessionId].interactionCount = 
-        (interactionStore.sessions[interaction.sessionId].interactionCount || 0) + 1;
-    }
-    
-    console.log(`[Backend] Saved ${interactions.length} interactions for session ${sessionId}. Total interactions: ${interactionStore.sessions[sessionId]?.interactionCount || 0}`);
-    
-    return res.json({
-      success: true,
-      message: `${interactions.length} interactions saved`,
-      interactionCount: interactionStore.sessions[sessionId]?.interactionCount || 0
-    });
-  } catch (error) {
-    console.error('[Backend] Error saving interactions batch:', error);
-    return res.status(500).json({
-      success: false,
-      error: 'Error saving interactions batch: ' + error.message
-    });
-  }
-});
 
 // Endpoint to clear all interactions for a specific session (this matches what frontend is calling)
 router.post('/recorder/clearInteractions/:sessionId', async (req, res) => {

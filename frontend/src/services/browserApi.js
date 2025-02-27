@@ -110,33 +110,37 @@ export const browserApi = {
         }
     },
 
-    getExtensionSessions: async () => {
+    getExtensionSessions: async (userId) => {
         try {
             console.log('Getting extension recording sessions...');
-            const response = await axios.get(`${API_BASE_URL}/extension/recorder/sessions`);
+            const response = await axios.get(`${API_BASE_URL}/extension/recorder/sessions`, {
+                params: { userId }
+            });
             console.log('Extension sessions response:', response.data);
             return response.data.sessions || [];
         } catch (error) {
             handleError(error);
+            return [];
         }
     },
 
-    getExtensionInteractions: async (sessionId) => {
+    getExtensionInteractions: async (sessionId, userId) => {
         try {
-            console.log(`Getting interactions for extension session ${sessionId}...`);
-            const response = await axios.get(`${API_BASE_URL}/extension/recorder/interactions/${sessionId}`);
-            return {
-                interactions: response.data.interactions || [],
-                sessionData: response.data.sessionData
-            };
+            const response = await axios.get(`${API_BASE_URL}/extension/recorder/interactions/${sessionId}`, {
+                params: { userId }
+            });
+            return response.data;
         } catch (error) {
             handleError(error);
+            return null;
         }
     },
 
-    getExtensionRecordingStatus: async () => {
+    getExtensionRecordingStatus: async (userId) => {
         try {
-            const response = await axios.get(`${API_BASE_URL}/extension/recorder/status`);
+            const response = await axios.get(`${API_BASE_URL}/extension/recorder/status`, {
+                params: { userId }
+            });
             return response.data;
         } catch (error) {
             console.error('Error checking extension status:', error);
@@ -166,15 +170,15 @@ export const browserApi = {
     },
 
     // New function to clear all interactions for a session
-    clearExtensionInteractions: async (sessionId) => {
+    clearExtensionInteractions: async (sessionId, userId) => {
         try {
-            console.log(`Clearing all interactions for session ${sessionId}...`);
-            const response = await axios.post(`${API_BASE_URL}/extension/recorder/clearInteractions/${sessionId}`);
-            console.log('Clear interactions response:', response.data);
+            const response = await axios.post(`${API_BASE_URL}/extension/recorder/clearInteractions/${sessionId}`, {
+                userId
+            });
             return response.data;
         } catch (error) {
-            console.error('Error clearing interactions:', error);
             handleError(error);
+            throw error;
         }
     },
 

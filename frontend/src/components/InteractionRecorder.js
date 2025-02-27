@@ -101,11 +101,11 @@ const InteractionRecorder = ({ targetUrl }) => {
         checkRecordingStatus();
         
         // Set up polling for status updates
-        const interval = setInterval(() => {
+        const statusCheckInterval = setInterval(() => {
             checkRecordingStatus();
         }, 3000); // Check every 3 seconds
         
-        setStatusInterval(interval);
+        setStatusInterval(statusCheckInterval);
         
         return () => {
             cleanupPolling();
@@ -115,53 +115,51 @@ const InteractionRecorder = ({ targetUrl }) => {
         };
     }, [location]);
 
-    // Cleanup status polling when component unmounts
+    // Separate effect for maintaining selected session
     useEffect(() => {
-        return () => {
-            if (statusInterval) {
-                clearInterval(statusInterval);
+        if (extensionStatus.currentSession) {
+            setSelectedSession(extensionStatus.currentSession);
+            // Start polling for the current session if we're recording
+            if (extensionStatus.status === 'recording') {
+                startPollingExtensionInteractions(extensionStatus.currentSession.sessionId);
+            }
+        }
+    }, [extensionStatus.currentSession]);
+
+    // Effect for session list updates
+    useEffect(() => {
+        const updateSessions = async () => {
+            const currentUserId = extensionStatus.userId || forcedUserId;
+            if (!currentUserId) return;
+
+            try {
+                const sessions = await browserApi.getExtensionSessions(currentUserId);
+                if (Array.isArray(sessions)) {
+                    setExtensionSessions(prev => {
+                        // Preserve current sessions and add/update new ones
+                        const updatedSessions = [...prev];
+                        sessions.forEach(newSession => {
+                            const existingIndex = updatedSessions.findIndex(
+                                s => s.sessionId === newSession.sessionId
+                            );
+                            if (existingIndex === -1) {
+                                updatedSessions.unshift(newSession);
+                            } else {
+                                updatedSessions[existingIndex] = newSession;
+                            }
+                        });
+                        return updatedSessions;
+                    });
+                }
+            } catch (error) {
+                console.error('Error updating sessions:', error);
             }
         };
-    }, [statusInterval]);
 
-    // Separate effect for starting polling if we're recording
-    useEffect(() => {
-        // If we are recording with the extension, set up polling
-        if (extensionStatus.status === 'recording' && extensionStatus.currentSession) {
-            console.log('Setting up polling for extension interactions');
-            // Clean up any existing polling first
-            cleanupPolling();
-            
-            // Update selected session with current session
-            setSelectedSession(extensionStatus.currentSession);
-            
-            // Start polling for interactions
-            startPollingExtensionInteractions(extensionStatus.currentSession.sessionId);
-            
-            // Set recording state
-            setIsRecording(true);
-        } else if (extensionStatus.status !== 'recording') {
-            console.log('Not recording, cleaning up polling');
-            cleanupPolling();
-            setIsRecording(false);
-        }
-    }, [extensionStatus]);
-
-    // Reset the seen interactions when session changes or when manually clearing interactions
-    useEffect(() => {
-        if (interactions.length === 0) {
-            console.log('Resetting seen interaction IDs cache');
-            seenInteractionIdsRef.current = new Set();
-            setLastFetchedCount(0);
-        }
-    }, [interactions.length]);
-
-    // Update the filterInteractions function to also update the non-page-load count
-    useEffect(() => {
-        // Calculate the number of non-page-load interactions
-        const nonPageLoads = interactions.filter(interaction => interaction.type !== 'pageLoad').length;
-        setNonPageLoadCount(nonPageLoads);
-    }, [interactions]);
+        // Update sessions every 3 seconds
+        const sessionUpdateInterval = setInterval(updateSessions, 3000);
+        return () => clearInterval(sessionUpdateInterval);
+    }, [extensionStatus.userId, forcedUserId]);
 
     const checkRecordingStatus = async () => {
         try {
@@ -237,16 +235,34 @@ const InteractionRecorder = ({ targetUrl }) => {
         
         console.log('Starting to poll interactions for session:', sessionId);
         
+        // Clean up any existing polling first
+        cleanupPolling();
+        
         const interval = setInterval(async () => {
             try {
+                const currentUserId = extensionStatus.userId || forcedUserId;
+                if (!currentUserId) {
+                    console.log('No user ID available for polling');
+                    return;
+                }
+
+                // Get interactions for the current session
                 const response = await browserApi.getExtensionInteractions(
                     sessionId,
-                    extensionStatus.userId || forcedUserId
+                    currentUserId
                 );
                 
                 if (response && response.interactions) {
                     console.log(`Received ${response.interactions.length} interactions`);
-                    setInteractions(response.interactions);
+                    // Update interactions while preserving the state
+                    setInteractions(prevInteractions => {
+                        // Only update if we have new interactions
+                        if (response.interactions.length > prevInteractions.length) {
+                            return response.interactions;
+                        }
+                        return prevInteractions;
+                    });
+                    setTotalCount(response.interactions.length);
                 }
             } catch (error) {
                 console.error('Error polling interactions:', error);
@@ -254,8 +270,6 @@ const InteractionRecorder = ({ targetUrl }) => {
         }, 1000);
         
         setPollingInterval(interval);
-        
-        return () => clearInterval(interval);
     };
 
     const loadExtensionSessions = async (userId = forcedUserId) => {
@@ -293,6 +307,9 @@ const InteractionRecorder = ({ targetUrl }) => {
             const response = await browserApi.getExtensionInteractions(sessionId, userId);
             if (response && response.interactions) {
                 setInteractions(response.interactions);
+                setTotalCount(response.interactions.length);
+                // Start polling for this session
+                startPollingExtensionInteractions(sessionId);
             }
         } catch (error) {
             console.error('Error loading session:', error);

@@ -432,22 +432,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return false;
   }
   
-  // Handle tab navigation
+  // Listen for tab updates to detect navigation
   if (request.action === "tabNavigated" && sender.tab) {
     if (recordingStatus === 'recording' && sender.tab.id === recordingTabId) {
-      // Tab being recorded has navigated, need to reinitialize recording
-      console.log('[Extension] Recording tab navigated, reinitializing recording');
-      
-      // Reinitialize recording on the new page
-      chrome.tabs.sendMessage(recordingTabId, {
-        action: 'startRecording',
-        sessionId: currentSessionId,
-        isPageReload: true
-      });
+      // Tab being recorded has navigated, maintain recording state
+      console.log('[Extension] Recording tab navigated, maintaining recording state');
       
       // Record a navigation interaction
       const navigationInteraction = {
         sessionId: currentSessionId,
+        userId: userId,
         type: 'navigation',
         timestamp: new Date().toISOString(),
         url: sender.tab.url,
@@ -463,7 +457,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       interactionCount++;
       flushInteractionBuffer();
     }
-    return false;
+    return true; // Keep message channel open
   }
 });
 
@@ -559,30 +553,48 @@ chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
 
 // Listen for tab updates to detect navigation
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (tabId === recordingTabId && recordingStatus === 'recording' && changeInfo.status === 'complete') {
-    console.log('[Extension] Recording tab navigated/reloaded');
-    
-    // Reinitialize recording on this tab
-    setTimeout(() => {
-      chrome.tabs.sendMessage(tabId, {
-        action: 'startRecording',
-        sessionId: currentSessionId,
-        isPageReload: true
-      }, (response) => {
-        if (chrome.runtime.lastError) {
-          console.log('[Extension] Could not initialize content script after navigation, will retry');
-          
-          // Content script might not be ready yet, try again
-          setTimeout(() => {
-            chrome.tabs.sendMessage(tabId, {
-              action: 'startRecording',
-              sessionId: currentSessionId,
-              isPageReload: true
-            });
-          }, 500);
-        }
-      });
-    }, 200);
+  if (tabId === recordingTabId && recordingStatus === 'recording') {
+    // Don't reset recording on loading state, only when complete
+    if (changeInfo.status === 'complete') {
+      console.log('[Extension] Recording tab navigated/reloaded, reinitializing recording');
+      
+      // Keep the current session active
+      setTimeout(() => {
+        chrome.tabs.sendMessage(tabId, {
+          action: 'startRecording',
+          sessionId: currentSessionId,
+          userId: userId,
+          isPageReload: true
+        }, (response) => {
+          if (chrome.runtime.lastError) {
+            console.log('[Extension] Could not initialize content script after navigation, will retry');
+            
+            // Content script might not be ready yet, try again with multiple retries
+            let retryCount = 0;
+            const maxRetries = 5;
+            const retryInterval = setInterval(() => {
+              if (retryCount >= maxRetries) {
+                clearInterval(retryInterval);
+                return;
+              }
+              
+              chrome.tabs.sendMessage(tabId, {
+                action: 'startRecording',
+                sessionId: currentSessionId,
+                userId: userId,
+                isPageReload: true
+              }, (resp) => {
+                if (!chrome.runtime.lastError) {
+                  clearInterval(retryInterval);
+                }
+              });
+              
+              retryCount++;
+            }, 1000);
+          }
+        });
+      }, 500);
+    }
   }
 });
 

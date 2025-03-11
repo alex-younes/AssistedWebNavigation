@@ -3,17 +3,72 @@
 
 let isRecording = false;
 let sessionId = null;
+let userId = null;
 let interactionCount = 0;
 let previousUrl = null;
+let lastNavigationTime = 0; // Add this to track last navigation
+
+// Helper to prevent duplicate navigation events
+const shouldRecordNavigation = () => {
+    const now = Date.now();
+    if (now - lastNavigationTime < 1000) { // Prevent multiple events within 1 second
+        return false;
+    }
+    lastNavigationTime = now;
+    return true;
+};
+
+// Store recording state in sessionStorage to persist across page reloads
+const saveRecordingState = () => {
+    if (sessionId && userId) {
+        sessionStorage.setItem('recordingState', JSON.stringify({
+            isRecording,
+            sessionId,
+            userId,
+            previousUrl: window.location.href,
+            lastNavigationTime
+        }));
+    }
+};
+
+// Restore recording state after page reload
+const restoreRecordingState = () => {
+    const state = sessionStorage.getItem('recordingState');
+    if (state) {
+        const { isRecording: wasRecording, sessionId: savedSessionId, userId: savedUserId, previousUrl: savedUrl, lastNavigationTime: savedNavTime } = JSON.parse(state);
+        if (wasRecording && savedSessionId && savedUserId) {
+            console.log('[Extension] Restoring recording state after reload');
+            isRecording = true;
+            sessionId = savedSessionId;
+            userId = savedUserId;
+            previousUrl = savedUrl;
+            lastNavigationTime = savedNavTime || 0;
+            window._recordingUserId = savedUserId;
+            setupInteractionRecording();
+            
+            // Only send navigation event if enough time has passed
+            if (shouldRecordNavigation()) {
+                chrome.runtime.sendMessage({
+                    action: "tabNavigated",
+                    previousUrl: savedUrl,
+                    isReload: true,
+                    currentUrl: window.location.href
+                });
+            }
+        }
+    }
+};
 
 // Store page load information for tracking navigation
 window.addEventListener('load', function() {
+    restoreRecordingState();
+    
     const isReload = window.performance && 
                     window.performance.navigation && 
                     window.performance.navigation.type === 1;
     
     // If we're recording, inform the background script of navigation
-    if (isRecording && sessionId) {
+    if (isRecording && sessionId && shouldRecordNavigation()) {
         chrome.runtime.sendMessage({
             action: "tabNavigated", 
             previousUrl: previousUrl,
@@ -25,7 +80,14 @@ window.addEventListener('load', function() {
     // Store current URL for next navigation event
     previousUrl = window.location.href;
     
-    console.log('[Extension] Page loaded, isReload:', isReload);
+    console.log('[Extension] Page loaded, isReload:', isReload, 'isRecording:', isRecording);
+});
+
+// Save state before unload
+window.addEventListener('beforeunload', function() {
+    if (isRecording) {
+        saveRecordingState();
+    }
 });
 
 // Store interaction handler to remove it when stopping recording
@@ -319,20 +381,33 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         }
         
         sessionId = request.sessionId;
+        userId = request.userId;
         window._recordingUserId = request.userId;
         isRecording = true;
         setupInteractionRecording();
         
+        // Save state immediately in case of reload
+        saveRecordingState();
+        
         console.log(`[Extension] Started recording for session ${sessionId}`);
         sendResponse({ success: true });
+        
+        // If this is a page reload, record it
+        if (request.isPageReload) {
+            recordPageInfo();
+        }
     } else if (request.action === 'stopRecording') {
         isRecording = false;
+        sessionId = null;
+        userId = null;
         if (window._interactionHandler) {
             document.removeEventListener('click', window._interactionHandler, true);
             document.removeEventListener('submit', window._interactionHandler, true);
             delete window._interactionHandler;
             delete window._recordingUserId;
         }
+        // Clear saved state
+        sessionStorage.removeItem('recordingState');
         console.log('[Extension] Stopped recording');
         sendResponse({ success: true });
     }

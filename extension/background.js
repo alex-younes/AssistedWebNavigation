@@ -42,19 +42,23 @@ const checkApiUrl = () => {
 // Initialize user ID on extension install or startup
 const initializeUserId = async () => {
   try {
+    console.log('[DEBUG] Initializing user ID...');
     // Try to get existing user ID
     const data = await chrome.storage.local.get('userId');
     if (data.userId) {
       userId = data.userId;
       console.log('[Extension] Retrieved existing user ID:', userId);
+      console.log('[DEBUG] Retrieved existing user ID:', userId);
     } else {
       // Generate new user ID if none exists
       userId = 'user_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
       await chrome.storage.local.set({ userId });
       console.log('[Extension] Generated new user ID:', userId);
+      console.log('[DEBUG] Generated new user ID:', userId);
     }
   } catch (error) {
     console.error('[Extension] Error initializing user ID:', error);
+    console.log('[DEBUG] Error initializing user ID:', error.message);
   }
 };
 
@@ -182,10 +186,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   
   // Handle start recording request from popup
   if (request.action === "startRecording") {
+    console.log('[DEBUG] Starting recording...');
     chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
         try {
             if (!tabs || !tabs[0]) {
                 console.error('[Extension] No active tab found');
+                console.log('[DEBUG] Error: No active tab found');
                 sendResponse({ 
                     success: false, 
                     error: 'No active tab found' 
@@ -295,10 +301,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   
   // Handle stop recording request from popup
   if (request.action === "stopRecording") {
+    console.log('[DEBUG] Stopping recording...');
     if (recordingTabId && currentSessionId) {
+      console.log(`[DEBUG] Stopping recording for session ${currentSessionId} in tab ${recordingTabId}`);
       chrome.tabs.sendMessage(recordingTabId, { action: 'stopRecording' }, (response) => {
         if (chrome.runtime.lastError) {
           console.error('[Extension] Error stopping recording:', chrome.runtime.lastError);
+          console.log('[DEBUG] Error stopping recording:', chrome.runtime.lastError.message);
           sendResponse({ 
             success: false, 
             error: chrome.runtime.lastError.message || 'Failed to communicate with page' 
@@ -388,12 +397,19 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     
     if (!interaction || !interaction.sessionId) {
         console.error('[Extension] Invalid interaction data:', interaction);
-        return false;
+        sendResponse({ success: false, error: 'Invalid interaction data' });
+        return true;
     }
     
     if (!currentSessionId) {
         console.error('[Extension] No active recording session');
-        return false;
+        // Send response to content script so it can stop recording locally
+        sendResponse({ 
+            success: false, 
+            error: 'No active recording session',
+            shouldStopRecording: true
+        });
+        return true;
     }
     
     if (interaction.sessionId !== currentSessionId) {
@@ -401,7 +417,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             received: interaction.sessionId,
             current: currentSessionId
         });
-        return false;
+        // Send response to content script so it can stop recording locally
+        sendResponse({ 
+            success: false, 
+            error: 'Session ID mismatch',
+            shouldStopRecording: true
+        });
+        return true;
     }
     
     // Increment counter
@@ -417,7 +439,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         flushInteractionBuffer();
     }
     
-    return false; // No response needed
+    sendResponse({ success: true });
+    return true; // Keep message channel open
   }
   
   // Handle get status request from popup
@@ -502,6 +525,7 @@ chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
   if (tabId === recordingTabId && recordingStatus === 'recording') {
     // Recording tab was closed
     console.log('[Extension] Recording tab closed, stopping recording');
+    console.log('[DEBUG] Recording tab closed, stopping recording. TabId:', tabId);
     
     // Final buffer flush
     flushInteractionBuffer().then(() => {

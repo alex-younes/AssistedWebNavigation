@@ -171,6 +171,12 @@ function setupInteractionRecording() {
             
             console.log('[Extension] Sending interaction to background script:', interaction);
             
+            // Check if recording is still active before sending
+            if (!isRecording || !sessionId) {
+                console.log('[DEBUG] Not sending interaction - recording is no longer active');
+                return;
+            }
+            
             // Send the interaction to the background script
             chrome.runtime.sendMessage({
                 action: "saveInteraction",
@@ -178,8 +184,30 @@ function setupInteractionRecording() {
             }, response => {
                 if (chrome.runtime.lastError) {
                     console.error('[Extension] Error sending interaction:', chrome.runtime.lastError);
-                } else {
-                    console.log('[Extension] Interaction sent successfully');
+                    
+                    // If we get an error about no active session, stop recording locally
+                    if (chrome.runtime.lastError.message && chrome.runtime.lastError.message.includes('No active recording session')) {
+                        console.log('[DEBUG] Background has no active session. Stopping local recording.');
+                        isRecording = false;
+                        sessionId = null;
+                        userId = null;
+                    }
+                } else if (response) {
+                    if (response.success) {
+                        console.log('[Extension] Interaction sent successfully');
+                    } else if (response.shouldStopRecording) {
+                        console.log(`[DEBUG] Background requested to stop recording: ${response.error}`);
+                        isRecording = false;
+                        sessionId = null;
+                        userId = null;
+                        if (window._interactionHandler) {
+                            document.removeEventListener('click', window._interactionHandler, true);
+                            document.removeEventListener('submit', window._interactionHandler, true);
+                            delete window._interactionHandler;
+                            delete window._recordingUserId;
+                        }
+                        sessionStorage.removeItem('recordingState');
+                    }
                 }
             });
             
@@ -374,8 +402,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     console.log('[Extension] Content script received message:', request);
     
     if (request.action === 'startRecording') {
+        console.log('[DEBUG] Content script received startRecording message');
         if (!request.sessionId || !request.userId) {
             console.error('[Extension] Missing sessionId or userId in startRecording request');
+            console.log('[DEBUG] Error: Missing sessionId or userId in startRecording request');
             sendResponse({ success: false, error: 'Missing sessionId or userId' });
             return;
         }
@@ -390,6 +420,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         saveRecordingState();
         
         console.log(`[Extension] Started recording for session ${sessionId}`);
+        console.log(`[DEBUG] Started recording for session ${sessionId}`);
         sendResponse({ success: true });
         
         // If this is a page reload, record it
@@ -397,6 +428,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             recordPageInfo();
         }
     } else if (request.action === 'stopRecording') {
+        console.log('[DEBUG] Content script received stopRecording message');
         isRecording = false;
         sessionId = null;
         userId = null;
@@ -409,6 +441,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         // Clear saved state
         sessionStorage.removeItem('recordingState');
         console.log('[Extension] Stopped recording');
+        console.log('[DEBUG] Stopped recording and cleared event handlers');
         sendResponse({ success: true });
     }
     
@@ -426,4 +459,38 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 // Initialize previousUrl
 previousUrl = window.location.href;
 
-console.log('[Extension] Content script loaded'); 
+console.log('[Extension] Content script loaded');
+
+// Add this function near the top of your file
+function checkRecordingStatus() {
+    if (!isRecording) return;
+    
+    // Check with background script if recording is still active
+    chrome.runtime.sendMessage({ action: "getRecordingStatus" }, (response) => {
+        if (chrome.runtime.lastError) {
+            console.log('[DEBUG] Error checking recording status:', chrome.runtime.lastError.message);
+            return;
+        }
+        
+        if (response && response.sessionId !== sessionId) {
+            console.log('[DEBUG] Recording session mismatch. Local:', sessionId, 'Background:', response.sessionId);
+            // If background doesn't have our session, stop recording locally
+            if (!response.sessionId && sessionId) {
+                console.log('[DEBUG] Background has no active session but content script does. Stopping local recording.');
+                isRecording = false;
+                sessionId = null;
+                userId = null;
+                if (window._interactionHandler) {
+                    document.removeEventListener('click', window._interactionHandler, true);
+                    document.removeEventListener('submit', window._interactionHandler, true);
+                    delete window._interactionHandler;
+                    delete window._recordingUserId;
+                }
+                sessionStorage.removeItem('recordingState');
+            }
+        }
+    });
+}
+
+// Add a periodic check (every 5 seconds)
+setInterval(checkRecordingStatus, 5000); 

@@ -212,6 +212,17 @@
     .btn-icon {
       font-size: 16px;
     }
+    
+    #error-message {
+      display: none;
+      background-color: #fee;
+      border-left: 4px solid #e74c3c;
+      color: #e74c3c;
+      padding: 12px;
+      margin-top: 8px;
+      border-radius: 4px;
+      font-size: 13px;
+    }
   </style>
 </head>
 <body>
@@ -228,6 +239,7 @@
     <div id="status" class="status">
       Ready to analyze or record the current tab.
     </div>
+    <div id="error-message"></div>
   </div>
   
   <div class="card">

@@ -4,7 +4,156 @@ let serverConfig = {
     port: '3001'
 };
 
+// Global variables for DOM elements
+let startRecordingBtn, stopRecordingBtn, captureBtn, statusLabel;
+let statsCard, sessionIdElement, interactionCountElement, durationElement;
+let startTime = null;
+let recordingTimer = null;
+let interactionCount = 0;
+
+// Helper function to show status message
+function showStatus(message, type = null) {
+    const statusDiv = document.getElementById('status');
+    const errorDiv = document.getElementById('error-message');
+    
+    if (type === 'error') {
+        // Show error message
+        if (errorDiv) {
+            errorDiv.textContent = message;
+            errorDiv.style.display = 'block';
+            
+            // Hide error after 5 seconds
+            setTimeout(() => {
+                errorDiv.style.display = 'none';
+            }, 5000);
+        }
+        
+        // Also update status with error state
+        if (statusDiv) {
+            statusDiv.textContent = 'Error occurred';
+            statusDiv.className = 'status error';
+        }
+    } else {
+        // Hide error message
+        if (errorDiv) {
+            errorDiv.style.display = 'none';
+        }
+        
+        // Update status
+        if (statusDiv) {
+            statusDiv.textContent = message;
+            statusDiv.className = 'status' + (type ? ' ' + type : '');
+        }
+    }
+}
+
+// Helper function to update recording status
+function updateStatus(status, sessionId = null) {
+    // Make sure DOM elements are initialized
+    if (!startRecordingBtn) {
+        startRecordingBtn = document.getElementById('startRecordingBtn');
+    }
+    if (!stopRecordingBtn) {
+        stopRecordingBtn = document.getElementById('stopRecordingBtn');
+    }
+    if (!captureBtn) {
+        captureBtn = document.getElementById('captureBtn');
+    }
+    if (!statusLabel) {
+        statusLabel = document.getElementById('statusLabel');
+    }
+    if (!statsCard) {
+        statsCard = document.getElementById('statsCard');
+    }
+    if (!sessionIdElement) {
+        sessionIdElement = document.getElementById('sessionId');
+    }
+    
+    const wasRecording = startRecordingBtn.disabled;
+    
+    // Update session ID
+    if (sessionId && sessionIdElement) {
+        sessionIdElement.textContent = sessionId.substring(0, 8) + '...';
+    }
+    
+    // Update UI based on status
+    if (status === 'recording') {
+        startRecordingBtn.disabled = true;
+        stopRecordingBtn.disabled = false;
+        captureBtn.disabled = true;
+        statusLabel.className = 'status-label recording';
+        statusLabel.textContent = 'Recording';
+        
+        if (!wasRecording && !recordingTimer) {
+            startTime = new Date();
+            recordingTimer = setInterval(updateDuration, 1000);
+        }
+        
+        if (statsCard) {
+            statsCard.style.display = 'block';
+        }
+    } else {
+        startRecordingBtn.disabled = false;
+        stopRecordingBtn.disabled = true;
+        captureBtn.disabled = false;
+        statusLabel.className = 'status-label idle';
+        statusLabel.textContent = 'Idle';
+        
+        if (wasRecording && recordingTimer) {
+            clearInterval(recordingTimer);
+            recordingTimer = null;
+        }
+    }
+}
+
+// Helper function to update duration in stats card
+function updateDuration() {
+    if (!durationElement) {
+        durationElement = document.getElementById('duration');
+    }
+    
+    if (startTime && durationElement) {
+        const duration = Math.floor((new Date() - startTime) / 1000);
+        let formattedDuration = '';
+        
+        if (duration < 60) {
+            formattedDuration = `${duration}s`;
+        } else {
+            const minutes = Math.floor(duration / 60);
+            const seconds = duration % 60;
+            formattedDuration = `${minutes}m ${seconds}s`;
+        }
+        
+        durationElement.textContent = formattedDuration;
+    }
+}
+
+// Helper function to update stats card
+function updateStatsCard() {
+    if (!interactionCountElement) {
+        interactionCountElement = document.getElementById('interactionCount');
+    }
+    if (!statsCard) {
+        statsCard = document.getElementById('statsCard');
+    }
+    
+    if (interactionCountElement && statsCard) {
+        interactionCountElement.textContent = interactionCount;
+        statsCard.style.display = interactionCount > 0 || startTime ? 'block' : 'none';
+    }
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
+    // Initialize DOM element references
+    startRecordingBtn = document.getElementById('startRecordingBtn');
+    stopRecordingBtn = document.getElementById('stopRecordingBtn');
+    captureBtn = document.getElementById('captureBtn');
+    statusLabel = document.getElementById('statusLabel');
+    statsCard = document.getElementById('statsCard');
+    sessionIdElement = document.getElementById('sessionId');
+    interactionCountElement = document.getElementById('interactionCount');
+    durationElement = document.getElementById('duration');
+
     // Load saved server settings
     const saved = await chrome.storage.sync.get(['serverConfig']);
     if (saved.serverConfig) {
@@ -13,20 +162,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         // Test connection on load if we have saved settings
         testServerConnection();
     }
-    
-    const statusDiv = document.getElementById('status');
-    const statusLabel = document.getElementById('statusLabel');
-    const captureBtn = document.getElementById('captureBtn');
-    const startRecordingBtn = document.getElementById('startRecordingBtn');
-    const stopRecordingBtn = document.getElementById('stopRecordingBtn');
-    const statsCard = document.getElementById('statsCard');
-    const sessionIdElement = document.getElementById('sessionId');
-    const interactionCountElement = document.getElementById('interactionCount');
-    const durationElement = document.getElementById('duration');
-
-    let startTime = null;
-    let recordingTimer = null;
-    let interactionCount = 0;
     
     // Initialize by checking current recording status
     chrome.runtime.sendMessage({ action: "getRecordingStatus" }, (response) => {
@@ -60,21 +195,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     startRecordingBtn.addEventListener('click', () => {
       showStatus('Starting recording...', 'idle');
       
-      chrome.runtime.sendMessage({ action: "startRecording" }, (response) => {
-        if (response && response.success) {
-          startTime = new Date();
-          updateStatus('recording', response.sessionId);
-          interactionCount = 0;
-          updateStatsCard();
-          
-          // Start timer for duration
-          recordingTimer = setInterval(updateDuration, 1000);
-          
-          showStatus('Recording started. Interact with the page to record actions.', 'recording');
-        } else {
-          showStatus('Error: ' + (response?.error || 'Failed to start recording'), 'error');
-        }
-      });
+      startRecording();
     });
 
     // Stop recording button
@@ -105,6 +226,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('saveSettingsBtn').addEventListener('click', async () => {
         const input = document.getElementById('serverIp').value.trim();
         const statusEl = document.getElementById('settingsStatus');
+        const statusDot = document.querySelector('.status-dot');
+        const statusText = document.querySelector('.status-text');
+        const openFrontendContainer = document.getElementById('openFrontendContainer');
         
         try {
             // Validate input format (IP:PORT or domain:PORT)
@@ -129,14 +253,27 @@ document.addEventListener('DOMContentLoaded', async () => {
             await chrome.storage.sync.set({ serverConfig });
             
             // Test connection after saving
-            await testServerConnection();
+            const isConnected = await testServerConnection();
+            
+            if (isConnected) {
+                // Success state is handled by testServerConnection
+                console.log('[Extension] Server settings saved and connection verified');
+            } else {
+                // Error state
+                statusDot.className = 'status-dot error';
+                statusText.textContent = 'Not Connected';
+                openFrontendContainer.style.display = 'none';
+                
+                statusEl.textContent = 'Could not connect to server. Please check the address and try again.';
+                statusEl.className = 'status error';
+                statusEl.style.display = 'block';
+            }
             
         } catch (error) {
-            const statusDot = document.querySelector('.status-dot');
-            const statusText = document.querySelector('.status-text');
-            
+            console.error('[Extension] Settings error:', error);
             statusDot.className = 'status-dot error';
             statusText.textContent = 'Not Connected';
+            openFrontendContainer.style.display = 'none';
             
             statusEl.textContent = error.message;
             statusEl.className = 'status error';
@@ -179,147 +316,135 @@ document.addEventListener('DOMContentLoaded', async () => {
             alert('Error opening frontend. Please check your configuration.');
         }
     });
-
-    // Helper function to update recording status
-    function updateStatus(status, sessionId = null) {
-      const wasRecording = startRecordingBtn.disabled;
-      
-      // Update session ID
-      if (sessionId) {
-        sessionIdElement.textContent = sessionId.substring(0, 8) + '...';
-      }
-      
-      // Update UI based on status
-      if (status === 'recording') {
-        startRecordingBtn.disabled = true;
-        stopRecordingBtn.disabled = false;
-        captureBtn.disabled = true;
-        statusLabel.className = 'status-label recording';
-        statusLabel.textContent = 'Recording';
-        
-        if (!wasRecording && !recordingTimer) {
-          startTime = new Date();
-          recordingTimer = setInterval(updateDuration, 1000);
-        }
-        
-        statsCard.style.display = 'block';
-      } else {
-        startRecordingBtn.disabled = false;
-        stopRecordingBtn.disabled = true;
-        captureBtn.disabled = false;
-        statusLabel.className = 'status-label idle';
-        statusLabel.textContent = 'Idle';
-        
-        if (wasRecording && recordingTimer) {
-          clearInterval(recordingTimer);
-          recordingTimer = null;
-        }
-      }
-    }
-    
-    // Helper function to show status message
-    function showStatus(message, type = null) {
-      statusDiv.textContent = message;
-      
-      // Reset status classes
-      statusDiv.className = 'status';
-      
-      // Add specific class if type is provided
-      if (type) {
-        statusDiv.classList.add(type);
-      }
-    }
-    
-    // Helper function to update duration in stats card
-    function updateDuration() {
-      if (startTime) {
-        const duration = Math.floor((new Date() - startTime) / 1000);
-        let formattedDuration = '';
-        
-        if (duration < 60) {
-          formattedDuration = `${duration}s`;
-        } else {
-          const minutes = Math.floor(duration / 60);
-          const seconds = duration % 60;
-          formattedDuration = `${minutes}m ${seconds}s`;
-        }
-        
-        durationElement.textContent = formattedDuration;
-      }
-    }
-    
-    // Helper function to update stats card
-    function updateStatsCard() {
-      interactionCountElement.textContent = interactionCount;
-      statsCard.style.display = interactionCount > 0 || startTime ? 'block' : 'none';
-    }
 });
 
-// Test server connection
-async function testServerConnection() {
-    const statusDot = document.querySelector('.status-dot');
-    const statusText = document.querySelector('.status-text');
-    const statusEl = document.getElementById('settingsStatus');
-    const frontendContainer = document.getElementById('openFrontendContainer');
-    
+// Add server configuration check
+async function checkServerConfiguration() {
     try {
-        // Get the current input value, fall back to saved config if empty
-        const input = document.getElementById('serverIp').value.trim();
-        let testConfig;
-        
-        if (input) {
-            // Parse the input field value
-            const [ip, port] = input.split(':');
-            if (!ip || !port) {
-                throw new Error('Please enter the server address in format: IP:PORT or domain:PORT');
-            }
-            testConfig = { ip: ip.trim(), port: port.trim() };
-        } else if (serverConfig.ip && serverConfig.port) {
-            // Use saved config as fallback
-            testConfig = serverConfig;
-        } else {
-            throw new Error('Server address not configured');
+        const result = await chrome.storage.sync.get(['serverConfig']);
+        if (!result.serverConfig) {
+            throw new Error('Server not configured');
         }
+        return true;
+    } catch (error) {
+        console.error('Server configuration error:', error);
+        return false;
+    }
+}
 
-        statusDot.className = 'status-dot';
-        statusText.textContent = 'Testing connection...';
+// Add server connection test
+async function testServerConnection() {
+    try {
+        const result = await chrome.storage.sync.get(['serverConfig']);
+        if (!result.serverConfig) {
+            throw new Error('Server not configured');
+        }
         
-        const url = `http://${testConfig.ip}:${testConfig.port}/health`;
-        console.log('Testing connection to:', url); // Debug log
+        const { ip, port } = result.serverConfig;
+        const statusDot = document.querySelector('.status-dot');
+        const statusText = document.querySelector('.status-text');
+        const openFrontendContainer = document.getElementById('openFrontendContainer');
         
-        const response = await fetch(url);
-        const data = await response.json();
-        
-        if (data.status === 'ok') {
-            statusDot.className = 'status-dot connected';
-            statusText.textContent = 'Connected';
+        try {
+            const response = await fetch(`http://${ip}:${port}/api/extension/recorder/verifyConnection`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ test: true })
+            });
             
-            statusEl.textContent = 'Connection successful!';
-            statusEl.className = 'status success';
+            if (!response.ok) {
+                throw new Error('Server connection failed');
+            }
+            
+            const data = await response.json();
+            if (data.success) {
+                console.log('[Extension] Server connection verified:', data);
+                statusDot.className = 'status-dot connected';
+                statusText.textContent = 'Connected';
+                openFrontendContainer.style.display = 'block';
+                
+                // Show success message
+                const statusEl = document.getElementById('settingsStatus');
+                statusEl.textContent = 'Connected successfully!';
+                statusEl.className = 'status success';
+                statusEl.style.display = 'block';
+                
+                // Hide status message after 3 seconds
+                setTimeout(() => {
+                    statusEl.style.display = 'none';
+                }, 3000);
+                
+                return true;
+            }
+        } catch (error) {
+            console.error('Server connection error:', error);
+            statusDot.className = 'status-dot error';
+            statusText.textContent = 'Not Connected';
+            openFrontendContainer.style.display = 'none';
+            
+            // Show error message
+            const statusEl = document.getElementById('settingsStatus');
+            statusEl.textContent = 'Could not connect to server. Please check the address and try again.';
+            statusEl.className = 'status error';
             statusEl.style.display = 'block';
             
-            // Show the frontend button when connected
-            frontendContainer.style.display = 'block';
-        } else {
-            throw new Error('Unexpected server response');
+            throw error;
         }
     } catch (error) {
-        console.error('Connection test failed:', error); // Debug log
-        statusDot.className = 'status-dot error';
-        statusText.textContent = 'Not Connected';
-        
-        statusEl.textContent = `Connection failed: ${error.message}`;
-        statusEl.className = 'status error';
-        statusEl.style.display = 'block';
-        
-        // Hide the frontend button when not connected
-        frontendContainer.style.display = 'none';
+        console.error('Server connection error:', error);
+        return false;
     }
-    
-    // Hide status message after 3 seconds
-    setTimeout(() => {
-        statusEl.style.display = 'none';
-    }, 3000);
+}
+
+// Update startRecording function
+async function startRecording() {
+    try {
+        // Check server configuration first
+        const isConfigured = await checkServerConfiguration();
+        if (!isConfigured) {
+            showStatus('Please configure server settings first', 'error');
+            return;
+        }
+        
+        // Test server connection
+        const isConnected = await testServerConnection();
+        if (!isConnected) {
+            showStatus('Could not connect to server. Please check server settings.', 'error');
+            return;
+        }
+        
+        // Get the active tab
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (!tab) {
+            showStatus('No active tab found', 'error');
+            return;
+        }
+        
+        showStatus('Starting recording...', 'idle');
+        
+        // Start recording
+        const response = await chrome.runtime.sendMessage({ 
+            action: "startRecording",
+            tab: tab
+        });
+        
+        if (!response || !response.success) {
+            const errorMsg = response?.error || 'Failed to start recording';
+            console.error('[Extension] Recording error:', errorMsg);
+            showStatus(errorMsg, 'error');
+            return;
+        }
+        
+        // Update UI for recording state
+        updateStatus('recording', response.sessionId);
+        showStatus('Recording started successfully', 'success');
+        
+    } catch (error) {
+        console.error('Start recording error:', error);
+        showStatus('An error occurred while starting recording: ' + error.message, 'error');
+    }
 }
 
 // Function to get the API URL

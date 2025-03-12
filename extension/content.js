@@ -8,6 +8,82 @@ let interactionCount = 0;
 let previousUrl = null;
 let lastNavigationTime = 0; // Add this to track last navigation
 
+// Add debugging variables at the top
+let DEBUG = true;
+let lastStateCheck = Date.now();
+
+// Add after the initial variable declarations
+let port = null;
+let reconnectAttempts = 0;
+const MAX_RECONNECT_ATTEMPTS = 5;
+
+// Add at the top after initial declarations
+let isInitialized = false;
+
+// Add persistent logging at the top after DEBUG declaration
+function persistentLog(message, data = null) {
+    const timestamp = new Date().toISOString();
+    const logEntry = {
+        timestamp,
+        message,
+        data,
+        url: window.location.href,
+        recordingState: {
+            isRecording,
+            sessionId,
+            userId,
+            interactionCount
+        }
+    };
+
+    // Get existing logs
+    let logs = [];
+    try {
+        const storedLogs = localStorage.getItem('extensionDebugLogs');
+        if (storedLogs) {
+            logs = JSON.parse(storedLogs);
+        }
+    } catch (e) {
+        console.error('Error reading logs:', e);
+    }
+
+    // Add new log
+    logs.push(logEntry);
+    
+    // Keep only last 100 logs
+    if (logs.length > 100) {
+        logs = logs.slice(-100);
+    }
+
+    // Save logs
+    localStorage.setItem('extensionDebugLogs', JSON.stringify(logs));
+}
+
+function debugLog(message, data = null) {
+    if (!DEBUG) return;
+    const timestamp = new Date().toISOString();
+    const logMessage = `[DEBUG][${timestamp}] ${message}`;
+    if (data) {
+        console.log(logMessage, data);
+    } else {
+        console.log(logMessage);
+    }
+}
+
+// Add state tracking
+function logState() {
+    if (!DEBUG) return;
+    debugLog('Current State:', {
+        isRecording,
+        sessionId,
+        userId,
+        interactionCount,
+        hasInteractionHandler: !!window._interactionHandler,
+        timeElapsedSinceLastCheck: Date.now() - lastStateCheck
+    });
+    lastStateCheck = Date.now();
+}
+
 // Helper to prevent duplicate navigation events
 const shouldRecordNavigation = () => {
     const now = Date.now();
@@ -19,55 +95,81 @@ const shouldRecordNavigation = () => {
 };
 
 // Store recording state in sessionStorage to persist across page reloads
-const saveRecordingState = () => {
-    if (sessionId && userId) {
-        sessionStorage.setItem('recordingState', JSON.stringify({
-            isRecording,
-            sessionId,
-            userId,
-            previousUrl: window.location.href,
-            lastNavigationTime
-        }));
+function saveRecordingState() {
+    if (!isRecording || !sessionId) return;
+
+    persistentLog('Saving recording state');
+    debugLog('Saving recording state');
+    const state = {
+        isRecording,
+        sessionId,
+        userId,
+        timestamp: Date.now(),
+        url: window.location.href
+    };
+
+    try {
+        localStorage.setItem('recordingState', JSON.stringify(state));
+        sessionStorage.setItem('recordingState', JSON.stringify(state));
+        debugLog('State saved successfully', state);
+    } catch (error) {
+        debugLog('Error saving state:', error);
     }
-};
+    logState();
+}
 
 // Restore recording state after page reload
-const restoreRecordingState = () => {
-    const state = sessionStorage.getItem('recordingState');
-    if (state) {
-        const { isRecording: wasRecording, sessionId: savedSessionId, userId: savedUserId, previousUrl: savedUrl, lastNavigationTime: savedNavTime } = JSON.parse(state);
-        if (wasRecording && savedSessionId && savedUserId) {
-            console.log('[Extension] Restoring recording state after reload');
-            isRecording = true;
-            sessionId = savedSessionId;
-            userId = savedUserId;
-            previousUrl = savedUrl;
-            lastNavigationTime = savedNavTime || 0;
-            window._recordingUserId = savedUserId;
-            setupInteractionRecording();
-            
-            // Only send navigation event if enough time has passed
-            if (shouldRecordNavigation()) {
-                chrome.runtime.sendMessage({
-                    action: "tabNavigated",
-                    previousUrl: savedUrl,
-                    isReload: true,
-                    currentUrl: window.location.href
-                });
-            }
-        }
-    }
-};
+function restoreRecordingState() {
+    try {
+        // Try to get state from either storage
+        const state = JSON.parse(sessionStorage.getItem('recordingState')) || 
+                     JSON.parse(localStorage.getItem('recordingState'));
 
-// Store page load information for tracking navigation
-window.addEventListener('load', function() {
+        if (state && state.sessionId) {
+            console.log('[DEBUG] Restoring recording state:', state);
+            isRecording = true;
+            sessionId = state.sessionId;
+            userId = state.userId;
+
+            // Re-initialize recording handlers
+            setupInteractionRecording();
+            saveRecordingState(); // Update timestamp
+        }
+    } catch (error) {
+        console.log('[DEBUG] Error restoring recording state:', error);
+    }
+}
+
+// Add initialization function
+function initializeContentScript() {
+    if (isInitialized) return;
+    
+    persistentLog('Initializing content script');
+    
+    // Set up all the event listeners
+    window.addEventListener('load', handlePageLoad);
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', handleFocus);
+    window.addEventListener('blur', handleBlur);
+    
+    // Mark as initialized
+    isInitialized = true;
+    persistentLog('Content script initialized');
+}
+
+// Initialize immediately
+initializeContentScript();
+
+// Extract event handlers into named functions
+function handlePageLoad() {
+    persistentLog('Page loaded');
     restoreRecordingState();
     
     const isReload = window.performance && 
                     window.performance.navigation && 
                     window.performance.navigation.type === 1;
     
-    // If we're recording, inform the background script of navigation
     if (isRecording && sessionId && shouldRecordNavigation()) {
         chrome.runtime.sendMessage({
             action: "tabNavigated", 
@@ -77,26 +179,102 @@ window.addEventListener('load', function() {
         });
     }
     
-    // Store current URL for next navigation event
     previousUrl = window.location.href;
-    
-    console.log('[Extension] Page loaded, isReload:', isReload, 'isRecording:', isRecording);
-});
+}
 
-// Save state before unload
-window.addEventListener('beforeunload', function() {
+function handleBeforeUnload() {
     if (isRecording) {
         saveRecordingState();
     }
-});
+}
 
-// Store interaction handler to remove it when stopping recording
+function handleVisibilityChange() {
+    persistentLog('Visibility changed', {
+        isHidden: document.hidden,
+        visibilityState: document.visibilityState
+    });
+    logState();
+}
+
+function handleFocus() {
+    persistentLog('Tab gained focus');
+    logState();
+}
+
+function handleBlur() {
+    persistentLog('Tab lost focus');
+    logState();
+}
+
+// Add connection management
+function connectToBackground() {
+    try {
+        port = chrome.runtime.connect({ name: 'recording-port' });
+        
+        port.onDisconnect.addListener(() => {
+            persistentLog('Port disconnected', { reconnectAttempts });
+            
+            if (chrome.runtime.lastError) {
+                persistentLog('Disconnection error', chrome.runtime.lastError);
+            }
+            
+            port = null;
+            
+            // Try to reconnect if we're still recording
+            if (isRecording && reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+                reconnectAttempts++;
+                setTimeout(connectToBackground, 1000);
+            }
+        });
+        
+        // Reset reconnect attempts on successful connection
+        reconnectAttempts = 0;
+        
+        persistentLog('Connected to background script');
+    } catch (error) {
+        persistentLog('Connection error', error);
+    }
+}
+
+// Modify the interaction sending logic
+function sendInteraction(interaction) {
+    if (!isRecording || !sessionId) {
+        persistentLog('Not sending interaction - recording inactive');
+        return;
+    }
+    
+    try {
+        if (port) {
+            port.postMessage({
+                action: 'saveInteraction',
+                interaction: interaction
+            });
+        } else {
+            // Fallback to one-time message if port is not available
+            chrome.runtime.sendMessage({
+                action: 'saveInteraction',
+                interaction: interaction
+            });
+        }
+        interactionCount++;
+        persistentLog('Interaction sent', { type: interaction.type });
+    } catch (error) {
+        persistentLog('Error sending interaction', error);
+    }
+}
+
+// Modify setupInteractionRecording to use the new sendInteraction
 function setupInteractionRecording() {
     if (window._interactionHandler) return;
-
+    
+    // Connect to background script when starting recording
+    if (!port) {
+        connectToBackground();
+    }
+    
     window._interactionHandler = function(event) {
         if (!isRecording) {
-            console.log('[Extension] Event ignored - not recording');
+            persistentLog('Event ignored - not recording');
             return;
         }
         
@@ -171,50 +349,8 @@ function setupInteractionRecording() {
             
             console.log('[Extension] Sending interaction to background script:', interaction);
             
-            // Check if recording is still active before sending
-            if (!isRecording || !sessionId) {
-                console.log('[DEBUG] Not sending interaction - recording is no longer active');
-                return;
-            }
-            
-            // Send the interaction to the background script
-            chrome.runtime.sendMessage({
-                action: "saveInteraction",
-                interaction: interaction
-            }, response => {
-                if (chrome.runtime.lastError) {
-                    console.error('[Extension] Error sending interaction:', chrome.runtime.lastError);
-                    
-                    // If we get an error about no active session, stop recording locally
-                    if (chrome.runtime.lastError.message && chrome.runtime.lastError.message.includes('No active recording session')) {
-                        console.log('[DEBUG] Background has no active session. Stopping local recording.');
-                        isRecording = false;
-                        sessionId = null;
-                        userId = null;
-                    }
-                } else if (response) {
-                    if (response.success) {
-                        console.log('[Extension] Interaction sent successfully');
-                    } else if (response.shouldStopRecording) {
-                        console.log(`[DEBUG] Background requested to stop recording: ${response.error}`);
-                        isRecording = false;
-                        sessionId = null;
-                        userId = null;
-                        if (window._interactionHandler) {
-                            document.removeEventListener('click', window._interactionHandler, true);
-                            document.removeEventListener('submit', window._interactionHandler, true);
-                            delete window._interactionHandler;
-                            delete window._recordingUserId;
-                        }
-                        sessionStorage.removeItem('recordingState');
-                    }
-                }
-            });
-            
-            interactionCount++;
-            
-            // Log the interaction
-            console.log(`[Extension] Recorded interaction: ${interaction.type}`, interaction);
+            // Use the new sendInteraction function
+            sendInteraction(interaction);
         } catch (error) {
             console.error('[Extension] Error recording interaction:', error);
         }
@@ -253,10 +389,7 @@ function setupInteractionRecording() {
                         }
                     };
                     
-                    chrome.runtime.sendMessage({
-                        action: "saveInteraction",
-                        interaction: interaction
-                    });
+                    sendInteraction(interaction);
                     
                     interactionCount++;
                     console.log(`[Extension] Recorded input interaction`, interaction);
@@ -287,10 +420,7 @@ function setupInteractionRecording() {
                 }
             };
             
-            chrome.runtime.sendMessage({
-                action: "saveInteraction",
-                interaction: interaction
-            });
+            sendInteraction(interaction);
             
             interactionCount++;
             console.log(`[Extension] Recorded scroll interaction`, interaction);
@@ -388,44 +518,51 @@ function recordPageInfo() {
     };
     
     // Send the interaction to the background script
-    chrome.runtime.sendMessage({
-        action: "saveInteraction",
-        interaction: pageLoadInteraction
-    });
+    sendInteraction(pageLoadInteraction);
     
     interactionCount++;
     console.log('[Extension] Recorded page load interaction', pageLoadInteraction);
 }
 
-// Listen for messages from background script
+// Add message handler for ping
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    console.log('[Extension] Content script received message:', request);
+    if (request.action === 'ping') {
+        sendResponse({ success: true });
+        return;
+    }
+    
+    // Make sure we're initialized
+    if (!isInitialized) {
+        initializeContentScript();
+    }
     
     if (request.action === 'startRecording') {
-        console.log('[DEBUG] Content script received startRecording message');
+        persistentLog('Received startRecording message');
+        
         if (!request.sessionId || !request.userId) {
-            console.error('[Extension] Missing sessionId or userId in startRecording request');
-            console.log('[DEBUG] Error: Missing sessionId or userId in startRecording request');
+            persistentLog('Missing sessionId or userId');
             sendResponse({ success: false, error: 'Missing sessionId or userId' });
             return;
         }
         
-        sessionId = request.sessionId;
-        userId = request.userId;
-        window._recordingUserId = request.userId;
-        isRecording = true;
-        setupInteractionRecording();
-        
-        // Save state immediately in case of reload
-        saveRecordingState();
-        
-        console.log(`[Extension] Started recording for session ${sessionId}`);
-        console.log(`[DEBUG] Started recording for session ${sessionId}`);
-        sendResponse({ success: true });
-        
-        // If this is a page reload, record it
-        if (request.isPageReload) {
-            recordPageInfo();
+        try {
+            sessionId = request.sessionId;
+            userId = request.userId;
+            window._recordingUserId = request.userId;
+            isRecording = true;
+            
+            setupInteractionRecording();
+            saveRecordingState();
+            
+            persistentLog('Recording started successfully');
+            sendResponse({ success: true });
+            
+            if (request.isPageReload) {
+                recordPageInfo();
+            }
+        } catch (error) {
+            persistentLog('Error starting recording', error);
+            sendResponse({ success: false, error: error.message });
         }
     } else if (request.action === 'stopRecording') {
         console.log('[DEBUG] Content script received stopRecording message');
@@ -461,36 +598,71 @@ previousUrl = window.location.href;
 
 console.log('[Extension] Content script loaded');
 
-// Add this function near the top of your file
-function checkRecordingStatus() {
-    if (!isRecording) return;
-    
-    // Check with background script if recording is still active
-    chrome.runtime.sendMessage({ action: "getRecordingStatus" }, (response) => {
-        if (chrome.runtime.lastError) {
-            console.log('[DEBUG] Error checking recording status:', chrome.runtime.lastError.message);
-            return;
-        }
-        
-        if (response && response.sessionId !== sessionId) {
-            console.log('[DEBUG] Recording session mismatch. Local:', sessionId, 'Background:', response.sessionId);
-            // If background doesn't have our session, stop recording locally
-            if (!response.sessionId && sessionId) {
-                console.log('[DEBUG] Background has no active session but content script does. Stopping local recording.');
-                isRecording = false;
-                sessionId = null;
-                userId = null;
-                if (window._interactionHandler) {
-                    document.removeEventListener('click', window._interactionHandler, true);
-                    document.removeEventListener('submit', window._interactionHandler, true);
-                    delete window._interactionHandler;
-                    delete window._recordingUserId;
-                }
-                sessionStorage.removeItem('recordingState');
-            }
-        }
+// Add visibility change detection
+document.addEventListener('visibilitychange', function() {
+    persistentLog('Visibility changed', {
+        isHidden: document.hidden,
+        visibilityState: document.visibilityState
     });
-}
+    debugLog('Visibility changed:', {
+        isHidden: document.hidden,
+        visibilityState: document.visibilityState
+    });
+    logState();
+});
 
-// Add a periodic check (every 5 seconds)
-setInterval(checkRecordingStatus, 5000); 
+// Track tab focus
+window.addEventListener('focus', function() {
+    persistentLog('Tab gained focus');
+    debugLog('Tab gained focus');
+    logState();
+});
+
+window.addEventListener('blur', function() {
+    persistentLog('Tab lost focus');
+    debugLog('Tab lost focus');
+    logState();
+});
+
+// Add helper function to view logs
+window.viewExtensionLogs = function() {
+    try {
+        const logs = localStorage.getItem('extensionDebugLogs');
+        if (logs) {
+            console.log('Extension Debug Logs:', JSON.parse(logs));
+            return JSON.parse(logs);
+        }
+        return 'No logs found';
+    } catch (e) {
+        console.error('Error reading logs:', e);
+        return 'Error reading logs';
+    }
+};
+
+// Add helper to clear logs
+window.clearExtensionLogs = function() {
+    localStorage.removeItem('extensionDebugLogs');
+    console.log('Extension debug logs cleared');
+};
+
+// Add periodic connection check
+setInterval(() => {
+    if (isRecording && !port) {
+        persistentLog('Periodic connection check - attempting reconnect');
+        connectToBackground();
+    }
+}, 30000); // Check every 30 seconds
+
+// Add state tracking
+function logState() {
+    if (!DEBUG) return;
+    debugLog('Current State:', {
+        isRecording,
+        sessionId,
+        userId,
+        interactionCount,
+        hasInteractionHandler: !!window._interactionHandler,
+        timeElapsedSinceLastCheck: Date.now() - lastStateCheck
+    });
+    lastStateCheck = Date.now();
+} 

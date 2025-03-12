@@ -12,24 +12,63 @@ let lastSyncTime = null;
 // User identification management
 let userId = null;
 
-// Initialize API URL from storage
+// Add debugging at the top
+const DEBUG = true;
+let lastStateCheck = Date.now();
+
+// Add at the top of the file after initial declarations
+let ports = new Map(); // Store connections to content scripts
+let keepAliveInterval;
+
+// Add server configuration state
+let isServerConfigured = false;
+
+function debugLog(message, data = null) {
+    if (!DEBUG) return;
+    const timestamp = new Date().toISOString();
+    const logMessage = `[DEBUG][${timestamp}] ${message}`;
+    if (data) {
+        console.log(logMessage, data);
+    } else {
+        console.log(logMessage);
+    }
+}
+
+function logBackgroundState() {
+    if (!DEBUG) return;
+    debugLog('Background State:', {
+        currentSessionId,
+        recordingTabId,
+        recordingStatus,
+        interactionCount,
+        bufferSize: interactionBuffer.length,
+        timeSinceLastSync: lastSyncTime ? Date.now() - lastSyncTime : null,
+        timeSinceLastStateCheck: Date.now() - lastStateCheck
+    });
+    lastStateCheck = Date.now();
+}
+
+// Modify the server config handling
 chrome.storage.sync.get(['serverConfig'], (result) => {
-  if (result.serverConfig) {
-    const { ip, port } = result.serverConfig;
-    API_BASE_URL = `http://${ip}:${port}/api`;
-    console.log('[Extension] Using API URL:', API_BASE_URL);
-  } else {
-    console.warn('[Extension] No server configuration found. Please configure server settings.');
-  }
+    if (result.serverConfig) {
+        const { ip, port } = result.serverConfig;
+        API_BASE_URL = `http://${ip}:${port}/api`;
+        isServerConfigured = true;
+        debugLog('Server configured:', API_BASE_URL);
+    } else {
+        debugLog('No server configuration found');
+        isServerConfigured = false;
+    }
 });
 
-// Listen for changes to server config
+// Update server config listener
 chrome.storage.onChanged.addListener((changes, namespace) => {
-  if (namespace === 'sync' && changes.serverConfig) {
-    const { ip, port } = changes.serverConfig.newValue;
-    API_BASE_URL = `http://${ip}:${port}/api`;
-    console.log('[Extension] Updated API URL:', API_BASE_URL);
-  }
+    if (namespace === 'sync' && changes.serverConfig) {
+        const { ip, port } = changes.serverConfig.newValue;
+        API_BASE_URL = `http://${ip}:${port}/api`;
+        isServerConfigured = true;
+        debugLog('Server configuration updated:', API_BASE_URL);
+    }
 });
 
 // Helper function to check if API URL is configured
@@ -130,7 +169,8 @@ setInterval(flushInteractionBuffer, 1500);
 
 // Listen for messages from the popup or content scripts
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  console.log('[Extension] Background received message:', request.action);
+  debugLog('Received message:', { action: request.action, sender });
+  logBackgroundState();
   
   // Handle DOM capture request from popup
   if (request.action === "captureDOM") {
@@ -200,7 +240,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             }
 
             const activeTab = tabs[0];
-            recordingTabId = activeTab.id;
+            
+            // Check if already recording
+            if (recordingStatus === 'recording') {
+                sendResponse({
+                    success: false,
+                    error: 'Already recording in another tab'
+                });
+                return;
+            }
             
             // Reset counters
             interactionCount = 0;
@@ -215,26 +263,50 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             // Create a new session ID
             const newSessionId = `ext-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
             
-            // Create a new recording session on the backend
-            const response = await fetch(`${API_BASE_URL}/extension/recorder/saveSession`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    sessionId: newSessionId,
-                    userId: userId,
-                    url: activeTab.url,
-                    title: activeTab.title,
-                    startTime: new Date().toISOString(),
-                    source: 'extension'
-                })
-            });
-            
-            const data = await response.json();
-            
-            if (data.success) {
+            try {
+                // Verify server connection before proceeding
+                debugLog('Verifying server connection');
+                const response = await fetch(`${API_BASE_URL}/extension/recorder/verifyConnection`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ test: true })
+                });
+                
+                if (!response.ok) {
+                    throw new Error('Server connection failed');
+                }
+                
+                // Create new recording session on backend
+                const sessionResponse = await fetch(`${API_BASE_URL}/extension/recorder/saveSession`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        sessionId: newSessionId,
+                        userId: userId,
+                        url: activeTab.url,
+                        title: activeTab.title,
+                        startTime: new Date().toISOString(),
+                        source: 'extension'
+                    })
+                });
+                
+                if (!sessionResponse.ok) {
+                    throw new Error('Failed to create recording session on server');
+                }
+                
+                const sessionData = await sessionResponse.json();
+                
+                if (!sessionData.success) {
+                    throw new Error(sessionData.error || 'Failed to create recording session');
+                }
+                
+                // Set session state
                 currentSessionId = newSessionId;
+                recordingTabId = activeTab.id;
                 recordingStatus = 'recording';
                 
                 // Start recording on the content script
@@ -253,6 +325,18 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                         return;
                     }
                     
+                    if (!response || !response.success) {
+                        recordingStatus = 'error';
+                        sendResponse({
+                            success: false,
+                            error: response?.error || 'Content script failed to start recording'
+                        });
+                        return;
+                    }
+                    
+                    // Start keepalive
+                    keepAlive();
+                    
                     // Update popup with recording status
                     sendResponse({ 
                         success: true, 
@@ -262,36 +346,21 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     });
                     
                     // Notify the backend that we've started recording
-                    fetch(`${API_BASE_URL}/extension/recorder/notifyRecordingStatus`, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({
-                            status: 'recording',
-                            sessionId: currentSessionId,
-                            userId: userId,
-                            tabUrl: activeTab.url,
-                            tabTitle: activeTab.title
-                        })
-                    }).catch(err => console.error('[Extension] Failed to notify recording status:', err));
-                    
-                    // Update the recording status in backend
                     updateRecordingStatus('recording');
                 });
-            } else {
+            } catch (error) {
+                console.error('[Extension] Error starting recording:', error);
                 recordingStatus = 'error';
                 sendResponse({ 
                     success: false, 
-                    error: data.error || 'Failed to create recording session'
+                    error: error.message || 'Failed to start recording'
                 });
             }
         } catch (error) {
-            console.error('[Extension] Error creating recording session:', error);
-            recordingStatus = 'error';
+            console.error('[Extension] Error in start recording handler:', error);
             sendResponse({ 
                 success: false, 
-                error: error.toString() 
+                error: error.message || 'Unknown error starting recording'
             });
         }
     });
@@ -577,49 +646,286 @@ chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
 
 // Listen for tab updates to detect navigation
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (tabId === recordingTabId && recordingStatus === 'recording') {
-    // Don't reset recording on loading state, only when complete
+    debugLog('Tab Update Event:', { tabId, changeInfo, tab });
+    logBackgroundState();
+    
+    // Only handle tabs that are part of the recording
+    if (!currentSessionId || tabId !== recordingTabId) {
+        debugLog('Ignoring tab update - not recording tab');
+        return;
+    }
+
+    // Track loading states
+    if (changeInfo.status) {
+        debugLog('Tab loading status changed:', {
+            status: changeInfo.status,
+            url: tab.url,
+            isRecordingTab: tabId === recordingTabId
+        });
+    }
+
+    // Only handle complete loads
     if (changeInfo.status === 'complete') {
-      console.log('[Extension] Recording tab navigated/reloaded, reinitializing recording');
-      
-      // Keep the current session active
-      setTimeout(() => {
-        chrome.tabs.sendMessage(tabId, {
-          action: 'startRecording',
-          sessionId: currentSessionId,
-          userId: userId,
-          isPageReload: true
-        }, (response) => {
-          if (chrome.runtime.lastError) {
-            console.log('[Extension] Could not initialize content script after navigation, will retry');
-            
-            // Content script might not be ready yet, try again with multiple retries
-            let retryCount = 0;
-            const maxRetries = 5;
-            const retryInterval = setInterval(() => {
-              if (retryCount >= maxRetries) {
-                clearInterval(retryInterval);
-                return;
-              }
-              
-              chrome.tabs.sendMessage(tabId, {
+        debugLog('Tab load complete, checking recording state');
+        
+        // Small delay to ensure content script is ready
+        setTimeout(() => {
+            chrome.tabs.sendMessage(tabId, {
                 action: 'startRecording',
                 sessionId: currentSessionId,
                 userId: userId,
-                isPageReload: true
-              }, (resp) => {
-                if (!chrome.runtime.lastError) {
-                  clearInterval(retryInterval);
+                isRestore: true
+            }, (response) => {
+                if (chrome.runtime.lastError) {
+                    debugLog('Error reinitializing recording:', chrome.runtime.lastError);
+                    return;
                 }
-              });
-              
-              retryCount++;
-            }, 1000);
-          }
-        });
-      }, 500);
+                debugLog('Recording reinitialized successfully');
+            });
+        }, 200);
     }
-  }
 });
+
+// Update the saveInteraction handler to be more resilient
+function saveInteraction(interaction) {
+    if (!interaction.sessionId) {
+        console.log('[DEBUG] Received interaction without sessionId');
+        return;
+    }
+
+    // If we have a valid session ID, accept the interaction
+    if (interaction.sessionId === currentSessionId) {
+        console.log('[DEBUG] Processing interaction for current session');
+        interactionBuffer.push(interaction);
+        interactionCount++;
+
+        // Trigger immediate flush if buffer is getting full
+        if (interactionBuffer.length >= 10) {
+            flushInteractionBuffer();
+        }
+    }
+}
+
+// Track tab activation
+chrome.tabs.onActivated.addListener((activeInfo) => {
+    debugLog('Tab activated:', activeInfo);
+    logBackgroundState();
+    
+    if (recordingTabId && activeInfo.tabId !== recordingTabId) {
+        debugLog('Switched away from recording tab');
+    } else if (recordingTabId && activeInfo.tabId === recordingTabId) {
+        debugLog('Switched back to recording tab');
+    }
+});
+
+// Keep service worker alive
+function keepAlive() {
+    if (keepAliveInterval) {
+        clearInterval(keepAliveInterval);
+    }
+    
+    keepAliveInterval = setInterval(() => {
+        if (currentSessionId) {
+            chrome.runtime.getPlatformInfo(() => {});
+        } else {
+            clearInterval(keepAliveInterval);
+        }
+    }, 20000); // Ping every 20 seconds while recording
+}
+
+// Handle port connections from content scripts
+chrome.runtime.onConnect.addListener((port) => {
+    debugLog('New port connection', { name: port.name });
+    
+    if (port.name === 'recording-port') {
+        const tabId = port.sender.tab.id;
+        ports.set(tabId, port);
+        
+        port.onMessage.addListener((msg) => {
+            handlePortMessage(msg, port);
+        });
+        
+        port.onDisconnect.addListener(() => {
+            debugLog('Port disconnected', { tabId });
+            ports.delete(tabId);
+            
+            // If this was the recording tab, handle cleanup
+            if (tabId === recordingTabId) {
+                handleRecordingTabDisconnect();
+            }
+        });
+    }
+});
+
+// Handle messages from ports
+function handlePortMessage(msg, port) {
+    debugLog('Received port message', msg);
+    
+    if (msg.action === "saveInteraction") {
+        saveInteraction(msg.interaction);
+    }
+}
+
+// Handle recording tab disconnect
+function handleRecordingTabDisconnect() {
+    if (currentSessionId) {
+        debugLog('Recording tab disconnected, attempting to reconnect');
+        
+        // Try to reconnect to the tab
+        chrome.tabs.get(recordingTabId, (tab) => {
+            if (chrome.runtime.lastError) {
+                debugLog('Tab no longer exists, stopping recording');
+                stopRecording();
+                return;
+            }
+            
+            // Reinitialize recording in the tab
+            chrome.tabs.sendMessage(recordingTabId, {
+                action: 'startRecording',
+                sessionId: currentSessionId,
+                userId: userId,
+                isRestore: true
+            });
+        });
+    }
+}
+
+// Add this helper function at the top
+async function injectContentScriptIfNeeded(tabId) {
+    try {
+        // Check if content script is already injected
+        await chrome.tabs.sendMessage(tabId, { action: 'ping' });
+        debugLog('Content script already injected');
+        return true;
+    } catch (error) {
+        debugLog('Content script not injected, injecting now');
+        
+        try {
+            await chrome.scripting.executeScript({
+                target: { tabId: tabId },
+                files: ['content.js']
+            });
+            debugLog('Content script injected successfully');
+            return true;
+        } catch (error) {
+            debugLog('Failed to inject content script:', error);
+            return false;
+        }
+    }
+}
+
+// Add retry helper
+async function retryOperation(operation, maxAttempts = 3, delay = 1000) {
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+            debugLog(`Attempt ${attempt} of ${maxAttempts}`);
+            return await operation();
+        } catch (error) {
+            if (attempt === maxAttempts) throw error;
+            debugLog(`Attempt ${attempt} failed, retrying in ${delay}ms`);
+            await new Promise(resolve => setTimeout(resolve, delay));
+        }
+    }
+}
+
+// Update startRecording function with better error handling
+async function startRecording(tab) {
+    try {
+        debugLog('Starting recording');
+        
+        // Check server configuration first
+        if (!isServerConfigured) {
+            throw new Error('Server not configured. Please configure server settings first.');
+        }
+        
+        // Make sure we have a valid tab
+        if (!tab || !tab.id) {
+            throw new Error('Invalid tab');
+        }
+        
+        // Make sure we have a user ID
+        if (!userId) {
+            await initializeUserId();
+        }
+        
+        // Ensure content script is injected
+        debugLog('Checking content script injection');
+        const injected = await injectContentScriptIfNeeded(tab.id);
+        if (!injected) {
+            throw new Error('Failed to inject content script');
+        }
+        
+        // Create new session
+        const newSessionId = `ext-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        
+        // Verify server connection before proceeding
+        try {
+            debugLog('Verifying server connection');
+            const response = await fetch(`${API_BASE_URL}/extension/recorder/verifyConnection`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ test: true })
+            });
+            
+            if (!response.ok) {
+                throw new Error('Server connection failed');
+            }
+        } catch (error) {
+            throw new Error(`Server connection error: ${error.message}`);
+        }
+        
+        // Set session state
+        currentSessionId = newSessionId;
+        recordingTabId = tab.id;
+        recordingStatus = 'recording';
+        
+        // Start keepalive
+        keepAlive();
+        
+        // Initialize content script with retry
+        debugLog('Initializing content script');
+        await retryOperation(async () => {
+            const response = await chrome.tabs.sendMessage(tab.id, {
+                action: 'startRecording',
+                sessionId: currentSessionId,
+                userId: userId
+            });
+            
+            if (!response || !response.success) {
+                throw new Error('Content script failed to start recording');
+            }
+            
+            return response;
+        });
+        
+        debugLog('Recording started successfully');
+        return { success: true, sessionId: currentSessionId };
+    } catch (error) {
+        const errorMessage = error.message || 'Unknown error starting recording';
+        debugLog('Error starting recording:', errorMessage);
+        recordingStatus = 'error';
+        currentSessionId = null;
+        recordingTabId = null;
+        return { 
+            success: false, 
+            error: errorMessage,
+            details: error.toString()
+        };
+    }
+}
+
+// Modify stopRecording function
+function stopRecording() {
+    debugLog('Stopping recording');
+    
+    if (keepAliveInterval) {
+        clearInterval(keepAliveInterval);
+        keepAliveInterval = null;
+    }
+    
+    // Rest of existing stopRecording code...
+}
 
 console.log('[Extension] Background script loaded'); 

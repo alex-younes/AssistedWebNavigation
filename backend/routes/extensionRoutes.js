@@ -55,6 +55,16 @@ const getUserStatus = (userId) => {
     return recordingStatusStore.users[userId];
 };
 
+// Verify connection endpoint
+router.post('/recorder/verifyConnection', (req, res) => {
+    console.log('[Backend] Received connection verification request');
+    res.json({ 
+        success: true, 
+        message: 'Connection verified',
+        serverTime: new Date().toISOString()
+    });
+});
+
 // Endpoint to save a recording session
 router.post('/recorder/saveSession', async (req, res) => {
   try {

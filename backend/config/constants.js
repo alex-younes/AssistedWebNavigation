@@ -11,9 +11,13 @@ const constants = {
     },
     CORS_CONFIG: {
         origin: '*',
-        methods: ['GET', 'POST', 'OPTIONS'],
-        allowedHeaders: ['Content-Type'],
-        credentials: true
+        methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+        allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
+        exposedHeaders: ['Content-Range', 'X-Content-Range'],
+        credentials: true,
+        maxAge: 86400,
+        preflightContinue: false,
+        optionsSuccessStatus: 204
     }
 };
 

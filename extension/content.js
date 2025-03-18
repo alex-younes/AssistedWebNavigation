@@ -332,6 +332,54 @@ function handlePageLoad() {
                 referrer: document.referrer || null
             }
         });
+
+        // Add special handling to detect DOM changes after page load
+        // Take a snapshot of the DOM right after navigation
+        const initialDomSize = document.documentElement.outerHTML.length;
+        const initialElementCount = document.querySelectorAll('*').length;
+        
+        debugLog(`Initial DOM state: ${initialElementCount} elements, ${initialDomSize} bytes`);
+        
+        // Set a timeout to check for DOM changes shortly after load
+        setTimeout(() => {
+            if (!isRecording || !sessionId) return;
+            
+            const currentDomSize = document.documentElement.outerHTML.length;
+            const currentElementCount = document.querySelectorAll('*').length;
+            
+            debugLog(`After load DOM state: ${currentElementCount} elements, ${currentDomSize} bytes`);
+            
+            // Calculate changes
+            const sizeChange = Math.abs(currentDomSize - initialDomSize);
+            const sizeChangePercentage = (sizeChange / initialDomSize) * 100;
+            const elementCountChange = Math.abs(currentElementCount - initialElementCount);
+            
+            // If there are substantial changes to the DOM after load, report it as a mutation
+            if (sizeChangePercentage > 10 || elementCountChange > 5) {
+                debugLog(`Detected DOM mutation during page load: ${elementCountChange} elements changed, ${sizeChangePercentage.toFixed(2)}% size change`);
+                
+                // Send a special dom_mutation event
+                sendInteraction({
+                    type: 'dom_mutation',
+                    timestamp: new Date().toISOString(),
+                    details: {
+                        summary: `DOM changed during page load: ${elementCountChange} elements changed`,
+                        stats: {
+                            additions: elementCountChange > 0 ? elementCountChange : 0,
+                            removals: elementCountChange < 0 ? Math.abs(elementCountChange) : 0,
+                            attributeChanges: 0,
+                            isCompleteReplacement: sizeChangePercentage > 30  // Flag as complete replacement if significant
+                        },
+                        sizeChange: {
+                            previousSize: initialDomSize,
+                            currentSize: currentDomSize,
+                            changePercentage: sizeChangePercentage.toFixed(2),
+                            source: 'page_load'
+                        }
+                    }
+                });
+            }
+        }, 300); // Check shortly after initial load
         
         // Send a render_complete event after a short delay to ensure DOM has had time to render
         setTimeout(() => {
@@ -702,63 +750,119 @@ function setupMutationObserver() {
     let pendingMutations = [];
     let mutationTimeout = null;
     let lastMutationTime = 0;
-    const MUTATION_MIN_INTERVAL = 3000; // Increase to 3 seconds minimum between mutation events
+    const MUTATION_MIN_INTERVAL = 2000; // Decrease to 2 seconds to capture more mutations
     
     // Track DOM mutation sources for better filtering
     const seenMutationSources = new Set();
     
+    // Track the previous DOM snapshot size to detect complete replacements
+    let previousDOMSize = document.documentElement.outerHTML.length;
+    
     const observer = new MutationObserver((mutations) => {
         if (!isRecording) return;
         
-        // Don't record mutations too frequently
+        // Don't record mutations too frequently, but be more lenient
         const now = Date.now();
         if (now - lastMutationTime < MUTATION_MIN_INTERVAL) {
             return;
         }
         
-        // Filter for significant mutations only - be more selective
+        // Check if this might be a complete DOM replacement
+        const currentDOMSize = document.documentElement.outerHTML.length;
+        const sizeChange = Math.abs(currentDOMSize - previousDOMSize);
+        const sizeChangePercentage = (sizeChange / previousDOMSize) * 100;
+        
+        // Lower the threshold for detecting complete replacements to 30%
+        const mightBeCompleteReplacement = sizeChangePercentage > 30;
+        
+        if (mightBeCompleteReplacement) {
+            debugLog(`Detected potential complete DOM replacement: ${sizeChangePercentage.toFixed(2)}% size change`);
+            
+            // Count actual elements changed
+            let addedElements = 0;
+            let removedElements = 0;
+            
+            mutations.forEach(m => {
+                if (m.type === 'childList') {
+                    // Count only element nodes
+                    addedElements += Array.from(m.addedNodes).filter(node => 
+                        node.nodeType === 1 && node.tagName
+                    ).length;
+                    
+                    removedElements += Array.from(m.removedNodes).filter(node => 
+                        node.nodeType === 1 && node.tagName
+                    ).length;
+                }
+            });
+            
+            // Lower the threshold for element changes to 20
+            const totalElementChanges = addedElements + removedElements;
+            if (totalElementChanges > 20) {  // Lower threshold for significant element changes
+                debugLog(`Confirmed complete DOM replacement: ${addedElements} elements added, ${removedElements} elements removed`);
+                
+                // Create a special dom_mutation event for complete replacement
+                sendInteraction({
+                    type: 'dom_mutation',
+                    timestamp: new Date().toISOString(),
+                    count: mutations.length,
+                    details: {
+                        summary: `Complete DOM replacement: ${addedElements} elements added, ${removedElements} elements removed`,
+                        stats: {
+                            additions: addedElements,
+                            removals: removedElements,
+                            attributeChanges: 0,
+                            isCompleteReplacement: true
+                        },
+                        sizeChange: {
+                            previousSize: previousDOMSize,
+                            currentSize: currentDOMSize,
+                            changePercentage: sizeChangePercentage.toFixed(2)
+                        }
+                    }
+                });
+                
+                // Update tracking data
+                lastMutationTime = now;
+                lastEventTimes.dom_mutation = now;
+                previousDOMSize = currentDOMSize;
+                
+                // Clear pending mutations to avoid duplicate events
+                pendingMutations = [];
+                if (mutationTimeout) {
+                    clearTimeout(mutationTimeout);
+                }
+                
+                return;
+            }
+        }
+        
+        // Update DOM size for future comparisons
+        previousDOMSize = currentDOMSize;
+        
+        // Continue with normal mutation processing for non-complete replacements
+        
+        // Filter for significant mutations - be less selective to catch more mutations
         const significantMutations = mutations.filter(m => {
             // Only capture significant mutations
             if (m.type === 'childList') {
-                // For childList, we need at least one meaningful element added
+                // For childList, accept more types of changes
                 const hasSignificantAddedNodes = Array.from(m.addedNodes).some(node => {
                     if (node.nodeType !== 1) return false; // Not an element
                     if (!node.tagName) return false;
                     
-                    // Ignore more element types that typically cause noise
-                    if (['SCRIPT', 'STYLE', 'META', 'LINK', 'NOSCRIPT', 'BR', 'HR', 'WBR', 'SPAN'].includes(node.tagName)) {
+                    // Shorter exclusion list to catch more changes
+                    if (['SCRIPT', 'STYLE', 'META', 'LINK'].includes(node.tagName)) {
                         return false;
                     }
                     
-                    // Skip empty or tiny nodes
-                    if (node.textContent && node.textContent.trim().length < 3) {
-                        return false;
-                    }
-                    
-                    // Skip elements with no children and no attributes (likely not important)
-                    if (node.childNodes.length === 0 && node.attributes.length === 0) {
-                        return false;
-                    }
-                    
-                    // Consider remaining elements significant
+                    // Accept more nodes, even small ones
                     return true;
                 });
                 
-                return hasSignificantAddedNodes;
+                return hasSignificantAddedNodes || m.removedNodes.length > 0; // Accept any removals
             } 
             else if (m.type === 'attributes') {
-                // For attribute changes, be more selective
-                // Only care about important attributes
-                if (!['class', 'id', 'style', 'src', 'href', 'value', 'checked', 'selected', 'disabled', 'aria-expanded'].includes(m.attributeName)) {
-                    return false;
-                }
-                
-                // Skip mutations on hidden elements
-                const targetStyle = window.getComputedStyle(m.target);
-                if (targetStyle && (targetStyle.display === 'none' || targetStyle.visibility === 'hidden' || targetStyle.opacity === '0')) {
-                    return false;
-                }
-                
+                // Accept more attribute changes
                 return true;
             }
             return false;
@@ -767,7 +871,7 @@ function setupMutationObserver() {
         if (significantMutations.length > 0) {
             pendingMutations = pendingMutations.concat(significantMutations);
             
-            // Debounce to avoid sending too many events
+            // Debounce to avoid sending too many events but respond faster
             if (mutationTimeout) {
                 clearTimeout(mutationTimeout);
             }
@@ -775,17 +879,16 @@ function setupMutationObserver() {
             mutationTimeout = setTimeout(() => {
                 // If we have pending mutations to process
                 if (pendingMutations.length >= 1) {
-                    // Check if we've sent a DOM mutation event recently
+                    // Less strict deduplication - allow more mutations through
                     const currentTime = Date.now();
-                    if (currentTime - lastEventTimes.dom_mutation < DOM_MUTATION_DEDUP_WINDOW) {
+                    if (currentTime - lastEventTimes.dom_mutation < 1000) { // Reduced from 3000ms
                         debugLog(`Skipping DOM mutation event - too soon after previous (${currentTime - lastEventTimes.dom_mutation}ms)`);
                         pendingMutations = [];
                         return;
                     }
                     
-                    // Only proceed if we have enough significant changes
-                    // Increase threshold to require more changes
-                    if (pendingMutations.length < 3) {
+                    // Lower threshold for minimum changes
+                    if (pendingMutations.length < 2) { // Reduced from 3
                         debugLog(`Skipping DOM mutation batch - only ${pendingMutations.length} changes`);
                         pendingMutations = [];
                         return;
@@ -807,14 +910,16 @@ function setupMutationObserver() {
                         }
                     });
                     
-                    // Skip tiny mutations that don't add much value - increase threshold
+                    // Lower threshold for total changes
                     const totalChanges = stats.additions + stats.removals + stats.attributeChanges;
-                    if (totalChanges < 5) {
+                    if (totalChanges < 2) { // Reduced from 5
                         debugLog(`Skipping minor DOM mutation with only ${totalChanges} changes`);
                         pendingMutations = [];
                         return;
                     }
                     
+                    // Skip source fingerprinting for now to detect more mutations
+                    /*
                     // Create source fingerprint to help deduplicate similar mutations
                     const sourcePath = pendingMutations.slice(0, 3).map(m => getXPath(m.target)).join('|');
                     if (seenMutationSources.has(sourcePath) && currentTime - lastDomMutationStats.timestamp < 10000) {
@@ -831,6 +936,7 @@ function setupMutationObserver() {
                         const entries = Array.from(seenMutationSources);
                         seenMutationSources = new Set(entries.slice(-50));
                     }
+                    */
                     
                     // Update tracking for mutations
                     lastMutationTime = currentTime;

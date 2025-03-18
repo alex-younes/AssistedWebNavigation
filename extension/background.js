@@ -1741,4 +1741,150 @@ function preFilterDuplicateCompleteEvents(interactions) {
     
     return true; // Keep everything else
   });
-} 
+}
+
+// This function identifies if we should create a new state or reuse an existing one
+const identifyDomState = (interaction) => {
+    // Track navigation, page_info and complete replacements as potential state changes
+    if (interaction.type !== 'page_info' && 
+        interaction.type !== 'navigation' && 
+        !(interaction.type === 'dom_mutation' && 
+          (interaction.details?.stats?.isCompleteReplacement === true || 
+           interaction.details?.sizeChange?.source === 'page_load'))) {
+        return null; 
+    }
+
+    const url = interaction.url || interaction.details?.url;
+    if (!url) return null;
+
+    // Handle special cases where we want to create/identify a state:
+    // 1. DOM mutations that are complete replacements
+    // 2. DOM mutations that happen during page load
+    // 3. page_info events with readyState="loading"
+    // 4. For navigation events, we'll wait for the subsequent page_info event unless there's a clear reason not to
+    
+    const isCompleteReplacement = interaction.type === 'dom_mutation' && 
+                               (interaction.details?.stats?.isCompleteReplacement === true ||
+                                interaction.details?.sizeChange?.source === 'page_load');
+    
+    if (isCompleteReplacement) {
+        debugLog('DOM state change detected', {
+            type: interaction.type,
+            url,
+            isCompleteReplacement: true,
+            source: interaction.details?.sizeChange?.source || 'mutation_observer'
+        });
+    }
+
+    // For navigation events without special conditions, wait for the page_info
+    if (interaction.type === 'navigation' && !isCompleteReplacement) {
+        debugLog('Navigation detected, waiting for page_info to create/identify state', interaction);
+        return null;
+    }
+
+    // For page_info with readyState="loading" or DOM mutations that indicate state changes
+    if ((interaction.type === 'page_info' && interaction.details?.readyState === 'loading') || isCompleteReplacement) {
+        // Calculate a state key based on URL (normalized)
+        const normalizedUrl = normalizeUrl(url);
+        const existingState = stateMap.get(normalizedUrl);
+        
+        const timestamp = new Date().toISOString();
+        const stateId = `state_${stateCounter}`;
+        
+        // Check if we're returning to an existing state
+        if (existingState) {
+            debugLog('Reusing existing DOM state', { 
+                url, 
+                stateId: existingState.stateKey,
+                source: interaction.type,
+                details: isCompleteReplacement ? 'complete_replacement' : 'standard_navigation'
+            });
+            
+            // Record in history that we returned to this state
+            stateHistory.push({
+                id: stateHistory.length + 1,
+                url: normalizedUrl,
+                timestamp,
+                isNewState: false,
+                stateKey: existingState.stateKey,
+                navigationType: isCompleteReplacement ? 
+                    (interaction.details?.sizeChange?.source === 'page_load' ? 'page_load_mutation' : 'spa_replacement') : 
+                    'navigation', 
+                domSize: existingState.domSize,
+                source: interaction.type
+            });
+            
+            currentState = existingState;
+            return existingState;
+        }
+        
+        // Otherwise, create a new state
+        const newState = {
+            stateKey: stateId,
+            url: normalizedUrl,
+            createdAt: timestamp,
+            domSize: '0 KB', // Will be updated when DOM is captured
+            source: interaction.type,
+            domReplacement: isCompleteReplacement,
+            detectionMethod: isCompleteReplacement ? 
+                (interaction.details?.sizeChange?.source === 'page_load' ? 'page_load_mutation' : 'mutation_observer') : 
+                'navigation'
+        };
+        
+        stateMap.set(normalizedUrl, newState);
+        stateCounter++;
+        
+        // Record in history that we created a new state
+        stateHistory.push({
+            id: stateHistory.length + 1,
+            url: normalizedUrl,
+            timestamp,
+            isNewState: true,
+            stateKey: newState.stateKey,
+            navigationType: isCompleteReplacement ? 
+                (interaction.details?.sizeChange?.source === 'page_load' ? 'page_load_mutation' : 'spa_replacement') : 
+                'navigation',
+            domSize: '0 KB',
+            source: interaction.type
+        });
+        
+        currentState = newState;
+        debugLog('Created new DOM state', newState);
+        return newState;
+    }
+    
+    // Update the DOM size when we get interactive or complete page_info events
+    if (interaction.type === 'page_info' && currentState && 
+        (interaction.details?.readyState === 'interactive' || interaction.details?.readyState === 'complete')) {
+        
+        // Estimate DOM size from the interaction details if available
+        if (interaction.details?.contentSize) {
+            const domSizeKB = Math.round(interaction.details.contentSize / 1024);
+            currentState.domSize = `${domSizeKB} KB`;
+            
+            // Also update the latest history entry
+            if (stateHistory.length > 0) {
+                const latestHistoryEntry = stateHistory[stateHistory.length - 1];
+                if (latestHistoryEntry.stateKey === currentState.stateKey) {
+                    latestHistoryEntry.domSize = currentState.domSize;
+                }
+            }
+        }
+    }
+    
+    // Update DOM size from DOM mutation if available
+    if (interaction.type === 'dom_mutation' && currentState && interaction.details?.sizeChange) {
+        const domSizeKB = Math.round(interaction.details.sizeChange.currentSize / 1024);
+        currentState.domSize = `${domSizeKB} KB`;
+        
+        // Also update the latest history entry
+        if (stateHistory.length > 0) {
+            const latestHistoryEntry = stateHistory[stateHistory.length - 1];
+            if (latestHistoryEntry.stateKey === currentState.stateKey) {
+                latestHistoryEntry.domSize = currentState.domSize;
+            }
+        }
+    }
+    
+    return null;
+}; 

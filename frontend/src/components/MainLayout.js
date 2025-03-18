@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Box, Tabs, Tab, AppBar, useMediaQuery, useTheme } from '@mui/material';
 import DOMVisualizer from './DOMVisualizer';
 import InteractionRecorder from './InteractionRecorder';
+import StateManagement from './StateManagement';
 
 function TabPanel(props) {
     const { children, value, index, ...other } = props;
@@ -85,6 +86,13 @@ const MainLayout = () => {
                             minWidth: { xs: 'auto', sm: 120 }
                         }}
                     />
+                    <Tab 
+                        label="State Management" 
+                        sx={{ 
+                            textTransform: 'none',
+                            minWidth: { xs: 'auto', sm: 120 }
+                        }}
+                    />
                 </Tabs>
             </AppBar>
 
@@ -93,6 +101,9 @@ const MainLayout = () => {
             </TabPanel>
             <TabPanel value={currentTab} index={1}>
                 <InteractionRecorder />
+            </TabPanel>
+            <TabPanel value={currentTab} index={2}>
+                <StateManagement />
             </TabPanel>
         </Box>
     );

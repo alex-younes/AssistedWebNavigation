@@ -26,252 +26,255 @@ import { useState } from 'react';
 const InteractionItem = ({ interaction }) => {
     const [expanded, setExpanded] = useState(false);
 
-    // Handle different data formats (headless browser vs extension)
+    // Handle data formats for interaction visualization
     const getElementData = (interaction) => {
-        // For pageLoad events, customize the display
-        if (interaction.type === 'pageLoad') {
+        // For page_info events, customize the display
+        if (interaction.type === 'page_info') {
             return {
-                tagName: interaction.pageTitle || 'Page',
+                tagName: 'Page',
                 xpath: '',
-                text: interaction.url || '',
+                text: interaction.details?.url || interaction.url || '',
                 className: '',
                 selector: ''
             };
         }
         
-        // Extension format
-        if (interaction.details) {
+        // For navigation events
+        if (interaction.type === 'navigation') {
             return {
-                tagName: interaction.details.elementType || 'unknown',
-                xpath: interaction.details.xpath || '',
-                text: interaction.details.elementText || '',
-                className: interaction.details.elementClass || '',
-                selector: interaction.details.selector || ''
+                tagName: 'Navigation',
+                xpath: '',
+                text: interaction.details?.toUrl || interaction.url || '',
+                className: '',
+                selector: ''
             };
         }
-        // Headless browser format
-        else if (interaction.element) {
+        
+        // For click events
+        if (interaction.type === 'click') {
+            const targetElement = interaction.targetElement || interaction.details?.targetElement || {};
             return {
-                tagName: interaction.element.tagName || 'unknown',
-                xpath: interaction.element.xpath || '',
-                text: interaction.element.text || '',
-                className: interaction.element.className || '',
-                selector: interaction.element.selector || ''
+                tagName: targetElement.tagName || 'Element',
+                xpath: interaction.details?.xpath || '',
+                text: targetElement.text || targetElement.innerText || interaction.details?.text || '',
+                className: targetElement.className || '',
+                selector: interaction.details?.cssSelector || ''
             };
         }
-        // Fallback for unknown format
+        
+        // Default format
         return {
-            tagName: 'unknown',
-            xpath: '',
-            text: '',
-            className: '',
-            selector: ''
+            tagName: interaction.details?.targetElement?.tagName || interaction.details?.elementType || 'unknown',
+            xpath: interaction.details?.xpath || '',
+            text: interaction.details?.text || interaction.details?.elementText || '',
+            className: interaction.details?.targetElement?.className || interaction.details?.elementClass || '',
+            selector: interaction.details?.cssSelector || interaction.details?.selector || ''
         };
     };
-
-    const elementData = getElementData(interaction);
-
+    
     const getInteractionIcon = (type) => {
         switch (type) {
             case 'click':
-                return <Mouse />;
-            case 'submit':
-                return <TouchApp />;
+            case 'document_click':
+                return <TouchApp color="primary" />;
             case 'navigation':
-                return <Navigation />;
+                return <Navigation color="action" />;
+            case 'page_info':
+                return <KeyboardTab color="action" />;
             case 'input':
-                return <Input />;
-            case 'scroll':
-                return <KeyboardTab />;
-            case 'pageLoad':
-                return <Code />;
+            case 'change':
+                return <Input color="secondary" />;
+            case 'dom_mutation':
+                return <Code color="success" />;
             default:
-                return <TouchApp />;
+                return <Schedule />;
         }
-    };
-
-    const formatTime = (timestamp) => {
-        return new Date(timestamp).toLocaleTimeString();
     };
     
-    // Format display text based on interaction type
-    const getDisplayText = (interaction, elementData) => {
-        switch (interaction.type) {
-            case 'pageLoad':
-                return `PAGE LOADED - ${interaction.pageTitle || interaction.url || 'Unknown page'}`;
-            case 'navigation':
-                if (interaction.details && interaction.details.navigationType) {
-                    return `NAVIGATION (${interaction.details.navigationType}) - ${interaction.pageTitle || 'Page'}`;
-                }
-                return `NAVIGATION - ${interaction.pageTitle || 'Page'}`;
-            default:
-                return `${interaction.type.toUpperCase()} - ${elementData.tagName}`;
-        }
+    const formatTime = (timestamp) => {
+        const date = new Date(timestamp);
+        return date.toLocaleTimeString();
     };
-
+    
+    const getDisplayText = (interaction, elementData) => {
+        const type = interaction.type;
+        
+        if (type === 'page_info') {
+            return (
+                <Typography variant="body2">
+                    Page load state: <strong>{interaction.details?.readyState || 'unknown'}</strong>
+                    <br />
+                    URL: {interaction.details?.url || interaction.url}
+                </Typography>
+            );
+        }
+        
+        if (type === 'navigation') {
+            return (
+                <Typography variant="body2">
+                    Navigated to: <strong>{interaction.details?.toUrl || interaction.url}</strong>
+                    {interaction.details?.fromUrl && (
+                        <>
+                            <br />
+                            From: {interaction.details.fromUrl}
+                        </>
+                    )}
+                </Typography>
+            );
+        }
+        
+        if (type === 'dom_mutation') {
+            return (
+                <Typography variant="body2">
+                    {interaction.details?.summary || 'DOM changed'}
+                </Typography>
+            );
+        }
+        
+        if (type === 'click' || type === 'document_click') {
+            return (
+                <Typography variant="body2">
+                    Clicked on: <strong>{elementData.tagName}</strong>
+                    {elementData.text && (
+                        <>
+                            <br />
+                            Text: "{elementData.text.substring(0, 50)}{elementData.text.length > 50 ? '...' : ''}"
+                        </>
+                    )}
+                </Typography>
+            );
+        }
+        
+        if (type === 'input' || type === 'change') {
+            return (
+                <Typography variant="body2">
+                    Input on: <strong>{elementData.tagName}</strong>
+                    {interaction.details?.fieldName && (
+                        <>
+                            <br />
+                            Field: {interaction.details.fieldName}
+                        </>
+                    )}
+                    {interaction.details?.value && (
+                        <>
+                            <br />
+                            Value: "{interaction.details.value.substring(0, 30)}{interaction.details.value.length > 30 ? '...' : ''}"
+                        </>
+                    )}
+                </Typography>
+            );
+        }
+        
+        return (
+            <Typography variant="body2">
+                {type} on {elementData.tagName || 'element'}
+            </Typography>
+        );
+    };
+    
+    const elementData = getElementData(interaction);
+    
     return (
         <Card 
             variant="outlined" 
             sx={{ 
-                mb: 1,
-                borderLeft: interaction.type === 'pageLoad' ? '4px solid #3f51b5' : undefined,
-                backgroundColor: interaction.type === 'pageLoad' ? 'rgba(63, 81, 181, 0.05)' : undefined
+                mb: 1, 
+                borderLeft: '4px solid',
+                borderLeftColor: interaction.type === 'click' ? 'primary.main' : 
+                                 interaction.type === 'navigation' ? 'secondary.main' : 
+                                 interaction.type === 'dom_mutation' ? 'success.main' : 
+                                 'grey.400',
+                '&:hover': {
+                    backgroundColor: 'rgba(0, 0, 0, 0.02)'
+                }
             }}
         >
-            <ListItem
-                sx={{
-                    flexDirection: 'column',
-                    alignItems: 'stretch',
-                    gap: 1,
+            <ListItem 
+                alignItems="flex-start"
+                secondaryAction={
+                    <IconButton 
+                        edge="end" 
+                        onClick={() => setExpanded(!expanded)}
+                        size="small"
+                    >
+                        {expanded ? <ExpandLess /> : <ExpandMore />}
+                    </IconButton>
+                }
+                sx={{ 
+                    pr: 6,
+                    py: 1
                 }}
             >
-                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                        {getInteractionIcon(interaction.type)}
-                        <Typography variant="subtitle2" color="primary">
-                            {getDisplayText(interaction, elementData)}
-                        </Typography>
-                    </Box>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                        <Tooltip title="Interaction time">
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                                <Schedule fontSize="small" color="action" />
-                                <Typography variant="caption" color="textSecondary">
-                                    {formatTime(interaction.timestamp)}
-                                </Typography>
-                            </Box>
-                        </Tooltip>
-                        <IconButton 
-                            size="small" 
-                            onClick={() => setExpanded(!expanded)}
-                            sx={{ transform: expanded ? 'rotate(180deg)' : 'none' }}
-                        >
-                            {expanded ? <ExpandLess /> : <ExpandMore />}
-                        </IconButton>
-                    </Box>
+                <Box sx={{ mr: 1, display: 'flex', alignItems: 'center' }}>
+                    {getInteractionIcon(interaction.type)}
                 </Box>
-
-                <Collapse in={expanded}>
-                    <Box sx={{ pl: 4, pt: 1 }}>
-                        {/* Show URL for page loads */}
-                        {interaction.type === 'pageLoad' && interaction.url && (
-                            <Typography variant="body2" color="textSecondary">
-                                URL: {interaction.url}
+                
+                <Box sx={{ flexGrow: 1 }}>
+                    <Box sx={{ 
+                        display: 'flex', 
+                        justifyContent: 'space-between', 
+                        alignItems: 'flex-start',
+                        mb: 0.5
+                    }}>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                            <Typography variant="subtitle2" component="span">
+                                {interaction.type}
                             </Typography>
-                        )}
-                        
-                        {/* Show page stats for page loads */}
-                        {interaction.type === 'pageLoad' && interaction.details && interaction.details.pageElements && (
-                            <Box sx={{ mt: 1 }}>
-                                <Typography variant="body2" color="textSecondary">
-                                    Page elements: 
-                                    {interaction.details.pageElements.links > 0 && ` ${interaction.details.pageElements.links} links,`}
-                                    {interaction.details.pageElements.buttons > 0 && ` ${interaction.details.pageElements.buttons} buttons,`}
-                                    {interaction.details.pageElements.forms > 0 && ` ${interaction.details.pageElements.forms} forms,`}
-                                    {interaction.details.pageElements.images > 0 && ` ${interaction.details.pageElements.images} images`}
-                                </Typography>
-                            </Box>
-                        )}
-                        
-                        {/* Show viewport info */}
-                        {interaction.details && interaction.details.viewportWidth && (
-                            <Typography variant="body2" color="textSecondary" sx={{ mt: 1 }}>
-                                Viewport: {interaction.details.viewportWidth}x{interaction.details.viewportHeight}
-                            </Typography>
-                        )}
-                        
-                        {/* For navigation events */}
-                        {interaction.type === 'navigation' && interaction.details && (
-                            <>
-                                <Typography variant="body2" color="textSecondary">
-                                    From: {interaction.details.fromUrl || 'Unknown'}
-                                </Typography>
-                                <Typography variant="body2" color="textSecondary">
-                                    To: {interaction.details.toUrl || interaction.url || 'Unknown'}
-                                </Typography>
-                            </>
-                        )}
-                    
-                        {/* Standard interaction details */}
-                        {elementData.xpath && interaction.type !== 'pageLoad' && interaction.type !== 'navigation' && (
-                            <Tooltip title="Element XPath">
-                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                                    <Code fontSize="small" color="action" />
-                                    <Typography variant="body2" sx={{ wordBreak: 'break-all' }}>
-                                        {elementData.xpath}
-                                    </Typography>
-                                </Box>
-                            </Tooltip>
-                        )}
-
-                        {elementData.text && interaction.type !== 'pageLoad' && (
-                            <Typography variant="body2" color="textSecondary">
-                                Content: {elementData.text}
-                            </Typography>
-                        )}
-
-                        {elementData.className && interaction.type !== 'pageLoad' && (
                             <Chip 
-                                label={elementData.className}
-                                size="small"
-                                variant="outlined"
-                                sx={{ mt: 1 }}
+                                label={formatTime(interaction.timestamp)} 
+                                size="small" 
+                                sx={{ height: 20, fontSize: '0.7rem' }}
                             />
-                        )}
-                        
-                        {/* Display any additional details for extension format */}
-                        {interaction.details && interaction.details.position && (
-                            <Typography variant="body2" color="textSecondary" sx={{ mt: 1 }}>
-                                Position: x={interaction.details.position.x}, y={interaction.details.position.y}
-                            </Typography>
-                        )}
-                        
-                        {interaction.url && interaction.type !== 'pageLoad' && interaction.type !== 'navigation' && (
-                            <Typography variant="body2" color="textSecondary" sx={{ mt: 1, fontSize: '0.7rem' }}>
-                                URL: {interaction.url}
-                            </Typography>
-                        )}
+                        </Box>
                     </Box>
-                </Collapse>
+                    
+                    {getDisplayText(interaction, elementData)}
+                </Box>
             </ListItem>
+            
+            <Collapse in={expanded} timeout="auto" unmountOnExit>
+                <Box sx={{ p: 2, pt: 0, backgroundColor: 'rgba(0, 0, 0, 0.02)' }}>
+                    <Typography variant="subtitle2" sx={{ mt: 1 }}>
+                        Details:
+                    </Typography>
+                    <pre style={{ 
+                        overflow: 'auto', 
+                        fontSize: '0.75rem',
+                        backgroundColor: 'rgba(0, 0, 0, 0.03)',
+                        padding: '8px',
+                        borderRadius: '4px',
+                        maxHeight: '300px'
+                    }}>
+                        {JSON.stringify(interaction, null, 2)}
+                    </pre>
+                </Box>
+            </Collapse>
         </Card>
     );
 };
 
-const InteractionList = ({ interactions, isRecording, totalCount }) => {
+const InteractionList = ({ interactions }) => {
     return (
-        <Box sx={{ flex: 1, minHeight: 0 }}>
-            {interactions.length === 0 ? (
-                <Box
-                    sx={{
-                        display: 'flex',
-                        justifyContent: 'center',
-                        alignItems: 'center',
-                        height: 200,
-                        bgcolor: 'background.paper',
-                        borderRadius: 1
-                    }}
-                >
-                    <Typography variant="body2" color="textSecondary">
-                        {isRecording ? "Waiting for interactions..." : "No interactions recorded yet"}
-                    </Typography>
-                </Box>
+        <List sx={{ 
+            width: '100%',
+            p: 2,
+            '& > :first-of-type': {
+                mt: 0,
+            }
+        }}>
+            {interactions && interactions.length > 0 ? (
+                interactions.map((interaction, index) => (
+                    <InteractionItem 
+                        key={interaction._id || interaction.id || `${interaction.type}-${index}`} 
+                        interaction={interaction} 
+                    />
+                ))
             ) : (
-                <List sx={{
-                    p: 0,
-                    '& > *:last-child': {
-                        mb: 0
-                    }
-                }}>
-                    {interactions.map((interaction, index) => (
-                        <InteractionItem 
-                            key={`${index}-${interaction.timestamp}`}
-                            interaction={interaction}
-                        />
-                    ))}
-                </List>
+                <Typography variant="body1" color="text.secondary" align="center" sx={{ py: 3 }}>
+                    No interactions to display
+                </Typography>
             )}
-        </Box>
+        </List>
     );
 };
 

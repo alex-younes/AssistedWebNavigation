@@ -101,15 +101,6 @@ export const browserApi = {
         }
     },
 
-    getRatingCriteria: async () => {
-        try {
-            const response = await axios.get(`${API_BASE_URL}/getRatingCriteria`);
-            return response.data;
-        } catch (error) {
-            handleError(error);
-        }
-    },
-
     // Get all DOM captures
     getCaptures: async () => {
         try {
@@ -152,11 +143,9 @@ export const browserApi = {
     },
 
     // Get interactions for a session
-    getExtensionInteractions: async (sessionId, userId) => {
+    getExtensionInteractions: async (sessionId) => {
         try {
-            const response = await axios.get(`${API_BASE_URL}/extension/recorder/interactions/${sessionId}`, {
-                params: { userId }
-            });
+            const response = await axios.get(`${API_BASE_URL}/extension/recorder/interactions/${sessionId}`);
             return response.data;
         } catch (error) {
             handleError(error);
@@ -182,14 +171,22 @@ export const browserApi = {
         }
     },
 
+    // Start extension recording
+    startExtensionRecording: async () => {
+        try {
+            const response = await axios.post(`${API_BASE_URL}/extension/recorder/start`);
+            console.log('Start recording response:', response.data);
+            return response.data;
+        } catch (error) {
+            console.error('Error starting recording:', error);
+            handleError(error);
+        }
+    },
+
     // Stop extension recording
     stopExtensionRecording: async () => {
         try {
-            const response = await axios.post(`${API_BASE_URL}/extension/recorder/status`, {
-                status: 'idle',
-                sessionId: null,
-                sessionData: null
-            });
+            const response = await axios.post(`${API_BASE_URL}/extension/recorder/stop`);
             console.log('Sent stop recording command to extension:', response.data);
             return response.data;
         } catch (error) {
@@ -249,8 +246,8 @@ export const browserApi = {
                 return response.data;
             }
             
-            // Otherwise, try to extract captures
-            return response.data.captures || [];
+            // Return the captures array or an empty array if not found
+            return response.data?.captures || [];
         } catch (error) {
             handleError(error);
             return [];

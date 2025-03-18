@@ -36,7 +36,6 @@ function TabPanel(props) {
 
 const MainLayout = () => {
     const [currentTab, setCurrentTab] = useState(0);
-    const [targetUrl, setTargetUrl] = useState('');
     const theme = useTheme();
     const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
 
@@ -93,7 +92,7 @@ const MainLayout = () => {
                 <DOMVisualizer />
             </TabPanel>
             <TabPanel value={currentTab} index={1}>
-                <InteractionRecorder targetUrl={targetUrl} />
+                <InteractionRecorder />
             </TabPanel>
         </Box>
     );

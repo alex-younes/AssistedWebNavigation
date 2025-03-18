@@ -562,7 +562,7 @@ const filterRedundantEvents = (interactions) => {
         const typeMap = new Map(); // type -> best interaction of that type
         
         // For each interaction in this group
-        group.forEach(interaction => {
+            group.forEach(interaction => {
             const type = interaction.type;
             
             // For page_info events, we want to prioritize 'complete' readyState
@@ -605,7 +605,7 @@ const filterRedundantEvents = (interactions) => {
             }
             // For other event types, keep all events
             else {
-                result.push(interaction);
+                    result.push(interaction);
                 addedTypes.add(type);
             }
         });
@@ -1093,7 +1093,7 @@ const flushInteractionBuffer = async () => {
     
     // Make a copy of the buffer and clear it first (to prevent duplicates if sending fails)
     let currentBuffer = [...interactionBuffer];
-    interactionBuffer = [];
+      interactionBuffer = [];
     
     try {
         console.log(`[Extension] Flushing interaction buffer (${currentBuffer.length} items)`);
@@ -1128,7 +1128,7 @@ const flushInteractionBuffer = async () => {
         // Restore buffer (to avoid losing interactions)
         interactionBuffer = [...currentBuffer, ...interactionBuffer];
         return false;
-    }
+  }
 };
 
 // Set up periodic buffer flushing (every 1.5 seconds)

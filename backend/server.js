@@ -9,6 +9,8 @@ const { PORT, CORS_CONFIG } = require('./config/constants');
 const browserRoutes = require('./routes/browserRoutes');
 const recorderRoutes = require('./routes/recorderRoutes');
 const extensionRoutes = require('./routes/extensionRoutes');
+const db = require('./database');
+const serviceManager = require('./services/ServiceManager');
 
 const app = express();
 
@@ -80,24 +82,36 @@ app.use((err, req, res, next) => {
 });
 
 const localIp = getLocalIpAddress();
-app.listen(PORT, '0.0.0.0', () => {
-    console.log('\n=== Server Started ===');
-    console.log('\nCopy one of these URLs for the extension:');
-    console.log('\x1b[36m%s\x1b[0m', `➜ ${localIp}:${PORT}`);
-    console.log('\x1b[36m%s\x1b[0m', `➜ http://${localIp}:${PORT}`);
-    
-    console.log('\nAvailable network interfaces:');
-    const interfaces = os.networkInterfaces();
-    Object.keys(interfaces).forEach((name) => {
-        interfaces[name].forEach((addr) => {
-            if (addr.family === 'IPv4') {
-                console.log(`  ${name}: ${addr.address}`);
-            }
-        });
+
+// Connect to database and initialize services before starting server
+Promise.all([
+  db.connect(),
+  serviceManager.initialize()
+])
+  .then(() => {
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log('\n=== Server Started ===');
+      console.log('\nCopy one of these URLs for the extension:');
+      console.log('\x1b[36m%s\x1b[0m', `➜ ${localIp}:${PORT}`);
+      console.log('\x1b[36m%s\x1b[0m', `➜ http://${localIp}:${PORT}`);
+      
+      console.log('\nAvailable network interfaces:');
+      const interfaces = os.networkInterfaces();
+      Object.keys(interfaces).forEach((name) => {
+          interfaces[name].forEach((addr) => {
+              if (addr.family === 'IPv4') {
+                  console.log(`  ${name}: ${addr.address}`);
+              }
+          });
+      });
+      
+      console.log('\nAPI Health Check:');
+      console.log('\x1b[36m%s\x1b[0m', `➜ http://${localIp}:${PORT}/health`);
+      
+      debug('Debug mode is enabled');
     });
-    
-    console.log('\nAPI Health Check:');
-    console.log('\x1b[36m%s\x1b[0m', `➜ http://${localIp}:${PORT}/health`);
-    
-    debug('Debug mode is enabled');
-});
+  })
+  .catch(err => {
+    console.error('Failed to initialize server:', err);
+    process.exit(1);
+  });

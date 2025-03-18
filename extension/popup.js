@@ -416,18 +416,35 @@ async function startRecording() {
         }
         
         // Get the active tab
-        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-        if (!tab) {
+        const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+        
+        if (!tabs || tabs.length === 0) {
             showStatus('No active tab found', 'error');
+            return;
+        }
+        
+        const activeTab = tabs[0];
+        
+        // Check if tab is a valid webpage (not chrome:// or extension://)
+        if (activeTab.url.startsWith('chrome://') || activeTab.url.startsWith('chrome-extension://')) {
+            showStatus('Cannot record on browser pages. Please navigate to a website.', 'error');
             return;
         }
         
         showStatus('Starting recording...', 'idle');
         
-        // Start recording
+        // Start recording with explicit tab info
         const response = await chrome.runtime.sendMessage({ 
             action: "startRecording",
-            tab: tab
+            tabId: activeTab.id,
+            url: activeTab.url,
+            title: activeTab.title,
+            tabInfo: {
+                id: activeTab.id,
+                url: activeTab.url,
+                title: activeTab.title,
+                favIconUrl: activeTab.favIconUrl
+            }
         });
         
         if (!response || !response.success) {

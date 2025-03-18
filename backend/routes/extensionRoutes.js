@@ -4,60 +4,49 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const debug = require('../utils/debug');
+const db = require('../database');
+const serviceManager = require('../services/ServiceManager');
 
-// Handle missing database gracefully
-let db;
-try {
-  db = require('../database');
-  console.log('[Backend] Database module loaded successfully');
-} catch (error) {
-  console.warn('[Backend] Database module could not be loaded:', error.message);
-  // Create a mock database
-  db = {
-    saveInteraction: async () => ({}),
-    getInteractions: async () => ([]),
-    saveSession: async () => ({}),
-    getSessions: async () => ([]),
-    updateSession: async () => ({}),
-    saveDOMCapture: async (capture) => capture,
-    getDOMCaptures: async () => ([])
-  };
-}
-
-// In-memory store for recorded interactions
-const interactionStore = {
-  sessions: {},
-  interactions: []
-};
-
-// New endpoints for DOM captures
-const captureStore = {
-  captures: []
-};
-
-// Global variable to track recording status per user
-const recordingStatusStore = {
-    users: {}
-};
-
-// Helper function to get or create user status
-const getUserStatus = (userId) => {
+// Helper function to get user status - now uses serviceManager
+const getUserStatus = async (userId) => {
     if (!userId) return null;
     
-    if (!recordingStatusStore.users[userId]) {
-        recordingStatusStore.users[userId] = {
+    try {
+        // Get active sessions for this user
+        const userSessions = await db.getSessions({ 
+            userId, 
+            status: 'active' 
+        });
+        
+        // Check if user has an active session
+        const hasActiveSession = userSessions && userSessions.length > 0;
+        const currentSession = hasActiveSession ? userSessions[0] : null;
+        
+        return {
+            status: hasActiveSession ? 'recording' : 'idle',
+            userId: userId,
+            currentSession: currentSession ? currentSession.id : null
+        };
+    } catch (error) {
+        console.error(`[Backend] Error getting user status for ${userId}:`, error);
+        return {
             status: 'idle',
-            isExtensionConnected: false,
             userId: userId,
             currentSession: null
         };
     }
-    return recordingStatusStore.users[userId];
 };
 
-// Verify connection endpoint
-router.post('/extension/recorder/verifyConnection', (req, res) => {
+// Verify connection endpoint - restoring this endpoint
+router.post('/extension/recorder/verifyConnection', async (req, res) => {
     console.log('[Backend] Received connection verification request');
+    
+    const { userId, connectionId } = req.body;
+    
+    if (userId && connectionId) {
+        serviceManager.registerConnection(userId, connectionId);
+    }
+    
     res.json({ 
         success: true, 
         message: 'Connection verified',
@@ -67,52 +56,45 @@ router.post('/extension/recorder/verifyConnection', (req, res) => {
 
 // Endpoint to save a recording session
 router.post('/extension/recorder/saveSession', async (req, res) => {
-  try {
-    debug('Received recording session data');
-    const sessionData = req.body;
-    
-    if (!sessionData || !sessionData.sessionId || !sessionData.userId) {
-      debug('Missing required session data');
-      return res.status(400).json({
-        success: false,
-        error: 'Missing session ID, user ID, or data'
-      });
+    try {
+        console.log('[Backend] Received session save request:', req.body);
+        const sessionData = req.body;
+        
+        if (!sessionData || !sessionData.sessionId || !sessionData.userId) {
+            return res.status(400).json({
+                success: false,
+                error: 'Missing session ID, user ID, or data'
+            });
+        }
+        
+        // Use ServiceManager to save session
+        await serviceManager.startRecording(
+            sessionData.userId, 
+            sessionData.sessionId, 
+            {
+                url: sessionData.url,
+                browser: sessionData.browser,
+                ...sessionData.metadata
+            }
+        );
+        
+        console.log(`[Backend] Saved recording session: ${sessionData.sessionId} for user: ${sessionData.userId}`);
+        
+        return res.json({
+            success: true,
+            sessionId: sessionData.sessionId,
+            message: 'Recording session saved'
+        });
+    } catch (error) {
+        console.error('[Backend] Error saving recording session:', error);
+        return res.status(500).json({
+            success: false,
+            error: 'Error saving recording session: ' + error.message
+        });
     }
-    
-    // Store session data with user ID
-    if (!interactionStore.users) {
-      interactionStore.users = {};
-    }
-    
-    if (!interactionStore.users[sessionData.userId]) {
-      interactionStore.users[sessionData.userId] = {
-        sessions: {},
-        interactions: []
-      };
-    }
-    
-    interactionStore.users[sessionData.userId].sessions[sessionData.sessionId] = {
-      ...sessionData,
-      interactions: [] // Will be populated as interactions come in
-    };
-    
-    debug(`Saved recording session: ${sessionData.sessionId} for user: ${sessionData.userId}`);
-    
-    res.json({
-      success: true,
-      sessionId: sessionData.sessionId,
-      message: 'Recording session saved'
-    });
-  } catch (error) {
-    console.error('Error saving recording session:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Server error saving recording session'
-    });
-  }
 });
 
-// Endpoint to save an interaction
+// Endpoint to save interactions
 router.post('/extension/recorder/saveInteractions', async (req, res) => {
     try {
         const { interactions, sessionId, userId } = req.body;
@@ -126,63 +108,128 @@ router.post('/extension/recorder/saveInteractions', async (req, res) => {
             });
         }
         
-        // Initialize user store if needed
-        if (!interactionStore.users) {
-            interactionStore.users = {};
-        }
+        // Use ServiceManager to save interactions
+        const result = await serviceManager.saveInteractions(interactions, sessionId, userId);
         
-        // Initialize user data if needed
-        if (!interactionStore.users[userId]) {
-            interactionStore.users[userId] = {
-                sessions: {},
-                interactions: []
-            };
-        }
+        console.log(`[Backend] Saved ${result.saved} interactions for session ${sessionId}. Total: ${result.total}`);
         
-        // Initialize session if needed
-        if (!interactionStore.users[userId].sessions[sessionId]) {
-            interactionStore.users[userId].sessions[sessionId] = {
-                sessionId,
-                userId,
-                interactions: []
-            };
-        }
-        
-        // Add interactions to the session
-        const userSession = interactionStore.users[userId].sessions[sessionId];
-        interactions.forEach(interaction => {
-            userSession.interactions.push({
-                ...interaction,
-                sessionId,
-                userId,
-                timestamp: interaction.timestamp || new Date().toISOString()
-            });
-        });
-        
-        console.log(`[Backend] Saved ${interactions.length} interactions for session ${sessionId} user ${userId}`);
-        console.log(`[Backend] Total interactions for session: ${userSession.interactions.length}`);
-        
-        res.json({
+        return res.json({
             success: true,
-            count: interactions.length,
-            totalCount: userSession.interactions.length
+            count: result.saved,
+            totalCount: result.total
         });
     } catch (error) {
         console.error('[Backend] Error saving interactions:', error);
-        res.status(500).json({
+        return res.status(500).json({
             success: false,
-            error: 'Server error saving interactions'
+            error: 'Error saving interactions: ' + error.message
         });
     }
 });
 
-// Endpoint to get interactions for a session
-router.get('/extension/recorder/interactions/:sessionId', async (req, res) => {
+// Route to get extension recording status
+router.get('/extension/recorder/status', async (req, res) => {
     try {
-        const { sessionId } = req.params;
         const { userId } = req.query;
         
-        console.log(`[Backend] Getting interactions for session ${sessionId} user ${userId}`);
+        if (!userId) {
+            return res.status(400).json({
+                success: false,
+                error: 'User ID is required'
+            });
+        }
+        
+        const userStatus = await getUserStatus(userId);
+        
+        return res.json({
+            success: true,
+            ...userStatus
+        });
+    } catch (error) {
+        console.error('[Backend] Error checking recording status:', error);
+        return res.status(500).json({
+            success: false,
+            error: 'Error checking recording status: ' + error.message
+        });
+    }
+});
+
+// Route to start recording session
+router.post('/extension/recorder/start', async (req, res) => {
+    try {
+        const { userId, sessionId, url, metadata } = req.body;
+        
+        if (!userId || !sessionId) {
+            return res.status(400).json({
+                success: false,
+                error: 'User ID and Session ID are required'
+            });
+        }
+        
+        // Start the recording session using the service manager
+        const session = await serviceManager.startRecording(userId, sessionId, {
+            url,
+            ...metadata
+        });
+        
+        // Register the connection
+        serviceManager.registerConnection(userId, sessionId);
+        
+        return res.json({
+            success: true,
+            message: 'Recording started',
+            session
+        });
+    } catch (error) {
+        console.error('[Backend] Error starting recording:', error);
+        return res.status(500).json({
+            success: false,
+            error: 'Error starting recording: ' + error.message
+        });
+    }
+});
+
+// Route to stop recording session
+router.post('/extension/recorder/stop', async (req, res) => {
+    try {
+        const { sessionId, reason } = req.body;
+        
+        if (!sessionId) {
+            return res.status(400).json({
+                success: false,
+                error: 'Session ID is required'
+            });
+        }
+        
+        // Stop the recording session using the service manager
+        const result = await serviceManager.stopRecording(sessionId, reason);
+        
+        return res.json({
+            success: true,
+            message: 'Recording stopped',
+            interactionCount: result.interactionCount,
+            session: result.session
+        });
+    } catch (error) {
+        console.error('[Backend] Error stopping recording:', error);
+        return res.status(500).json({
+            success: false,
+            error: 'Error stopping recording: ' + error.message
+        });
+    }
+});
+
+// Route to save interactions
+router.post('/extension/recorder/interactions', async (req, res) => {
+    try {
+        const { interactions, sessionId, userId } = req.body;
+        
+        if (!interactions || !Array.isArray(interactions) || interactions.length === 0) {
+            return res.status(400).json({
+                success: false,
+                error: 'Interactions array is required and cannot be empty'
+            });
+        }
         
         if (!sessionId || !userId) {
             return res.status(400).json({
@@ -191,249 +238,126 @@ router.get('/extension/recorder/interactions/:sessionId', async (req, res) => {
             });
         }
         
-        // Get interactions for the specific user and session
-        const userStore = interactionStore.users?.[userId];
-        const sessionStore = userStore?.sessions?.[sessionId];
-        const interactions = sessionStore?.interactions || [];
+        // Check if session is active
+        const isActive = await serviceManager.isSessionActive(sessionId);
         
-        console.log(`[Backend] Found ${interactions.length} interactions for session ${sessionId} user ${userId}`);
+        if (!isActive) {
+            return res.status(400).json({
+                success: false,
+                error: 'Cannot save interactions - session is not active'
+            });
+        }
         
-        res.json({
+        // Save interactions using the service manager
+        const result = await serviceManager.saveInteractions(interactions, sessionId, userId);
+        
+        return res.json({
+            success: true,
+            savedCount: result.saved,
+            interactionCount: result.total
+        });
+    } catch (error) {
+        console.error('[Backend] Error saving interactions:', error);
+        return res.status(500).json({
+            success: false,
+            error: 'Error saving interactions: ' + error.message
+        });
+    }
+});
+
+// Route to complete recording session
+router.post('/extension/recorder/complete', async (req, res) => {
+    try {
+        const { sessionId } = req.body;
+        
+        if (!sessionId) {
+            return res.status(400).json({
+                success: false,
+                error: 'Session ID is required'
+            });
+        }
+        
+        // Stop the recording session
+        const result = await serviceManager.stopRecording(sessionId, 'completed');
+        const session = result.session;
+        
+        return res.json({
+            success: true,
+            sessionId: sessionId,
+            status: 'completed',
+            interactionCount: result.interactionCount
+        });
+    } catch (error) {
+        console.error('[Backend] Error completing session:', error);
+        return res.status(500).json({
+            success: false,
+            error: 'Error completing session: ' + error.message
+        });
+    }
+});
+
+// Endpoint to get all recording sessions
+router.get('/extension/recorder/sessions', async (req, res) => {
+    try {
+        const { userId } = req.query;
+        
+        if (!userId) {
+            return res.status(400).json({
+                success: false,
+                error: 'User ID is required'
+            });
+        }
+        
+        // Get sessions from database
+        const userSessions = await db.getSessions({ userId });
+        
+        // Sort by startTime in descending order
+        const sessions = userSessions.sort((a, b) => 
+            new Date(b.startTime) - new Date(a.startTime)
+        );
+        
+        return res.json({
+            success: true,
+            sessions: sessions
+        });
+    } catch (error) {
+        console.error('[Backend] Error getting sessions:', error);
+        return res.status(500).json({
+            success: false,
+            error: 'Error getting sessions: ' + error.message
+        });
+    }
+});
+
+// Get interactions for a session
+router.get('/extension/recorder/interactions/:sessionId', async (req, res) => {
+    try {
+        const { sessionId } = req.params;
+        
+        if (!sessionId) {
+            return res.status(400).json({
+                success: false,
+                error: 'Session ID is required'
+            });
+        }
+        
+        // Get interactions from database
+        const interactions = await db.getInteractions({ sessionId });
+        
+        console.log(`[Backend] Retrieved ${interactions.length} interactions for session ${sessionId}`);
+        
+        return res.json({
             success: true,
             interactions: interactions,
             count: interactions.length
         });
     } catch (error) {
         console.error('[Backend] Error getting interactions:', error);
-        res.status(500).json({
+        return res.status(500).json({
             success: false,
-            error: 'Server error getting interactions'
+            error: 'Error getting interactions: ' + error.message
         });
     }
-});
-
-// Extension integration endpoint for DOM capture
-router.post('/extension/capture', async (req, res) => {
-  try {
-    debug('Received extension capture request');
-    const { url, domContent, metadata } = req.body;
-    
-    if (!domContent || !domContent.html) {
-      debug('Missing DOM content');
-      return res.status(400).json({
-        success: false,
-        error: 'Missing DOM content'
-      });
-    }
-    
-    // Generate a unique capture ID
-    const captureId = `capture-${Date.now()}-${Math.random().toString(36).substring(2, 10)}`;
-    debug(`Generated capture ID: ${captureId}`);
-    
-    // Store the DOM content
-    const captureData = {
-      id: captureId,
-      url: url,
-      domContent: domContent,
-      metadata: metadata || {
-        url: url,
-        title: domContent.title || 'Unknown',
-        timestamp: new Date().toISOString()
-      },
-      createdAt: Date.now()
-    };
-    
-    // Store in database
-    const savedCapture = await db.saveDOMCapture(captureData);
-    
-    // Also store in memory for quick access
-    captureStore.captures.push(savedCapture);
-    
-    debug('DOM capture saved successfully');
-    res.json({
-      success: true,
-      captureId: captureId,
-      message: 'DOM capture stored successfully'
-    });
-  } catch (error) {
-    console.error('Error processing DOM capture:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to process DOM capture: ' + error.message
-    });
-  }
-});
-
-// Get all DOM captures
-router.get('/extension/captures', async (req, res) => {
-  try {
-    const captures = await db.getDOMCaptures();
-    res.json({
-      success: true,
-      captures: captures
-    });
-  } catch (error) {
-    debug('Error retrieving DOM captures:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to retrieve DOM captures'
-    });
-  }
-});
-
-// Get specific DOM capture
-router.get('/extension/captures/:captureId', async (req, res) => {
-  try {
-    const { captureId } = req.params;
-    const captures = await db.getDOMCaptures();
-    const capture = captures.find(c => c.id === captureId);
-    
-    if (!capture) {
-      return res.status(404).json({
-        success: false,
-        error: 'Capture not found'
-      });
-    }
-    
-    res.json({
-      success: true,
-      capture: capture
-    });
-  } catch (error) {
-    debug('Error retrieving DOM capture:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to retrieve DOM capture'
-    });
-  }
-});
-
-// Store interaction results
-router.post('/extension/storeResults', async (req, res) => {
-  try {
-    const { sessionId, results } = req.body;
-    
-    if (!sessionId || !results) {
-      return res.status(400).json({
-        success: false,
-        error: 'Missing required data'
-      });
-    }
-    
-    // Store results in database
-    await db.updateSession(sessionId, { results });
-    
-    res.json({
-      success: true,
-      message: 'Results stored successfully'
-    });
-  } catch (error) {
-    debug('Error storing results:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to store results'
-    });
-  }
-});
-
-// Clear interactions for a session
-router.post('/extension/recorder/clearInteractions/:sessionId', async (req, res) => {
-  try {
-    const { sessionId } = req.params;
-    
-    if (!sessionId) {
-      return res.status(400).json({
-        success: false,
-        error: 'Missing session ID'
-      });
-    }
-    
-    // Clear interactions from database
-    await db.clearInteractions(sessionId);
-    
-    // Clear from memory store
-    if (interactionStore.sessions[sessionId]) {
-      interactionStore.sessions[sessionId].interactions = [];
-    }
-    
-    res.json({
-      success: true,
-      message: 'Interactions cleared successfully'
-    });
-  } catch (error) {
-    debug('Error clearing interactions:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to clear interactions'
-    });
-  }
-});
-
-// Endpoint to finalize a recording session
-router.post('/extension/recorder/completeSession', async (req, res) => {
-  try {
-    const { sessionId, endTime, interactionCount, status, reason } = req.body;
-    console.log(`[Backend] Completing session ${sessionId}`);
-    
-    if (!sessionId) {
-      return res.status(400).json({
-        success: false,
-        error: 'Session ID is required'
-      });
-    }
-    
-    // Get the session data
-    if (!interactionStore.sessions[sessionId]) {
-      return res.status(404).json({
-        success: false,
-        error: 'Session not found'
-      });
-    }
-    
-    // Update session data
-    interactionStore.sessions[sessionId] = {
-      ...interactionStore.sessions[sessionId],
-      endTime: endTime || new Date().toISOString(),
-      status: status || 'completed',
-      reason: reason,
-      interactionCount: interactionCount || interactionStore.sessions[sessionId].interactionCount || 0
-    };
-    
-    console.log(`[Backend] Session ${sessionId} completed with ${interactionStore.sessions[sessionId].interactionCount} interactions`);
-    
-    return res.json({
-      success: true,
-      sessionId: sessionId,
-      status: interactionStore.sessions[sessionId].status,
-      interactionCount: interactionStore.sessions[sessionId].interactionCount
-    });
-  } catch (error) {
-    console.error('[Backend] Error completing session:', error);
-    return res.status(500).json({
-      success: false,
-      error: 'Error completing session: ' + error.message
-    });
-  }
-});
-
-// Endpoint to get all recording sessions
-router.get('/extension/recorder/sessions', async (req, res) => {
-  try {
-    // Get all sessions, sorted by startTime in descending order
-    const sessions = Object.values(interactionStore.sessions)
-      .sort((a, b) => new Date(b.startTime) - new Date(a.startTime));
-    
-    return res.json({
-      success: true,
-      sessions: sessions
-    });
-  } catch (error) {
-    console.error('[Backend] Error getting sessions:', error);
-    return res.status(500).json({
-      success: false,
-      error: 'Error getting sessions: ' + error.message
-    });
-  }
 });
 
 // Route to update extension recording status
@@ -448,176 +372,121 @@ router.post('/extension/recorder/status', async (req, res) => {
             });
         }
         
-        console.log(`[Extension] Status update received for user ${userId}: ${status}`);
-        
-        // Get or create user status
-        const userStatus = getUserStatus(userId);
-        
-        // Update the status for this specific user
-        userStatus.status = status;
-        userStatus.isExtensionConnected = true;
-        
-        // Only update session if one is provided
-        if (sessionId) {
-            userStatus.currentSession = {
-                sessionId,
-                userId,
-                ...sessionData
-            };
+        if (status === 'recording' && sessionId) {
+            // Check if session exists, if not create it
+            const isActive = await serviceManager.isSessionActive(sessionId);
             
-            // Ensure session exists in interaction store
-            if (!interactionStore.users?.[userId]?.sessions?.[sessionId]) {
-                if (!interactionStore.users) {
-                    interactionStore.users = {};
-                }
-                if (!interactionStore.users[userId]) {
-                    interactionStore.users[userId] = {
-                        sessions: {},
-                        interactions: []
-                    };
-                }
-                interactionStore.users[userId].sessions[sessionId] = {
-                    sessionId,
-                    userId,
-                    interactions: [],
-                    ...sessionData
-                };
+            if (!isActive) {
+                await serviceManager.startRecording(userId, sessionId, {
+                    ...(sessionData || {}),
+                    startTime: new Date()
+                });
+            }
+        } else if (status === 'idle' && sessionId) {
+            // Stop recording if it was active
+            const isActive = await serviceManager.isSessionActive(sessionId);
+            
+            if (isActive) {
+                await serviceManager.stopRecording(sessionId, 'user_stopped');
             }
         }
         
-        res.json({ success: true });
+        // Get updated status
+        const userStatus = await getUserStatus(userId);
+        
+        return res.json({
+            success: true,
+            ...userStatus
+        });
     } catch (error) {
-        console.error('Error updating extension status:', error);
-        res.status(500).json({ error: 'Failed to update status' });
+        console.error('[Backend] Error updating recording status:', error);
+        return res.status(500).json({
+            success: false,
+            error: 'Error updating recording status: ' + error.message
+        });
     }
 });
 
-// Route to get extension recording status
-router.get('/extension/recorder/status', (req, res) => {
-    const { userId } = req.query;
-    
-    // If no userId is provided, return a default status
-    if (!userId) {
-        return res.json({
-            status: 'idle',
-            isExtensionConnected: false,
-            userId: null,
-            currentSession: null,
-            needsUserId: true
-        });
-    }
-    
-    // Get status for specific user
-    const userStatus = getUserStatus(userId);
-    
-    if (!userStatus) {
-        return res.json({
-            status: 'idle',
-            isExtensionConnected: false,
-            userId: userId,
-            currentSession: null
-        });
-    }
-    
-    res.json({
-        ...userStatus,
-        sessionData: {
-            ...userStatus.currentSession,
-            userId: userStatus.userId
+// Route to clear interactions for a session
+router.post('/extension/recorder/clear', async (req, res) => {
+    try {
+        const { sessionId, userId } = req.body;
+        
+        if (!sessionId || !userId) {
+            return res.status(400).json({
+                success: false,
+                error: 'Session ID and User ID are required'
+            });
         }
-    });
+        
+        // Check if session exists
+        const isActive = await serviceManager.isSessionActive(sessionId);
+        
+        if (!isActive) {
+            return res.status(400).json({
+                success: false,
+                error: 'Session does not exist or is not active'
+            });
+        }
+        
+        // Delete all interactions for this session
+        const interactionFilter = { sessionId };
+        // Note: In a real implementation, you would add a method to serviceManager
+        // to properly delete interactions. For now, we'll use the db directly.
+        await db.deleteInteractions(interactionFilter);
+        
+        return res.json({
+            success: true,
+            message: 'Interactions cleared for session'
+        });
+    } catch (error) {
+        console.error('[Backend] Error clearing interactions:', error);
+        return res.status(500).json({
+            success: false,
+            error: 'Error clearing interactions: ' + error.message
+        });
+    }
 });
 
-// Endpoint to clear all interactions for a specific session (this matches what frontend is calling)
-router.post('/recorder/clearInteractions/:sessionId', async (req, res) => {
-  try {
-    const { sessionId } = req.params;
-    console.log(`[Backend] Clearing all interactions for session ${sessionId}`);
-    
-    if (!sessionId) {
-      return res.status(400).json({
-        success: false,
-        error: 'Session ID is required'
-      });
+// Route to reset all recording data for a user
+router.post('/extension/recorder/reset', async (req, res) => {
+    try {
+        const { userId } = req.body;
+        
+        if (!userId) {
+            return res.status(400).json({
+                success: false,
+                error: 'User ID is required'
+            });
+        }
+        
+        // Get all active sessions for this user
+        const userSessions = await db.getSessions({ 
+            userId, 
+            status: 'active' 
+        });
+        
+        // Stop all active sessions
+        for (const session of userSessions) {
+            await serviceManager.stopRecording(session.id, 'user_reset');
+        }
+        
+        // Delete all interactions for this user
+        // Note: In a real implementation, you would add a method to serviceManager
+        // to properly delete a user's data. For now, we'll use the db directly.
+        await db.deleteInteractions({ userId });
+        
+        return res.json({
+            success: true,
+            message: 'Recording data reset for user'
+        });
+    } catch (error) {
+        console.error('[Backend] Error resetting recording data:', error);
+        return res.status(500).json({
+            success: false,
+            error: 'Error resetting recording data: ' + error.message
+        });
     }
-    
-    // Check if session exists
-    if (!interactionStore.sessions[sessionId]) {
-      return res.status(404).json({
-        success: false,
-        error: 'Session not found'
-      });
-    }
-    
-    // Remove all interactions for this session
-    interactionStore.interactions = interactionStore.interactions.filter(
-      interaction => interaction.sessionId !== sessionId
-    );
-    
-    // Update session interaction count
-    if (interactionStore.sessions[sessionId]) {
-      interactionStore.sessions[sessionId].interactionCount = 0;
-    }
-    
-    console.log(`[Backend] Cleared all interactions for session ${sessionId}`);
-    
-    return res.json({
-      success: true,
-      message: `All interactions cleared for session ${sessionId}`
-    });
-  } catch (error) {
-    console.error('[Backend] Error clearing interactions:', error);
-    return res.status(500).json({
-      success: false,
-      error: 'Error clearing interactions: ' + error.message
-    });
-  }
-});
-
-// Add a duplicate endpoint that matches what the frontend is calling with the /extension/ prefix
-router.post('/extension/recorder/clearInteractions/:sessionId', async (req, res) => {
-  try {
-    const { sessionId } = req.params;
-    console.log(`[Backend] Clearing all interactions for session ${sessionId} (from /extension prefix route)`);
-    
-    if (!sessionId) {
-      return res.status(400).json({
-        success: false,
-        error: 'Session ID is required'
-      });
-    }
-    
-    // Check if session exists
-    if (!interactionStore.sessions[sessionId]) {
-      return res.status(404).json({
-        success: false,
-        error: 'Session not found'
-      });
-    }
-    
-    // Remove all interactions for this session
-    interactionStore.interactions = interactionStore.interactions.filter(
-      interaction => interaction.sessionId !== sessionId
-    );
-    
-    // Update session interaction count
-    if (interactionStore.sessions[sessionId]) {
-      interactionStore.sessions[sessionId].interactionCount = 0;
-    }
-    
-    console.log(`[Backend] Cleared all interactions for session ${sessionId}`);
-    
-    return res.json({
-      success: true,
-      message: `All interactions cleared for session ${sessionId}`
-    });
-  } catch (error) {
-    console.error('[Backend] Error clearing interactions:', error);
-    return res.status(500).json({
-      success: false,
-      error: 'Error clearing interactions: ' + error.message
-    });
-  }
 });
 
 module.exports = router; 

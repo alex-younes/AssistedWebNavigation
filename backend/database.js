@@ -1,6 +1,10 @@
 // Simple in-memory database module
 // This is a placeholder for a real database implementation
 
+const mongoose = require('mongoose');
+require('dotenv').config();
+const debug = require('./utils/debug');
+
 // In-memory storage
 const storage = {
     interactions: [],
@@ -8,61 +12,108 @@ const storage = {
     domCaptures: [] // DOM captures are not yet implemented
 };
 
-// Basic database operations
+// MongoDB connection
+const connectToDatabase = async () => {
+  try {
+    const mongoURI = process.env.MONGO_URI || 'mongodb://localhost:27017/fypTracker';
+    await mongoose.connect(mongoURI);
+    console.log('[Database] Connected to MongoDB');
+  } catch (error) {
+    console.error('[Database] Connection error:', error);
+    throw error;
+  }
+};
+
+// Define schemas
+const interactionSchema = new mongoose.Schema({
+  sessionId: { type: String, required: true },
+  userId: { type: String, required: true },
+  type: { type: String, required: true },
+  timestamp: { type: Date, default: Date.now },
+  targetElement: mongoose.Schema.Types.Mixed,
+  details: mongoose.Schema.Types.Mixed,
+  url: String
+}, { timestamps: true, strict: false });
+
+const sessionSchema = new mongoose.Schema({
+  id: { type: String, required: true },
+  userId: { type: String, required: true },
+  startTime: { type: Date, required: true },
+  endTime: { type: Date },
+  status: { type: String, enum: ['active', 'completed', 'error'], default: 'active' },
+  metadata: mongoose.Schema.Types.Mixed
+}, { timestamps: true, strict: false });
+
+const domCaptureSchema = new mongoose.Schema({
+  sessionId: { type: String, required: true },
+  timestamp: { type: Date, default: Date.now },
+  content: { type: String, required: true }
+}, { timestamps: true });
+
+// Create models
+const Interaction = mongoose.model('Interaction', interactionSchema);
+const Session = mongoose.model('Session', sessionSchema);
+const DOMCapture = mongoose.model('DOMCapture', domCaptureSchema);
+
+// Database operations
 const db = {
-    // Interactions
-    saveInteraction: async (interaction) => {
-        interaction.id = Date.now() + Math.random().toString(36).substring(2, 9);
-        storage.interactions.push(interaction);
-        return interaction;
-    },
-    
-    getInteractions: async (filter = {}) => {
-        // Simple filtering
-        if (filter.sessionId) {
-            return storage.interactions.filter(i => i.sessionId === filter.sessionId);
-        }
-        return storage.interactions;
-    },
-    
-    // Sessions
-    saveSession: async (session) => {
-        session.id = session.id || Date.now() + Math.random().toString(36).substring(2, 9);
-        storage.sessions.push(session);
-        return session;
-    },
-    
-    getSessions: async (filter = {}) => {
-        // Simple filtering
-        if (filter.id) {
-            return storage.sessions.find(s => s.id === filter.id);
-        }
-        return storage.sessions;
-    },
-    
-    updateSession: async (sessionId, updates) => {
-        const index = storage.sessions.findIndex(s => s.id === sessionId || s.sessionId === sessionId);
-        if (index !== -1) {
-            storage.sessions[index] = { ...storage.sessions[index], ...updates };
-            return storage.sessions[index];
-        }
-        return null;
-    },
-    
-    // DOM Captures
-    saveDOMCapture: async (capture) => {
-        capture.id = Date.now() + Math.random().toString(36).substring(2, 9);
-        storage.domCaptures.push(capture);
-        return capture;
-    },
-    
-    getDOMCaptures: async (filter = {}) => {
-        // Simple filtering
-        if (filter.id) {
-            return storage.domCaptures.find(c => c.id === filter.id);
-        }
-        return storage.domCaptures;
+  async connect() {
+    try {
+      const uri = process.env.MONGO_URI || 'mongodb://localhost:27017/fypTracker';
+      await mongoose.connect(uri);
+      console.log('[Database] Connected to MongoDB');
+      return true;
+    } catch (error) {
+      console.error('[Database] Connection error:', error);
+      throw error;
     }
+  },
+
+  async saveInteraction(interaction) {
+    console.log('[Database] Saving interaction:', interaction.type);
+    const doc = new Interaction(interaction);
+    const saved = await doc.save();
+    return saved;
+  },
+
+  async getInteractions(query = {}) {
+    return await Interaction.find(query).sort({ timestamp: 1 });
+  },
+  
+  async deleteInteractions(query = {}) {
+    return await Interaction.deleteMany(query);
+  },
+
+  async saveSession(session) {
+    console.log('[Database] Saving session:', session.id);
+    const doc = new Session(session);
+    return await doc.save();
+  },
+
+  async getSessions(query = {}) {
+    if (query.id) {
+      return await Session.findOne({ id: query.id });
+    }
+    return await Session.find(query);
+  },
+
+  async updateSession(sessionId, update) {
+    console.log('[Database] Updating session:', sessionId);
+    return await Session.findOneAndUpdate(
+      { id: sessionId },
+      update,
+      { new: true }
+    );
+  },
+
+  async saveDOMCapture(capture) {
+    const doc = new DOMCapture(capture);
+    return await doc.save();
+  },
+
+  async getDOMCaptures(query = {}) {
+    return await DOMCapture.find(query).sort({ timestamp: 1 });
+  }
 };
 
 module.exports = db; 

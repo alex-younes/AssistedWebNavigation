@@ -1,64 +1,146 @@
 // This file handles interaction recording in the active tab
-// It will capture DOM events and send them to the backend
+// It will capture DOM events and send them to the background script
 
 let isRecording = false;
 let sessionId = null;
 let userId = null;
 let interactionCount = 0;
 let previousUrl = null;
-let lastNavigationTime = 0; // Add this to track last navigation
+let lastNavigationTime = 0;
 
-// Add debugging variables at the top
-let DEBUG = true;
-let lastStateCheck = Date.now();
+// Add tracking for last event times to prevent duplicates
+const lastEventTimes = {
+    page_info: 0,
+    dom_mutation: 0,
+    navigation: 0
+};
 
-// Add after the initial variable declarations
+// Track page_info events by readyState with longer deduplication windows
+const pageInfoDedupeTimeouts = {
+    loading: 2000,    // 2 seconds for loading state
+    interactive: 3000, // 3 seconds for interactive state
+    complete: 5000    // 5 seconds for complete state
+};
+
+// Keep track of DOM mutation stats for deduplication
+const lastDomMutationStats = {
+    additions: 0,
+    removals: 0,
+    attributeChanges: 0,
+    timestamp: 0
+};
+
+// DOM mutation deduplication window (3 seconds)
+const DOM_MUTATION_DEDUP_WINDOW = 3000;
+
+// Debug configuration
+const DEBUG = true;
+
+// Connection to background script
 let port = null;
 let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 5;
 
-// Add at the top after initial declarations
+// Track initialization
 let isInitialized = false;
 
-// Add persistent logging at the top after DEBUG declaration
-function persistentLog(message, data = null) {
-    const timestamp = new Date().toISOString();
-    const logEntry = {
-        timestamp,
-        message,
-        data,
-        url: window.location.href,
-        recordingState: {
-            isRecording,
-            sessionId,
-            userId,
-            interactionCount
-        }
-    };
-
-    // Get existing logs
-    let logs = [];
-    try {
-        const storedLogs = localStorage.getItem('extensionDebugLogs');
-        if (storedLogs) {
-            logs = JSON.parse(storedLogs);
-        }
-    } catch (e) {
-        console.error('Error reading logs:', e);
-    }
-
-    // Add new log
-    logs.push(logEntry);
+// Helper functions for element identification
+// Simple XPath generation
+function getXPath(element) {
+    if (!element) return '';
     
-    // Keep only last 100 logs
-    if (logs.length > 100) {
-        logs = logs.slice(-100);
+    try {
+        // If element has ID, use that
+        if (element.id) {
+            return `//*[@id="${element.id}"]`;
+        }
+        
+        // Otherwise, build path
+        let path = '';
+        let current = element;
+        while (current && current.nodeType === Node.ELEMENT_NODE) {
+            let selector = current.nodeName.toLowerCase();
+            
+            // Add index among siblings if needed
+            if (current.parentNode) {
+                let sibCount = 0;
+                let siblings = current.parentNode.childNodes;
+                
+                for (let i = 0; i < siblings.length; i++) {
+                    let sibling = siblings[i];
+                    if (sibling.nodeName === current.nodeName) {
+                        if (sibling === current) {
+                            selector += `[${sibCount + 1}]`;
+                            break;
+                        }
+                        sibCount++;
+                    }
+                }
+            }
+            
+            path = `/${selector}${path}`;
+            current = current.parentNode;
+            
+            // Stop at body to keep paths manageable
+            if (current && (current.nodeName.toLowerCase() === 'body' || path.length > 200)) {
+                path = `/${current.nodeName.toLowerCase()}${path}`;
+                break;
+            }
+        }
+        
+        return path;
+    } catch (e) {
+        return 'Error calculating xpath';
     }
-
-    // Save logs
-    localStorage.setItem('extensionDebugLogs', JSON.stringify(logs));
 }
 
+// Generate CSS selector for the element
+function getCssSelector(element) {
+    if (!element) return '';
+    
+    try {
+        // If element has ID, use that
+        if (element.id) {
+            return `#${element.id}`;
+        }
+        
+        // If has class, use first stable class
+        if (element.className && typeof element.className === 'string') {
+            const classes = element.className.trim().split(/\s+/).filter(c => 
+                // Filter out dynamic-looking classes
+                c && c.length > 2 && !c.match(/^(active|selected|hover|focus|open|close|show|hide|d-|js-|_|md-|animate)/i)
+            );
+            
+            if (classes.length > 0) {
+                return `${element.nodeName.toLowerCase()}.${classes[0]}`;
+            }
+        }
+        
+        // Try with parent
+        if (element.parentNode && element.parentNode.nodeType === Node.ELEMENT_NODE) {
+            const parentSelector = getCssSelector(element.parentNode);
+            if (parentSelector) {
+                let index = 1;
+                let sibling = element.previousElementSibling;
+                
+                while (sibling) {
+                    if (sibling.nodeName === element.nodeName) {
+                        index++;
+                    }
+                    sibling = sibling.previousElementSibling;
+                }
+                
+                return `${parentSelector} > ${element.nodeName.toLowerCase()}${index > 1 ? `:nth-child(${index})` : ''}`;
+            }
+        }
+        
+        return element.nodeName.toLowerCase();
+    } catch (e) {
+        return 'Error calculating CSS selector';
+    }
+}
+
+// Simplified logging
 function debugLog(message, data = null) {
     if (!DEBUG) return;
     const timestamp = new Date().toISOString();
@@ -70,20 +152,6 @@ function debugLog(message, data = null) {
     }
 }
 
-// Add state tracking
-function logState() {
-    if (!DEBUG) return;
-    debugLog('Current State:', {
-        isRecording,
-        sessionId,
-        userId,
-        interactionCount,
-        hasInteractionHandler: !!window._interactionHandler,
-        timeElapsedSinceLastCheck: Date.now() - lastStateCheck
-    });
-    lastStateCheck = Date.now();
-}
-
 // Helper to prevent duplicate navigation events
 const shouldRecordNavigation = () => {
     const now = Date.now();
@@ -91,628 +159,1230 @@ const shouldRecordNavigation = () => {
         return false;
     }
     lastNavigationTime = now;
+    lastEventTimes.navigation = now; // Also update in our global tracker
     return true;
 };
 
-// Store recording state in sessionStorage to persist across page reloads
+// Save recording state to persist across page reloads
 function saveRecordingState() {
-    if (!isRecording || !sessionId) return;
-
-    persistentLog('Saving recording state');
-    debugLog('Saving recording state');
+    try {
+        if (!isRecording || !sessionId) {
+            // Clear saved state if not recording
+            localStorage.removeItem('fypTracker_recordingState');
+            return;
+        }
+        
     const state = {
         isRecording,
         sessionId,
         userId,
-        timestamp: Date.now(),
-        url: window.location.href
-    };
-
-    try {
-        localStorage.setItem('recordingState', JSON.stringify(state));
-        sessionStorage.setItem('recordingState', JSON.stringify(state));
-        debugLog('State saved successfully', state);
+            timestamp: new Date().toISOString()
+        };
+        
+        // Save to localStorage with the fypTracker_ prefix to avoid conflicts
+        localStorage.setItem('fypTracker_recordingState', JSON.stringify(state));
+        
+        debugLog('Saved recording state');
     } catch (error) {
-        debugLog('Error saving state:', error);
+        console.error('[FYP Tracker] Error saving recording state:', error);
     }
-    logState();
 }
 
-// Restore recording state after page reload
+// Restore recording state on page reload or content script reinitialization
 function restoreRecordingState() {
     try {
-        // Try to get state from either storage
-        const state = JSON.parse(sessionStorage.getItem('recordingState')) || 
-                     JSON.parse(localStorage.getItem('recordingState'));
-
-        if (state && state.sessionId) {
-            console.log('[DEBUG] Restoring recording state:', state);
-            isRecording = true;
-            sessionId = state.sessionId;
-            userId = state.userId;
-
-            // Re-initialize recording handlers
-            setupInteractionRecording();
-            saveRecordingState(); // Update timestamp
+        // Get recording state from localStorage
+        const savedState = localStorage.getItem('fypTracker_recordingState');
+        
+        if (!savedState) {
+            return false;
         }
+        
+        const state = JSON.parse(savedState);
+        
+        if (!state || !state.isRecording || !state.sessionId) {
+            return false;
+        }
+        
+        // Don't automatically restore, instead check with background script
+        // This ensures we respect the stop recording command even after page refresh
+        if (port) {
+            console.log('[FYP Tracker] Found saved recording state, checking with background script...');
+            
+            // Ask background script if this session should be recording
+            port.postMessage({
+                action: 'check_recording_status',
+                sessionId: state.sessionId,
+                userId: state.userId
+            });
+            
+            // Wait for background to tell us to start via the message handler
+            // (The background will send recording_status_changed if we should record)
+            return false;
+        }
+        
+        return false;
     } catch (error) {
-        console.log('[DEBUG] Error restoring recording state:', error);
+        console.error('[FYP Tracker] Error restoring recording state:', error);
+        return false;
     }
 }
 
-// Add initialization function
+// Initialize content script
 function initializeContentScript() {
     if (isInitialized) return;
     
-    persistentLog('Initializing content script');
+    debugLog('Initializing content script');
     
-    // Set up all the event listeners
+    // Initialize previousUrl with the current location
+    previousUrl = window.location.href;
+    
+    // Save previous URL to session storage before unload
+    try {
+        // Check if we have a stored previousUrl
+        const storedPreviousUrl = sessionStorage.getItem('fypTracker_previousUrl');
+        if (storedPreviousUrl) {
+            previousUrl = storedPreviousUrl;
+            debugLog(`Restored previous URL: ${previousUrl}`);
+        }
+    } catch (e) {
+        debugLog('Error restoring previous URL', e);
+    }
+    
+    // Set up event listeners for page lifecycle
     window.addEventListener('load', handlePageLoad);
     window.addEventListener('beforeunload', handleBeforeUnload);
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    window.addEventListener('focus', handleFocus);
-    window.addEventListener('blur', handleBlur);
+    window.addEventListener('pagehide', handlePageHide);
+    window.addEventListener('pageshow', handlePageShow);
+    
+    // Connect to background script immediately
+    connectToBackground();
     
     // Mark as initialized
     isInitialized = true;
-    persistentLog('Content script initialized');
+    debugLog('Content script initialized');
 }
 
 // Initialize immediately
 initializeContentScript();
 
-// Extract event handlers into named functions
+// Event handlers
 function handlePageLoad() {
-    persistentLog('Page loaded');
-    restoreRecordingState();
+    debugLog('Page loaded');
+    
+    // Reconnect to background if needed
+    if (!port) {
+        connectToBackground();
+    }
+    
+    // Get previousUrl from session storage if available
+    try {
+        const storedPreviousUrl = sessionStorage.getItem('fypTracker_previousUrl');
+        if (storedPreviousUrl && storedPreviousUrl !== window.location.href) {
+            previousUrl = storedPreviousUrl;
+            debugLog(`Using stored previous URL: ${previousUrl}`);
+        }
+    } catch (e) {
+        debugLog('Error retrieving previous URL', e);
+    }
+    
+    // Check if this is a navigation during recording
+    const storedState = localStorage.getItem('fypTracker_recordingState');
+    if (storedState) {
+        try {
+            const state = JSON.parse(storedState);
+            if (state && state.isRecording && state.sessionId) {
+                // Ask background if we should still be recording
+                if (port) {
+                    port.postMessage({
+                        action: 'check_recording_status',
+                        sessionId: state.sessionId,
+                        userId: state.userId
+                    });
+                }
+            }
+        } catch (e) {
+            debugLog('Error parsing stored recording state', e);
+        }
+    }
     
     const isReload = window.performance && 
                     window.performance.navigation && 
                     window.performance.navigation.type === 1;
     
-    if (isRecording && sessionId && shouldRecordNavigation()) {
-        chrome.runtime.sendMessage({
-            action: "tabNavigated", 
-            previousUrl: previousUrl,
-            isReload: isReload,
-            currentUrl: window.location.href
+    // Track if this URL is the same as previous to avoid duplicate navigation events
+    const sameAsPrevious = previousUrl === window.location.href;
+    
+    // Only send navigation event if:
+    // 1. We're recording
+    // 2. The URL is different from previous (or it's a reload)
+    // 3. We haven't sent a navigation event recently (throttle)
+    if (isRecording && sessionId && (!sameAsPrevious || isReload) && shouldRecordNavigation()) {
+        // Log the navigation event - only one per page load
+        debugLog(`Recording navigation from ${previousUrl || 'new session'} to ${window.location.href}`);
+        
+        // Send just one navigation event
+        sendInteraction({
+            type: 'navigation',
+            timestamp: new Date().toISOString(),
+            details: {
+                fromUrl: previousUrl || document.referrer || null,
+                toUrl: window.location.href,
+                isReload,
+                referrer: document.referrer || null
+            }
         });
+        
+        // Track page load states more aggressively
+        
+        // Instead of multiple forced page_info calls, just send one guaranteed page_info
+        // and let the natural lifecycle events handle the rest
+        debugLog(`Current readyState: ${document.readyState}`);
+
+        // Since we're already sending a navigation event, only send one page_info
+        // with a forced flag to ensure it's not deduplicated
+        setTimeout(() => {
+            if (isRecording && sessionId) {
+                debugLog(`Sending single forced page_info, readyState: ${document.readyState}`);
+                // Use the forced flag to bypass deduplication only once
+                sendPageInfo('forced');
+            }
+        }, 100);
+
+        // Skip the additional forced events that were bypassing deduplication
+        // by setting lastEventTimes to 0
+
+        // Instead, listen for the natural lifecycle events without forcing
+        if (document.readyState !== 'complete') {
+            // If document is not loaded yet, set up listeners for regular events
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', () => {
+                    if (isRecording && sessionId) {
+                        debugLog(`DOMContentLoaded fired naturally, readyState: ${document.readyState}`);
+                        // No need to reset timers, just send the event normally
+                        sendPageInfo('domcontentloaded');
+                    }
+                }, { once: true });
+            }
+            
+            // Listen for load event naturally
+            window.addEventListener('load', () => {
+                if (isRecording && sessionId) {
+                    debugLog(`Load event fired naturally, readyState: ${document.readyState}`);
+                    // No need to reset timers, just send the event normally
+                    sendPageInfo('load');
+                }
+            }, { once: true });
+        } else {
+            // Document already complete, send a single page_info
+            debugLog(`Document already complete, sending single page_info`);
+            sendPageInfo('already_complete');
+        }
     }
     
+    // Update previousUrl after navigation event is sent
     previousUrl = window.location.href;
+    // Store in session storage for persistence
+    try {
+        sessionStorage.setItem('fypTracker_previousUrl', window.location.href);
+    } catch (e) {
+        debugLog('Error saving current URL to session storage', e);
+    }
+}
+
+// Handle pageshow event - called when page is shown from the back/forward cache
+function handlePageShow(event) {
+    debugLog('Page shown', { persisted: event.persisted });
+    
+    // If from bfcache, we need to reconnect to background script
+    if (event.persisted) {
+        debugLog('Page restored from back/forward cache, reconnecting...');
+        connectToBackground();
+    }
+}
+
+// Handle pagehide event - called when page is hidden or unloaded
+function handlePageHide(event) {
+    debugLog('Page hidden', { persisted: event.persisted });
+    
+    // If going to bfcache, save state
+    if (event.persisted && isRecording) {
+        saveRecordingState();
+    }
 }
 
 function handleBeforeUnload() {
     if (isRecording) {
         saveRecordingState();
     }
-}
-
-function handleVisibilityChange() {
-    persistentLog('Visibility changed', {
-        isHidden: document.hidden,
-        visibilityState: document.visibilityState
-    });
-    logState();
-}
-
-function handleFocus() {
-    persistentLog('Tab gained focus');
-    logState();
-}
-
-function handleBlur() {
-    persistentLog('Tab lost focus');
-    logState();
-}
-
-// Add connection management
-function connectToBackground() {
+    
+    // Store the current URL before the page unloads
     try {
-        port = chrome.runtime.connect({ name: 'recording-port' });
-        
-        port.onDisconnect.addListener(() => {
-            persistentLog('Port disconnected', { reconnectAttempts });
-            
-            if (chrome.runtime.lastError) {
-                persistentLog('Disconnection error', chrome.runtime.lastError);
-            }
-            
-            port = null;
-            
-            // Try to reconnect if we're still recording
-            if (isRecording && reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
-                reconnectAttempts++;
-                setTimeout(connectToBackground, 1000);
-            }
-        });
-        
-        // Reset reconnect attempts on successful connection
-        reconnectAttempts = 0;
-        
-        persistentLog('Connected to background script');
-    } catch (error) {
-        persistentLog('Connection error', error);
+        sessionStorage.setItem('fypTracker_previousUrl', window.location.href);
+        debugLog(`Saved current URL before unload: ${window.location.href}`);
+    } catch (e) {
+        debugLog('Error saving current URL', e);
     }
 }
 
-// Modify the interaction sending logic
+// Connect to the background script
+function connectToBackground() {
+    try {
+        if (port) {
+            // Try to disconnect old port cleanly
+            try {
+                port.disconnect();
+            } catch (e) {
+                // Ignore any errors
+            }
+        }
+
+        console.log('[FYP Tracker] Connecting to background script...');
+        port = chrome.runtime.connect({ name: "recording-port" });
+        
+        port.onMessage.addListener((message) => {
+            try {
+                console.log('[FYP Tracker] Received message from background:', message);
+                
+                if (message.action === 'recording_status_changed') {
+                    // Handle recording status change from background
+                    const { status, sessionId: newSessionId, userId: newUserId } = message;
+                    
+                    debugLog(`Received recording status: ${status}, sessionId: ${newSessionId}`);
+                    
+                    if (status === 'recording' && newSessionId) {
+                        if (!isRecording) {
+                            startRecording(newSessionId, newUserId);
+                        } else if (sessionId !== newSessionId) {
+                            // Session changed, restart recording
+                            stopRecording();
+                            startRecording(newSessionId, newUserId);
+                        }
+                    } else if (status === 'idle' && isRecording) {
+                        stopRecording();
+                    }
+                }
+            } catch (error) {
+                console.error('[FYP Tracker] Error handling message from background:', error);
+            }
+        });
+        
+        port.onDisconnect.addListener(() => {
+            console.log('[FYP Tracker] Disconnected from background script, attempting to reconnect...');
+            port = null;
+            
+            // If we were recording, save the state before reconnecting
+            if (isRecording) {
+                saveRecordingState();
+            }
+            
+            // Attempt to reconnect with backoff
+                reconnectAttempts++;
+            if (reconnectAttempts <= MAX_RECONNECT_ATTEMPTS) {
+                const delay = Math.min(1000 * reconnectAttempts, 10000);
+                setTimeout(() => {
+                    connectToBackground();
+                    
+                    // If we were recording, restore after reconnect
+                    if (isRecording) {
+                        // Notify background about our recording state
+                        if (port) {
+                            port.postMessage({
+                                action: 'content_recording_status',
+                                isRecording,
+                                sessionId,
+                                userId
+                            });
+                        }
+                    }
+                }, delay);
+            } else {
+                console.error('[FYP Tracker] Max reconnection attempts reached. Giving up.');
+            }
+        });
+        
+        // Reset reconnect counter on successful connection
+        reconnectAttempts = 0;
+        
+        // Immediately after connecting, check if we should be recording
+        // This helps with page reloads or extension restarts
+        restoreRecordingState();
+        
+        // If we are recording, let the background script know
+        if (isRecording && sessionId) {
+            console.log('[FYP Tracker] Notifying background about active recording');
+            port.postMessage({
+                action: 'content_recording_status',
+                isRecording,
+                sessionId,
+                userId
+            });
+        }
+        
+        return true;
+    } catch (error) {
+        console.error('[FYP Tracker] Error connecting to background script:', error);
+        return false;
+    }
+}
+
+// Send interaction to the background script
+let lastEventTypeTime = {}; // Keep track of the last time each event type was sent
+const EVENT_DEDUPE_WINDOW = 300; // ms window to deduplicate events
+
 function sendInteraction(interaction) {
     if (!isRecording || !sessionId) {
-        persistentLog('Not sending interaction - recording inactive');
+        debugLog('Not sending interaction - recording inactive');
         return;
     }
     
     try {
-        if (port) {
+        // Deduplicate events
+        const now = Date.now();
+        const eventType = interaction.type;
+        
+        // Special deduplication for click-related events (click, document_click, mousedown)
+        if (['click', 'document_click', 'mousedown'].includes(eventType)) {
+            // Create a unique key based on position and target to identify similar clicks
+            const details = interaction.details || {};
+            const x = details.x || 0;
+            const y = details.y || 0;
+            
+            // Create a more specific deduplication key
+            const clickKey = `click_${Math.round(x/5)}_${Math.round(y/5)}`; // Round to 5px areas
+            
+            // Check if we've had a similar click event recently
+            if (lastEventTypeTime[clickKey] && (now - lastEventTypeTime[clickKey] < EVENT_DEDUPE_WINDOW)) {
+                debugLog(`Skipping duplicate ${eventType} event at (${x},${y})`);
+                return; // Skip this duplicate event
+            }
+            
+            // Update the last time we saw this event
+            lastEventTypeTime[clickKey] = now;
+            
+            // For document_click, only send if we haven't seen a regular click
+            if (eventType === 'document_click') {
+                const regularClickKey = `click_${Math.round(x/5)}_${Math.round(y/5)}`;
+                
+                // If we recently processed a regular click at this position, skip the document_click
+                if (lastEventTypeTime[regularClickKey] && 
+                    (now - lastEventTypeTime[regularClickKey] < EVENT_DEDUPE_WINDOW)) {
+                    debugLog('Skipping document_click due to recent regular click at same position');
+                    return;
+                }
+            }
+        } else {
+            // For non-click events, deduplicate based on event type only
+            if (lastEventTypeTime[eventType] && (now - lastEventTypeTime[eventType] < EVENT_DEDUPE_WINDOW)) {
+                debugLog(`Skipping duplicate ${eventType} event`);
+                return;
+            }
+            lastEventTypeTime[eventType] = now;
+        }
+        
+        // Ensure connection is established
+    if (!port) {
+            console.log('[FYP Tracker] Port not available, attempting to reconnect...');
+        connectToBackground();
+            
+            // If still not connected, use fallback
+            if (!port) {
+                sendMessageFallback(interaction);
+            return;
+        }
+        }
+        
+        // Add session info to interaction
+        const enrichedInteraction = {
+            ...interaction,
+            sessionId,
+            userId,
+            url: window.location.href,
+            timestamp: interaction.timestamp || new Date().toISOString()
+        };
+        
+        try {
+            // Try to send via port
             port.postMessage({
                 action: 'saveInteraction',
-                interaction: interaction
+                interaction: enrichedInteraction
             });
-        } else {
-            // Fallback to one-time message if port is not available
-            chrome.runtime.sendMessage({
-                action: 'saveInteraction',
-                interaction: interaction
-            });
+            
+            interactionCount++;
+            
+            // Log successful event sending
+            debugLog(`Sent ${eventType} interaction to background script`);
+        } catch (portError) {
+            console.error('[FYP Tracker] Error sending via port, will reconnect:', portError);
+            
+            // Port may be disconnected, try to reconnect
+            port = null;
+            connectToBackground();
+            
+            // Use fallback
+            sendMessageFallback(enrichedInteraction);
         }
-        interactionCount++;
-        persistentLog('Interaction sent', { type: interaction.type });
     } catch (error) {
-        persistentLog('Error sending interaction', error);
+        console.error('[FYP Tracker] Error sending interaction:', error);
     }
 }
 
-// Modify setupInteractionRecording to use the new sendInteraction
-function setupInteractionRecording() {
-    if (window._interactionHandler) return;
-    
-    // Connect to background script when starting recording
-    if (!port) {
-        connectToBackground();
-    }
-    
-    window._interactionHandler = function(event) {
-        if (!isRecording) {
-            persistentLog('Event ignored - not recording');
-            return;
-        }
-        
-        if (!sessionId || !window._recordingUserId) {
-            console.error('[Extension] Missing sessionId or userId:', { sessionId, userId: window._recordingUserId });
-            return;
-        }
-        
-        console.log(`[Extension] Capturing ${event.type} event`);
-        
-        try {
-            const now = new Date();
-            const timestamp = now.toISOString();
-            
-            // Create basic interaction data
-            const interaction = {
-                sessionId: sessionId,
-                userId: window._recordingUserId,
-                type: event.type,
-                timestamp: timestamp,
+// Fallback method to send interactions via chrome.runtime.sendMessage
+function sendMessageFallback(interaction) {
+    try {
+        chrome.runtime.sendMessage({
+            action: 'saveInteraction',
+            interaction: {
+                ...interaction,
+                sessionId,
+                userId,
                 url: window.location.href,
-                pageTitle: document.title
-            };
+                timestamp: interaction.timestamp || new Date().toISOString()
+            }
+        });
+        debugLog(`Sent interaction via fallback method: ${interaction.type}`);
+    } catch (error) {
+        console.error('[FYP Tracker] Error using fallback send method:', error);
+    }
+}
+
+// Set up DOM mutation observer
+function setupMutationObserver() {
+    // This will capture DOM changes for replay
+    let pendingMutations = [];
+    let mutationTimeout = null;
+    let lastMutationTime = 0;
+    const MUTATION_MIN_INTERVAL = 3000; // Increase to 3 seconds minimum between mutation events
+    
+    // Track DOM mutation sources for better filtering
+    const seenMutationSources = new Set();
+    
+    const observer = new MutationObserver((mutations) => {
+        if (!isRecording) return;
+        
+        // Don't record mutations too frequently
+        const now = Date.now();
+        if (now - lastMutationTime < MUTATION_MIN_INTERVAL) {
+            return;
+        }
+        
+        // Filter for significant mutations only - be more selective
+        const significantMutations = mutations.filter(m => {
+            // Only capture significant mutations
+            if (m.type === 'childList') {
+                // For childList, we need at least one meaningful element added
+                const hasSignificantAddedNodes = Array.from(m.addedNodes).some(node => {
+                    if (node.nodeType !== 1) return false; // Not an element
+                    if (!node.tagName) return false;
+                    
+                    // Ignore more element types that typically cause noise
+                    if (['SCRIPT', 'STYLE', 'META', 'LINK', 'NOSCRIPT', 'BR', 'HR', 'WBR', 'SPAN'].includes(node.tagName)) {
+                        return false;
+                    }
+                    
+                    // Skip empty or tiny nodes
+                    if (node.textContent && node.textContent.trim().length < 3) {
+                        return false;
+                    }
+                    
+                    // Skip elements with no children and no attributes (likely not important)
+                    if (node.childNodes.length === 0 && node.attributes.length === 0) {
+                        return false;
+                    }
+                    
+                    // Consider remaining elements significant
+                    return true;
+                });
+                
+                return hasSignificantAddedNodes;
+            } 
+            else if (m.type === 'attributes') {
+                // For attribute changes, be more selective
+                // Only care about important attributes
+                if (!['class', 'id', 'style', 'src', 'href', 'value', 'checked', 'selected', 'disabled', 'aria-expanded'].includes(m.attributeName)) {
+                    return false;
+                }
+                
+                // Skip mutations on hidden elements
+                const targetStyle = window.getComputedStyle(m.target);
+                if (targetStyle && (targetStyle.display === 'none' || targetStyle.visibility === 'hidden' || targetStyle.opacity === '0')) {
+                    return false;
+                }
+                
+                return true;
+            }
+            return false;
+        });
+        
+        if (significantMutations.length > 0) {
+            pendingMutations = pendingMutations.concat(significantMutations);
             
-            // Add event-specific data
-            if (event.type === 'click') {
-                const target = event.target;
-                
-                interaction.details = {
-                    elementType: target.tagName.toLowerCase(),
-                    elementClass: target.className,
-                    elementId: target.id,
-                    elementText: target.textContent?.trim().substring(0, 100) || '',
-                    xpath: getXPath(target),
-                    selector: getCssSelector(target),
-                    position: {
-                        x: event.clientX,
-                        y: event.clientY
-                    }
-                };
-                
-                // Add attributes
-                if (target.attributes && target.attributes.length > 0) {
-                    interaction.details.attributes = {};
-                    for (let i = 0; i < target.attributes.length; i++) {
-                        const attr = target.attributes[i];
-                        interaction.details.attributes[attr.name] = attr.value;
-                    }
-                }
-            } else if (event.type === 'submit') {
-                const form = event.target;
-                
-                interaction.details = {
-                    elementType: 'form',
-                    elementId: form.id,
-                    elementClass: form.className,
-                    action: form.action,
-                    method: form.method,
-                    xpath: getXPath(form),
-                    selector: getCssSelector(form)
-                };
-                
-                // Get form data (excluding passwords)
-                const formData = {};
-                for (const element of form.elements) {
-                    if (element.name && element.type !== 'password') {
-                        formData[element.name] = element.type === 'checkbox' ? element.checked : element.value;
-                    }
-                }
-                interaction.details.formData = formData;
+            // Debounce to avoid sending too many events
+            if (mutationTimeout) {
+                clearTimeout(mutationTimeout);
             }
             
-            console.log('[Extension] Sending interaction to background script:', interaction);
-            
-            // Use the new sendInteraction function
-            sendInteraction(interaction);
-        } catch (error) {
-            console.error('[Extension] Error recording interaction:', error);
-        }
-    };
-    
-    // Add event listeners with capture to catch events before they bubble
-    document.addEventListener('click', window._interactionHandler, true);
-    document.addEventListener('submit', window._interactionHandler, true);
-    
-    // Additional events we want to track
-    document.addEventListener('keyup', function(e) {
-        // Only track key interactions on input elements
-        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
-            // For privacy, we don't log the actual keys pressed, just that a key was pressed
-            const input = e.target;
-            const now = new Date();
-            
-            if (!window._lastInputEvent || (now - window._lastInputEvent > 1000)) {
-                window._lastInputEvent = now;
-                
-                if (isRecording) {
-                    const interaction = {
-                        sessionId: sessionId,
-                        type: 'input',
-                        timestamp: now.toISOString(),
-                        url: window.location.href,
-                        pageTitle: document.title,
-                        details: {
-                            elementType: input.tagName.toLowerCase(),
-                            elementId: input.id,
-                            elementClass: input.className,
-                            inputType: input.type || 'text',
-                            isPassword: input.type === 'password',
-                            xpath: getXPath(input),
-                            selector: getCssSelector(input)
-                        }
+            mutationTimeout = setTimeout(() => {
+                // If we have pending mutations to process
+                if (pendingMutations.length >= 1) {
+                    // Check if we've sent a DOM mutation event recently
+                    const currentTime = Date.now();
+                    if (currentTime - lastEventTimes.dom_mutation < DOM_MUTATION_DEDUP_WINDOW) {
+                        debugLog(`Skipping DOM mutation event - too soon after previous (${currentTime - lastEventTimes.dom_mutation}ms)`);
+                        pendingMutations = [];
+                        return;
+                    }
+                    
+                    // Only proceed if we have enough significant changes
+                    // Increase threshold to require more changes
+                    if (pendingMutations.length < 3) {
+                        debugLog(`Skipping DOM mutation batch - only ${pendingMutations.length} changes`);
+                        pendingMutations = [];
+                        return;
+                    }
+                    
+                    // Count the types of changes
+                    const stats = {
+                        additions: 0,
+                        removals: 0,
+                        attributeChanges: 0
                     };
                     
-                    sendInteraction(interaction);
+                    pendingMutations.forEach(m => {
+                        if (m.type === 'childList') {
+                            stats.additions += m.addedNodes.length;
+                            stats.removals += m.removedNodes.length;
+                        } else if (m.type === 'attributes') {
+                            stats.attributeChanges++;
+                        }
+                    });
                     
-                    interactionCount++;
-                    console.log(`[Extension] Recorded input interaction`, interaction);
+                    // Skip tiny mutations that don't add much value - increase threshold
+                    const totalChanges = stats.additions + stats.removals + stats.attributeChanges;
+                    if (totalChanges < 5) {
+                        debugLog(`Skipping minor DOM mutation with only ${totalChanges} changes`);
+                        pendingMutations = [];
+                        return;
+                    }
+                    
+                    // Create source fingerprint to help deduplicate similar mutations
+                    const sourcePath = pendingMutations.slice(0, 3).map(m => getXPath(m.target)).join('|');
+                    if (seenMutationSources.has(sourcePath) && currentTime - lastDomMutationStats.timestamp < 10000) {
+                        debugLog(`Skipping DOM mutation from previously seen source: ${sourcePath}`);
+                        pendingMutations = [];
+                        return;
+                    }
+                    
+                    // Remember this source
+                    seenMutationSources.add(sourcePath);
+                    // Limit the set size to prevent memory leaks
+                    if (seenMutationSources.size > 50) {
+                        // Convert to array, remove oldest entry, convert back to Set
+                        const entries = Array.from(seenMutationSources);
+                        seenMutationSources = new Set(entries.slice(-50));
+                    }
+                    
+                    // Update tracking for mutations
+                    lastMutationTime = currentTime;
+                    lastEventTimes.dom_mutation = currentTime;
+                    
+                    // Store the stats for future comparison
+                    lastDomMutationStats.additions = stats.additions;
+                    lastDomMutationStats.removals = stats.removals;
+                    lastDomMutationStats.attributeChanges = stats.attributeChanges;
+                    lastDomMutationStats.timestamp = currentTime;
+                    
+                    // Create a useful summary of the changes
+                    const summary = `DOM changed: ${stats.additions} additions, ${stats.removals} removals, ${stats.attributeChanges} attribute changes`;
+                    
+                    // Capture more detailed information about the mutations
+                    const mutationDetails = pendingMutations.slice(0, 10).map(m => {
+                        if (m.type === 'childList') {
+                            return {
+                                type: 'childList',
+                                target: getXPath(m.target),
+                                addedNodes: Array.from(m.addedNodes)
+                                    .filter(n => n.nodeType === 1 && n.tagName)
+                                    .map(n => ({
+                                        tagName: n.tagName.toLowerCase(),
+                                        id: n.id,
+                                        className: n.className,
+                                        text: n.textContent?.trim().substring(0, 50)
+                                    }))
+                                    .slice(0, 3),
+                                removedNodes: m.removedNodes.length
+                            };
+                        } else if (m.type === 'attributes') {
+                            return {
+                                type: 'attribute',
+                                target: getXPath(m.target),
+                                attribute: m.attributeName,
+                                tagName: m.target.tagName?.toLowerCase()
+                            };
+                        }
+                        return { type: m.type };
+                    });
+                    
+                    sendInteraction({
+                        type: 'dom_mutation',
+                        count: pendingMutations.length,
+                        details: {
+                            summary,
+                            stats,
+                            mutations: mutationDetails
+                        }
+                    });
                 }
-            }
+                pendingMutations = [];
+            }, 500); // Reduce to 500ms to capture changes more quickly
         }
-    }, true);
+    });
     
-    // Add scroll event (throttled)
+    observer.observe(document.documentElement, {
+        childList: true,
+        attributes: true,
+        subtree: true,
+        attributeFilter: ['class', 'id', 'style', 'src', 'href', 'value', 'checked', 'selected', 'disabled']
+    });
+    
+    return observer;
+}
+
+// Set up scroll capture (only for significant scrolls)
+function setupScrollCapture() {
     let lastScrollTime = 0;
-    window.addEventListener('scroll', function() {
+    let lastScrollY = window.scrollY;
+    let lastScrollX = window.scrollX;
+    const SCROLL_THROTTLE = 1000; // 1 second
+    const SCROLL_THRESHOLD = 100; // pixels
+    
+    const scrollHandler = () => {
+        if (!isRecording) return;
+        
         const now = Date.now();
-        if (isRecording && now - lastScrollTime > 500) { // Limit to every 500ms
+        if (now - lastScrollTime < SCROLL_THROTTLE) return;
+        
+        // Check if scroll distance is significant
+        const scrollDiffY = Math.abs(window.scrollY - lastScrollY);
+        const scrollDiffX = Math.abs(window.scrollX - lastScrollX);
+        
+        if (scrollDiffY < SCROLL_THRESHOLD && scrollDiffX < SCROLL_THRESHOLD) return;
+        
             lastScrollTime = now;
+        lastScrollY = window.scrollY;
+        lastScrollX = window.scrollX;
             
-            const interaction = {
-                sessionId: sessionId,
+        sendInteraction({
                 type: 'scroll',
-                timestamp: new Date().toISOString(),
-                url: window.location.href,
-                pageTitle: document.title,
                 details: {
                     scrollX: window.scrollX,
                     scrollY: window.scrollY,
-                    scrollTop: document.documentElement.scrollTop,
                     scrollHeight: document.documentElement.scrollHeight,
-                    viewportHeight: window.innerHeight
+                scrollWidth: document.documentElement.scrollWidth,
+                viewportHeight: window.innerHeight,
+                viewportWidth: window.innerWidth
+            }
+        });
+    };
+    
+    window.addEventListener('scroll', scrollHandler, { passive: true });
+    
+    return scrollHandler;
+}
+
+// Set up all interaction recording mechanisms
+function setupInteractionRecording() {
+    // Connect to background script
+    connectToBackground();
+    
+    // Set up observers and handlers
+    const observer = setupMutationObserver();
+    
+    // MODIFIED: Instead of using two separate click handlers, we'll use a single comprehensive one
+    const eventHandlers = {};
+    
+    // Set up a single document-level click handler to capture ALL clicks
+    const documentClickHandler = (event) => {
+        if (!isRecording) return;
+        
+        const target = event.target;
+        
+        // Create a simplified representation of the event
+        const eventData = {
+            type: 'click', // Simplified to just 'click' (no more mousedown or document_click)
+            timestamp: new Date().toISOString(),
+            targetElement: {
+                tagName: target.tagName?.toLowerCase() || 'text',
+                className: target.className,
+                id: target.id,
+                type: target.type,
+                name: target.name,
+                value: target.type === 'password' ? '********' : 
+                      target.value?.length > 100 ? target.value.substring(0, 100) + '...' : target.value
+            },
+            details: {
+                x: event.clientX,
+                y: event.clientY,
+                text: target.textContent?.trim().substring(0, 100),
+                innerText: target.innerText?.trim().substring(0, 100),
+                textContent: target.textContent?.trim().substring(0, 100),
+                href: target.href,
+                ariaLabel: target.getAttribute('aria-label'),
+                parentElement: target.parentElement ? {
+                    tagName: target.parentElement.tagName?.toLowerCase(),
+                    className: target.parentElement.className,
+                    id: target.parentElement.id,
+                    text: target.parentElement.textContent?.trim().substring(0, 50)
+                } : null,
+                xpath: getXPath(target),
+                cssSelector: getCssSelector(target),
+                elementAttributes: Array.from(target.attributes || [])
+                    .reduce((attrs, attr) => {
+                        attrs[attr.name] = attr.value;
+                        return attrs;
+                    }, {})
+            }
+        };
+        
+        // Get elements at the click position for better context
+        const elementsAtPoint = document.elementsFromPoint(event.clientX, event.clientY);
+        if (elementsAtPoint && elementsAtPoint.length > 0) {
+            eventData.details.elementsAtPoint = elementsAtPoint.slice(0, 3).map(el => ({
+                tagName: el.tagName?.toLowerCase(),
+                id: el.id,
+                className: el.className,
+                text: el.textContent?.trim().substring(0, 50),
+                xpath: getXPath(el)
+            }));
+        }
+        
+        // Log for debugging
+        console.log('[FYP Tracker] Click captured:', {
+            element: target.tagName?.toLowerCase() || 'text',
+            text: target.textContent?.trim().substring(0, 50),
+            xpath: eventData.details.xpath
+        });
+        
+        // Send the interaction data
+        sendInteraction(eventData);
+    };
+    
+    // Use capturing phase to ensure we get all clicks
+    document.addEventListener('click', documentClickHandler, { capture: true, passive: true });
+    eventHandlers.click = documentClickHandler;
+    
+    // Set up other event types (but not mousedown or regular click since we handle that above)
+    const otherEventTypes = ['submit', 'input', 'change'];
+    
+    otherEventTypes.forEach(type => {
+        eventHandlers[type] = (event) => {
+    if (!isRecording) return;
+    
+            const target = event.target;
+            
+            // For input/change/submit events, we want to filter
+            if (!['INPUT', 'SELECT', 'TEXTAREA', 'FORM'].includes(target.tagName)) {
+                return;
+            }
+            
+            // Create a simplified representation of the event
+            const eventData = {
+                type: event.type,
+        timestamp: new Date().toISOString(),
+                targetElement: {
+                    tagName: target.tagName?.toLowerCase(),
+                    className: target.className,
+                    id: target.id,
+                    type: target.type,
+                    name: target.name,
+                    value: target.type === 'password' ? '********' : 
+                          target.value?.length > 100 ? target.value.substring(0, 100) + '...' : target.value
                 }
             };
             
-            sendInteraction(interaction);
-            
-            interactionCount++;
-            console.log(`[Extension] Recorded scroll interaction`, interaction);
-        }
-    }, { passive: true });
-    
-    console.log('[Extension] Interaction recording handlers set up');
-    
-    // Record initial page load
-    recordPageInfo();
-}
-
-// Helper function to get XPath of an element
-function getXPath(element) {
-    if (!element) return '';
-    if (element.id) return `//*[@id="${element.id}"]`;
-    
-    let path = '';
-    while (element && element.nodeType === 1) {
-        let index = 1;
-        let sibling = element.previousSibling;
-        while (sibling) {
-            if (sibling.nodeType === 1 && sibling.tagName === element.tagName) {
-                index++;
-            }
-            sibling = sibling.previousSibling;
-        }
-        path = `/${element.tagName.toLowerCase()}[${index}]${path}`;
-        element = element.parentNode;
-    }
-    return path;
-}
-
-// Helper function to get CSS selector of an element
-function getCssSelector(element) {
-    if (!element) return '';
-    if (element.id) return `#${element.id}`;
-    
-    const selectors = [];
-    while (element && element.nodeType === 1) {
-        let selector = element.tagName.toLowerCase();
-        if (element.id) {
-            selector += `#${element.id}`;
-            selectors.unshift(selector);
-            break;
-        } else {
-            if (element.className) {
-                const classes = element.className.split(' ').filter(c => c.length > 0);
-                if (classes.length > 0) {
-                    selector += `.${classes.join('.')}`;
+            // Add specific details based on event type
+            if (type === 'submit') {
+                eventData.details = {
+                    formId: target.id,
+                    formAction: target.action,
+                    formElements: Array.from(target.elements || [])
+                        .filter(el => el.name)
+                        .map(el => ({ 
+                            name: el.name, 
+                            type: el.type,
+                            value: el.type === 'password' ? '********' : 
+                                  el.value?.length > 100 ? el.value.substring(0, 100) + '...' : el.value
+                        }))
+                };
+            } else if (['input', 'change'].includes(type)) {
+                // Throttle input events - only record after user stops typing
+                if (type === 'input' && eventHandlers.inputTimeout) {
+                    clearTimeout(eventHandlers.inputTimeout);
+                }
+                
+                eventHandlers.inputTimeout = setTimeout(() => {
+                    eventData.details = {
+                        fieldType: target.type,
+                        fieldName: target.name,
+                        value: target.type === 'password' ? '********' : 
+                              target.value?.length > 100 ? target.value.substring(0, 100) + '...' : target.value
+                    };
+                    
+                    sendInteraction(eventData);
+                }, 500); // 500ms debounce
+                
+                // For input events, return early as we'll send when debounced
+                if (type === 'input') {
+                    return;
                 }
             }
             
-            let index = 1;
-            let sibling = element.previousElementSibling;
-            while (sibling) {
-                if (sibling.tagName === element.tagName) index++;
-                sibling = sibling.previousElementSibling;
-            }
-            
-            if (index > 1) {
-                selector += `:nth-of-type(${index})`;
-            }
-            
-            selectors.unshift(selector);
-            element = element.parentNode;
-        }
-    }
+            sendInteraction(eventData);
+        };
+        
+        // Attach event listener
+        document.addEventListener(type, eventHandlers[type], { capture: true, passive: true });
+    });
     
-    return selectors.join(' > ');
-}
-
-// Record page info on initial load
-function recordPageInfo() {
-    if (!isRecording) return;
+    const scrollHandler = setupScrollCapture();
     
-    const pageLoadInteraction = {
-        sessionId: sessionId,
-        type: 'pageLoad',
-        timestamp: new Date().toISOString(),
-        url: window.location.href,
-        pageTitle: document.title,
-        details: {
-            userAgent: navigator.userAgent,
-            viewportWidth: window.innerWidth,
-            viewportHeight: window.innerHeight,
-            referrer: document.referrer,
-            pageElements: {
-                links: document.getElementsByTagName('a').length,
-                buttons: document.getElementsByTagName('button').length,
-                forms: document.getElementsByTagName('form').length,
-                images: document.getElementsByTagName('img').length
-            }
+    // Store cleanup function
+    window._interactionCleanup = () => {
+        observer.disconnect();
+        
+        // Remove event handlers
+        for (const [type, handler] of Object.entries(eventHandlers)) {
+            document.removeEventListener(type, handler, { capture: true });
         }
+        
+        window.removeEventListener('scroll', scrollHandler);
     };
     
-    // Send the interaction to the background script
-    sendInteraction(pageLoadInteraction);
-    
-    interactionCount++;
-    console.log('[Extension] Recorded page load interaction', pageLoadInteraction);
+    debugLog('Interaction recording set up');
 }
 
-// Enhanced DOM capture function
-function captureDOM() {
-    try {
-        const domContent = {
-            html: document.documentElement.outerHTML,
-            title: document.title,
-            url: window.location.href,
-            timestamp: new Date().toISOString(),
-            metadata: {
-                viewport: {
-                    width: window.innerWidth,
-                    height: window.innerHeight
-                },
-                userAgent: navigator.userAgent,
-                language: navigator.language,
-                platform: navigator.platform,
-                documentMode: document.compatMode,
-                characterSet: document.characterSet
-            }
-        };
-
-        // Add any custom data attributes or markers
-        const customData = {};
-        document.querySelectorAll('[data-testid], [data-cy], [data-qa]').forEach(el => {
-            const key = el.getAttribute('data-testid') || el.getAttribute('data-cy') || el.getAttribute('data-qa');
-            if (key) {
-                customData[key] = {
-                    tagName: el.tagName.toLowerCase(),
-                    text: el.textContent.trim(),
-                    classes: el.className
-                };
-            }
-        });
-
-        if (Object.keys(customData).length > 0) {
-            domContent.customData = customData;
-        }
-
-        return domContent;
-    } catch (error) {
-        console.error('[Extension] Error capturing DOM:', error);
-        return null;
+// Clean up all event handlers
+function cleanupInteractionRecording() {
+    if (window._interactionCleanup) {
+        window._interactionCleanup();
+        window._interactionCleanup = null;
     }
 }
 
-// Enhanced event handler for DOM capture requests
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    if (request.action === 'captureDom') {
-        console.log('[Extension] Received DOM capture request');
-        const domContent = captureDOM();
-        if (domContent) {
-            console.log('[Extension] DOM captured successfully');
-            sendResponse({ success: true, domContent });
-        } else {
-            console.error('[Extension] Failed to capture DOM');
-            sendResponse({ success: false, error: 'Failed to capture DOM' });
+// Start recording user interactions
+function startRecording(sessionID, userID) {
+    if (isRecording) {
+        // Already recording (could be handled by updating session)
+        if (sessionID !== sessionId) {
+            // Session ID changed, update and continue
+            debugLog(`Switching to session ${sessionID} from ${sessionId}`);
+            sessionId = sessionID;
+            userId = userID;
+            saveRecordingState();
         }
-        return true; // Keep the message channel open for async response
-    }
-    
-    if (request.action === 'ping') {
-        sendResponse({ success: true });
         return;
     }
     
-    // Make sure we're initialized
-    if (!isInitialized) {
-        initializeContentScript();
+    debugLog(`Starting recording with session ${sessionID}`);
+    
+    // Set recording flags
+    isRecording = true;
+    sessionId = sessionID;
+    userId = userID;
+    
+    // Save recording state
+    saveRecordingState();
+    
+    // Set up page info interaction
+    sendPageInfo();
+    
+    // Set up all interaction recording mechanisms
+            setupInteractionRecording();
+    
+    debugLog('Recording started');
+}
+
+// Stop recording user interactions
+function stopRecording() {
+    if (!isRecording) {
+        return;
     }
     
-    if (request.action === 'startRecording') {
-        persistentLog('Received startRecording message');
-        
-        if (!request.sessionId || !request.userId) {
-            persistentLog('Missing sessionId or userId');
-            sendResponse({ success: false, error: 'Missing sessionId or userId' });
-            return;
-        }
-        
-        try {
-            sessionId = request.sessionId;
-            userId = request.userId;
-            window._recordingUserId = request.userId;
-            isRecording = true;
-            
-            setupInteractionRecording();
-            saveRecordingState();
-            
-            persistentLog('Recording started successfully');
-            sendResponse({ success: true });
-            
-            if (request.isPageReload) {
-                recordPageInfo();
-            }
-        } catch (error) {
-            persistentLog('Error starting recording', error);
-            sendResponse({ success: false, error: error.message });
-        }
-    } else if (request.action === 'stopRecording') {
-        console.log('[DEBUG] Content script received stopRecording message');
+    debugLog('Stopping recording');
+    
+    // Clean up event listeners and observers
+    if (window._interactionCleanup) {
+        window._interactionCleanup();
+    }
+    
+    // Reset state
         isRecording = false;
         sessionId = null;
         userId = null;
-        if (window._interactionHandler) {
-            document.removeEventListener('click', window._interactionHandler, true);
-            document.removeEventListener('submit', window._interactionHandler, true);
-            delete window._interactionHandler;
-            delete window._recordingUserId;
+    interactionCount = 0;
+    
+    // Clear stored state
+    try {
+        localStorage.removeItem('fypTracker_recordingState');
+    } catch (error) {
+        debugLog('Error clearing recording state', error);
+    }
+    
+    // Notify background script that recording has stopped
+    if (port) {
+        port.postMessage({
+            action: 'content_recording_status',
+            isRecording: false
+        });
+    }
+    
+    debugLog('Recording stopped');
+}
+
+// Capture DOM for analysis
+function captureDom() {
+    try {
+        debugLog('Capturing DOM');
+        
+        // Get entire DOM as string
+        const domString = document.documentElement.outerHTML;
+        
+        // Extract key page information
+        const pageInfo = {
+            url: window.location.href,
+            title: document.title,
+            meta: Array.from(document.querySelectorAll('meta'))
+                .map(meta => ({
+                    name: meta.getAttribute('name'),
+                    property: meta.getAttribute('property'),
+                    content: meta.getAttribute('content')
+                }))
+                .filter(meta => meta.name || meta.property)
+        };
+        
+        return {
+            success: true,
+            domContent: {
+                html: domString,
+            title: document.title,
+            url: window.location.href,
+            timestamp: new Date().toISOString(),
+                metadata: pageInfo
+            }
+        };
+    } catch (error) {
+        debugLog('Error capturing DOM', error);
+        return {
+            success: false,
+            error: error.toString()
+        };
+    }
+}
+
+// Send page information interaction
+function sendPageInfo(source = 'default') {
+    if (!isRecording || !sessionId) return;
+    
+    // Get current readyState
+    const currentReadyState = document.readyState;
+    
+    // Create a global tracker for complete events - truly global across all pages
+    if (!window._fypGlobalPageInfoTracking) {
+        window._fypGlobalPageInfoTracking = {
+            completeEventURLs: new Set(), // Track URLs that have had complete events
+        };
+    }
+    
+    // Create a page-specific tracker if it doesn't exist
+    if (!window._fypPageInfoTracking) {
+        window._fypPageInfoTracking = {
+            lastSent: {},
+            pageCompleteCount: 0
+        };
+    }
+    
+    // Get the appropriate timeout based on readyState
+    const dedupeTimeout = pageInfoDedupeTimeouts[currentReadyState] || 2000;
+    const now = Date.now();
+    
+    // For readyState complete, enforce a strict single event policy
+    if (currentReadyState === 'complete') {
+        const urlKey = window.location.href;
+        
+        // If we've already sent a complete event for this URL, skip it (unless forced)
+        if (window._fypGlobalPageInfoTracking.completeEventURLs.has(urlKey) && source !== 'forced') {
+            debugLog(`Strict policy: Skipping duplicate complete page_info - already sent one for this URL`);
+            return;
         }
-        // Clear saved state
-        sessionStorage.removeItem('recordingState');
-        console.log('[Extension] Stopped recording');
-        console.log('[DEBUG] Stopped recording and cleared event handlers');
+        
+        // Mark that we've sent a complete event for this URL
+        window._fypGlobalPageInfoTracking.completeEventURLs.add(urlKey);
+        debugLog(`Strict policy: Sending ONE complete page_info for URL: ${urlKey}`);
+        
+        // Limit the size of the URL set to prevent memory leaks
+        if (window._fypGlobalPageInfoTracking.completeEventURLs.size > 50) {
+            // Remove oldest entries by converting to array and back
+            const urls = Array.from(window._fypGlobalPageInfoTracking.completeEventURLs);
+            window._fypGlobalPageInfoTracking.completeEventURLs = new Set(urls.slice(-50));
+        }
+    } 
+    // For non-complete readyStates, use normal deduplication
+    else if (source !== 'forced') {
+        const urlKey = `${window.location.href}:${currentReadyState}`;
+        const lastSentTime = window._fypPageInfoTracking.lastSent[urlKey] || 0;
+        
+        if (lastSentTime && now - lastSentTime < dedupeTimeout) {
+            debugLog(`Skipping duplicate page_info with readyState: ${currentReadyState} (${now - lastSentTime}ms < ${dedupeTimeout}ms)`);
+            return;
+        }
+        
+        // Update tracking for this readyState and URL
+        window._fypPageInfoTracking.lastSent[urlKey] = now;
+    } else {
+        debugLog(`Proceeding with ${source} forced page_info event for readyState: ${currentReadyState}`);
+    }
+    
+    // Also update the previous event tracking system for all events
+    lastEventTimes[`page_info:${currentReadyState}`] = now;
+    lastEventTimes.page_info = now;
+    
+    debugLog(`Sending page_info with readyState: ${currentReadyState}, source: ${source}`);
+
+    // Get performance data if available
+    let performanceData = {};
+    try {
+        if (window.performance) {
+            const timing = window.performance.timing;
+            if (timing) {
+                performanceData = {
+                    navigationStart: timing.navigationStart,
+                    unloadEventStart: timing.unloadEventStart,
+                    unloadEventEnd: timing.unloadEventEnd,
+                    redirectStart: timing.redirectStart,
+                    redirectEnd: timing.redirectEnd,
+                    fetchStart: timing.fetchStart,
+                    domainLookupStart: timing.domainLookupStart,
+                    domainLookupEnd: timing.domainLookupEnd,
+                    connectStart: timing.connectStart,
+                    connectEnd: timing.connectEnd,
+                    secureConnectionStart: timing.secureConnectionStart,
+                    requestStart: timing.requestStart,
+                    responseStart: timing.responseStart,
+                    responseEnd: timing.responseEnd,
+                    domLoading: timing.domLoading,
+                    domInteractive: timing.domInteractive,
+                    domContentLoadedEventStart: timing.domContentLoadedEventStart,
+                    domContentLoadedEventEnd: timing.domContentLoadedEventEnd,
+                    domComplete: timing.domComplete,
+                    loadEventStart: timing.loadEventStart,
+                    loadEventEnd: timing.loadEventEnd
+                };
+            }
+            
+            // Navigation type
+            if (window.performance.navigation) {
+                performanceData.navigationType = window.performance.navigation.type;
+                performanceData.navigationTypeText = [
+                    'navigate',
+                    'reload',
+                    'back_forward',
+                    'reserved'
+                ][window.performance.navigation.type] || 'unknown';
+            }
+        }
+    } catch (e) {
+        debugLog('Error getting performance data', e);
+    }
+
+    // Get resource timing data for critical resources
+    let resourceTiming = [];
+    try {
+        if (window.performance && window.performance.getEntriesByType) {
+            const entries = window.performance.getEntriesByType('resource');
+            resourceTiming = entries
+                .filter(entry => {
+                    // Only include critical resources
+                    const url = entry.name || '';
+                    return url.endsWith('.js') || url.endsWith('.css') || 
+                           url.endsWith('.png') || url.endsWith('.jpg') || 
+                           url.endsWith('.svg') || url.includes('critical');
+                })
+                .slice(0, 10) // Limit to 10 entries
+                .map(entry => ({
+                    name: entry.name,
+                    entryType: entry.entryType,
+                    startTime: entry.startTime,
+                    duration: entry.duration,
+                    initiatorType: entry.initiatorType
+                }));
+        }
+    } catch (e) {
+        debugLog('Error getting resource timing', e);
+    }
+
+    // Gather meta information
+    let metaInfo = [];
+    try {
+        const metaTags = document.querySelectorAll('meta');
+        metaInfo = Array.from(metaTags)
+            .filter(tag => tag.getAttribute('name') || tag.getAttribute('property'))
+            .map(tag => ({
+                name: tag.getAttribute('name'),
+                property: tag.getAttribute('property'),
+                content: tag.getAttribute('content')
+            }))
+            .slice(0, 10); // Limit to 10 entries
+    } catch (e) {
+        debugLog('Error getting meta information', e);
+    }
+
+    sendInteraction({
+        type: 'page_info',
+        details: {
+            url: window.location.href,
+            title: document.title,
+            readyState: document.readyState,
+            viewport: {
+                width: window.innerWidth,
+                height: window.innerHeight
+            },
+            userAgent: navigator.userAgent,
+            referrer: document.referrer || null,
+            previousUrl: previousUrl || null,
+            performance: performanceData,
+            resourceTiming: resourceTiming,
+            meta: metaInfo,
+            documentUrlChanged: previousUrl !== window.location.href
+        }
+    });
+}
+
+// Listen for messages from the background script
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    debugLog('Received message', request);
+    
+    if (request.action === 'startRecording') {
+        const result = startRecording(request.sessionId, request.userId);
+        sendResponse(result);
+    }
+    
+    else if (request.action === 'stopRecording') {
+        const result = stopRecording();
+        sendResponse(result);
+    }
+    
+    else if (request.action === 'captureDom') {
+        const result = captureDom();
+        sendResponse(result);
+    }
+    
+    else if (request.action === 'ping') {
+        // Used to check if content script is loaded
         sendResponse({ success: true });
     }
     
-    return true; // Keep the message channel open for async response
+    return true; // Keep the message channel open for async responses
 });
 
-// Initialize previousUrl
-previousUrl = window.location.href;
-
-console.log('[Extension] Content script loaded');
-
-// Add visibility change detection
-document.addEventListener('visibilitychange', function() {
-    persistentLog('Visibility changed', {
-        isHidden: document.hidden,
-        visibilityState: document.visibilityState
-    });
-    debugLog('Visibility changed:', {
-        isHidden: document.hidden,
-        visibilityState: document.visibilityState
-    });
-    logState();
-});
-
-// Track tab focus
-window.addEventListener('focus', function() {
-    persistentLog('Tab gained focus');
-    debugLog('Tab gained focus');
-    logState();
-});
-
-window.addEventListener('blur', function() {
-    persistentLog('Tab lost focus');
-    debugLog('Tab lost focus');
-    logState();
-});
-
-// Add helper function to view logs
-window.viewExtensionLogs = function() {
-    try {
-        const logs = localStorage.getItem('extensionDebugLogs');
-        if (logs) {
-            console.log('Extension Debug Logs:', JSON.parse(logs));
-            return JSON.parse(logs);
-        }
-        return 'No logs found';
-    } catch (e) {
-        console.error('Error reading logs:', e);
-        return 'Error reading logs';
-    }
-};
-
-// Add helper to clear logs
-window.clearExtensionLogs = function() {
-    localStorage.removeItem('extensionDebugLogs');
-    console.log('Extension debug logs cleared');
-};
-
-// Add periodic connection check
-setInterval(() => {
-    if (isRecording && !port) {
-        persistentLog('Periodic connection check - attempting reconnect');
-        connectToBackground();
-    }
-}, 30000); // Check every 30 seconds
-
-// Add state tracking
-function logState() {
-    if (!DEBUG) return;
-    debugLog('Current State:', {
-        isRecording,
-        sessionId,
-        userId,
-        interactionCount,
-        hasInteractionHandler: !!window._interactionHandler,
-        timeElapsedSinceLastCheck: Date.now() - lastStateCheck
-    });
-    lastStateCheck = Date.now();
-} 
+// Log that content script is loaded
+debugLog('Content script loaded'); 

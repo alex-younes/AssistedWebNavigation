@@ -667,19 +667,24 @@ const sendInteractionsToBackend = async (interactions) => {
                 await initializeUserId();
             }
             
-        // ADDED: Direct filter to remove ALL page_info complete events
-        const noCompleteEvents = interactions.filter(interaction => {
-            if (interaction.type === 'page_info' && 
-                interaction.details && 
-                interaction.details.readyState === 'complete') {
-                console.log(`[Extension] Completely filtering out page_info complete event for URL: ${interaction.url || interaction.details.url || 'unknown'}`);
-                return false; // Filter out all complete events
+        // First, filter out complete events as requested, but preserve render_complete events
+        const initialFiltered = interactions.filter(interaction => {
+            if (interaction.type === 'page_info' && interaction.details.readyState === 'complete') {
+                console.log(`Filtering out complete event for URL: ${interaction.details.url}`);
+                return false;
             }
-            return true; // Keep all other events
+            
+            // Always keep render_complete events 
+            if (interaction.type === 'render_complete') {
+                console.log(`Preserving render_complete event for URL: ${interaction.details.url}`);
+                return true;
+            }
+            
+            return true;
         });
         
         // Continue with the filtered interactions
-        const preprocessedInteractions = filterRedundantEvents(noCompleteEvents);
+        const preprocessedInteractions = filterRedundantEvents(initialFiltered);
         
         // STEP 1: Exact duplicate removal using content hash
         const seen = new Set();
@@ -887,12 +892,25 @@ const sendInteractionsToBackend = async (interactions) => {
 function filterDuplicatePageInfoAndDomMutations(interactions) {
   console.log(`[Extension] Final filtering before sending to server. Count before: ${interactions.length}`);
   
-  // Filter out ALL complete events first
+  // Count render_complete events for logging
+  const renderCompleteCount = interactions.filter(event => event.type === 'render_complete').length;
+  if (renderCompleteCount > 0) {
+    console.log(`[Extension] Found ${renderCompleteCount} render_complete events in final filtering - preserving them`);
+  }
+  
+  // Filter out ALL complete events first, preserve render_complete
   const noCompleteEvents = interactions.filter(event => {
     if (event.type === 'page_info' && event.details?.readyState === 'complete') {
       console.log(`[Extension] Final filter removing complete page_info event for URL: ${event.url || event.details?.url || 'unknown'}`);
       return false; // Filter out all complete events
     }
+    
+    // Always keep render_complete events
+    if (event.type === 'render_complete') {
+      console.log(`[Extension] Preserving render_complete event in final filter for URL: ${event.url || event.details?.url || 'unknown'}`);
+      return true;
+    }
+    
     return true; // Keep everything else
   });
   
@@ -1034,13 +1052,25 @@ function filterDuplicatePageInfoAndDomMutations(interactions) {
 function filterCompleteEventsByUrl(interactions) {
   console.log(`[Extension] Filtering all complete events by URL`);
   
-  // Simply remove all page_info events with readyState complete
+  // Count render_complete events
+  const renderCompleteEvents = interactions.filter(event => event.type === 'render_complete').length;
+  if (renderCompleteEvents > 0) {
+    console.log(`[Extension] Found ${renderCompleteEvents} render_complete events in URL filter - keeping them`);
+  }
+  
+  // Filter page_info complete events but preserve render_complete
   return interactions.filter(event => {
     if (event.type === 'page_info' && event.details?.readyState === 'complete') {
       console.log(`[Extension] Removing complete page_info event in URL filter for: ${event.url || event.details?.url || 'unknown'}`);
       return false; // Filter out all complete events
     }
-    return true; // Keep all non-complete events
+    
+    // Always keep render_complete events
+    if (event.type === 'render_complete') {
+      return true;
+    }
+    
+    return true; // Keep all other events
   });
 }
 
@@ -1691,12 +1721,24 @@ console.log('[Extension] Background script loaded');
 function preFilterDuplicateCompleteEvents(interactions) {
   console.log(`[Extension] Filtering out all page_info events with readyState complete`);
   
-  // Simply filter out all page_info events with readyState complete
+  // Get count of render_complete events for logging
+  const renderCompleteCount = interactions.filter(event => event.type === 'render_complete').length;
+  if (renderCompleteCount > 0) {
+    console.log(`[Extension] Found ${renderCompleteCount} render_complete events - preserving them`);
+  }
+  
+  // Filter out complete page_info events but keep render_complete events
   return interactions.filter(event => {
     if (event.type === 'page_info' && event.details?.readyState === 'complete') {
       console.log(`[Extension] Removing complete page_info event for URL: ${event.url || event.details?.url || 'unknown'}`);
       return false; // Remove all complete events
     }
+    
+    // Explicitly keep render_complete events
+    if (event.type === 'render_complete') {
+      return true;
+    }
+    
     return true; // Keep everything else
   });
 } 

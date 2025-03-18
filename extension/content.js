@@ -333,6 +333,32 @@ function handlePageLoad() {
             }
         });
         
+        // Send a render_complete event after a short delay to ensure DOM has had time to render
+        setTimeout(() => {
+            if (isRecording && sessionId) {
+                debugLog(`Sending render_complete event for ${window.location.href}`);
+                sendInteraction({
+                    type: 'render_complete',
+                    timestamp: new Date().toISOString(),
+                    details: {
+                        url: window.location.href,
+                        readyState: document.readyState,
+                        timing: {
+                            navigationStart: window.performance?.timing?.navigationStart,
+                            renderComplete: Date.now(),
+                            loadEventStart: window.performance?.timing?.loadEventStart,
+                            loadEventEnd: window.performance?.timing?.loadEventEnd
+                        },
+                        contentStats: {
+                            bodyElementCount: document.body?.childElementCount || 0,
+                            hasImages: !!document.querySelectorAll('img').length,
+                            hasMainContent: !!document.querySelector('main, #content, .content, article, section, .container')
+                        }
+                    }
+                });
+            }
+        }, 500); // 500ms delay to ensure DOM has loaded some content
+        
         // Track page load states more aggressively
         
         // Instead of multiple forced page_info calls, just send one guaranteed page_info
@@ -361,6 +387,30 @@ function handlePageLoad() {
                         debugLog(`DOMContentLoaded fired naturally, readyState: ${document.readyState}`);
                         // No need to reset timers, just send the event normally
                         sendPageInfo('domcontentloaded');
+                        
+                        // Also send render_complete event after DOMContentLoaded
+                        setTimeout(() => {
+                            debugLog(`Sending render_complete event after DOMContentLoaded for ${window.location.href}`);
+                            sendInteraction({
+                                type: 'render_complete',
+                                timestamp: new Date().toISOString(),
+                                details: {
+                                    url: window.location.href,
+                                    readyState: document.readyState,
+                                    source: 'domcontentloaded',
+                                    timing: {
+                                        navigationStart: window.performance?.timing?.navigationStart,
+                                        renderComplete: Date.now(),
+                                        domContentLoaded: window.performance?.timing?.domContentLoadedEventEnd
+                                    },
+                                    contentStats: {
+                                        bodyElementCount: document.body?.childElementCount || 0,
+                                        hasImages: !!document.querySelectorAll('img').length,
+                                        hasMainContent: !!document.querySelector('main, #content, .content, article, section, .container')
+                                    }
+                                }
+                            });
+                        }, 300);
                     }
                 }, { once: true });
             }

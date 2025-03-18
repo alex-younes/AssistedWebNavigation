@@ -176,52 +176,70 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "captureDOM") {
     // Get the active tab
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      const activeTab = tabs[0];
-      
-      // Execute script to capture DOM via content script
-      chrome.tabs.sendMessage(activeTab.id, { action: 'captureDom' }, (response) => {
-        if (chrome.runtime.lastError) {
-          console.error('[Extension] Error capturing DOM:', chrome.runtime.lastError);
-          sendResponse({ 
-            success: false, 
-            error: chrome.runtime.lastError.message || 'Failed to capture DOM' 
-          });
-          return;
+        if (!tabs || !tabs[0]) {
+            console.error('[Extension] No active tab found');
+            sendResponse({ 
+                success: false, 
+                error: 'No active tab found' 
+            });
+            return;
         }
+
+        const activeTab = tabs[0];
         
-        // Send DOM to backend
-        const domData = response.domContent;
-        fetch(`${API_BASE_URL}/extension/capture`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({ 
-            url: activeTab.url,
-            domContent: {
-              html: domData.html,
-              title: domData.title
-            },
-            metadata: {
-              title: domData.title,
-              url: activeTab.url,
-              timestamp: new Date().toISOString()
+        // Execute script to capture DOM via content script
+        chrome.tabs.sendMessage(activeTab.id, { action: 'captureDom' }, (response) => {
+            if (chrome.runtime.lastError) {
+                console.error('[Extension] Error capturing DOM:', chrome.runtime.lastError);
+                sendResponse({ 
+                    success: false, 
+                    error: chrome.runtime.lastError.message || 'Failed to capture DOM' 
+                });
+                return;
             }
-          })
-        })
-        .then(response => response.json())
-        .then(data => {
-          sendResponse({ success: true, data });
-        })
-        .catch(error => {
-          console.error('[Extension] Error sending DOM to backend:', error);
-          sendResponse({ success: false, error: error.toString() });
+            
+            if (!response || !response.success) {
+                console.error('[Extension] Failed to capture DOM:', response?.error);
+                sendResponse({ 
+                    success: false, 
+                    error: response?.error || 'Failed to capture DOM' 
+                });
+                return;
+            }
+            
+            // Send DOM to backend
+            const domData = response.domContent;
+            fetch(`${API_BASE_URL}/extension/capture`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ 
+                    url: activeTab.url,
+                    domContent: domData,
+                    metadata: {
+                        ...domData.metadata,
+                        tabId: activeTab.id,
+                        timestamp: new Date().toISOString()
+                    }
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    console.log('[Extension] DOM capture saved successfully:', data.captureId);
+                    sendResponse({ success: true, data });
+                } else {
+                    throw new Error(data.error || 'Failed to save DOM capture');
+                }
+            })
+            .catch(error => {
+                console.error('[Extension] Error sending DOM to backend:', error);
+                sendResponse({ success: false, error: error.toString() });
+            });
         });
-      });
     });
-    
-    // Keep the message channel open for the async response
-    return true;
+    return true; // Keep the message channel open for async response
   }
   
   // Handle start recording request from popup

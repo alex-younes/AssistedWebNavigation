@@ -524,8 +524,66 @@ function recordPageInfo() {
     console.log('[Extension] Recorded page load interaction', pageLoadInteraction);
 }
 
-// Add message handler for ping
+// Enhanced DOM capture function
+function captureDOM() {
+    try {
+        const domContent = {
+            html: document.documentElement.outerHTML,
+            title: document.title,
+            url: window.location.href,
+            timestamp: new Date().toISOString(),
+            metadata: {
+                viewport: {
+                    width: window.innerWidth,
+                    height: window.innerHeight
+                },
+                userAgent: navigator.userAgent,
+                language: navigator.language,
+                platform: navigator.platform,
+                documentMode: document.compatMode,
+                characterSet: document.characterSet
+            }
+        };
+
+        // Add any custom data attributes or markers
+        const customData = {};
+        document.querySelectorAll('[data-testid], [data-cy], [data-qa]').forEach(el => {
+            const key = el.getAttribute('data-testid') || el.getAttribute('data-cy') || el.getAttribute('data-qa');
+            if (key) {
+                customData[key] = {
+                    tagName: el.tagName.toLowerCase(),
+                    text: el.textContent.trim(),
+                    classes: el.className
+                };
+            }
+        });
+
+        if (Object.keys(customData).length > 0) {
+            domContent.customData = customData;
+        }
+
+        return domContent;
+    } catch (error) {
+        console.error('[Extension] Error capturing DOM:', error);
+        return null;
+    }
+}
+
+// Enhanced event handler for DOM capture requests
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    if (request.action === 'captureDom') {
+        console.log('[Extension] Received DOM capture request');
+        const domContent = captureDOM();
+        if (domContent) {
+            console.log('[Extension] DOM captured successfully');
+            sendResponse({ success: true, domContent });
+        } else {
+            console.error('[Extension] Failed to capture DOM');
+            sendResponse({ success: false, error: 'Failed to capture DOM' });
+        }
+        return true; // Keep the message channel open for async response
+    }
+    
     if (request.action === 'ping') {
         sendResponse({ success: true });
         return;
@@ -580,14 +638,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         console.log('[Extension] Stopped recording');
         console.log('[DEBUG] Stopped recording and cleared event handlers');
         sendResponse({ success: true });
-    }
-    
-    if (request.action === 'captureDom') {
-        const domContent = {
-            html: document.documentElement.outerHTML,
-            title: document.title
-        };
-        sendResponse({ success: true, domContent });
     }
     
     return true; // Keep the message channel open for async response

@@ -20,7 +20,7 @@ import {
 } from '@mui/material';
 import { Launch, Refresh, PhotoCamera, Visibility } from '@mui/icons-material';
 import { browserApi } from '../services/browserApi';
-import { getNodeLabel, getCustomNodeProps } from '../utils/treeHelpers';
+import { getNodeLabel, getCustomNodeProps, transformDOMToTree } from '../utils/treeHelpers';
 
 const DOMVisualizer = ({ onBrowserLaunch }) => {
     const [url, setUrl] = useState('');
@@ -38,19 +38,37 @@ const DOMVisualizer = ({ onBrowserLaunch }) => {
     const loadRecentCaptures = async () => {
         setLoading(true);
         try {
-            // Get captures from the backend (using our existing browserApi)
-            const response = await browserApi.getExtensionCaptures();
-            if (response && response.captures) {
-                setCaptures(response.captures);
+            // Get captures from the backend
+            const captures = await browserApi.getExtensionCaptures();
+            console.log("Retrieved captures:", captures);
+            
+            if (Array.isArray(captures) && captures.length > 0) {
+                setCaptures(captures);
                 
                 // Auto-select the most recent capture if available
-                if (response.captures.length > 0) {
-                    const mostRecent = response.captures[0];
-                    setSelectedCapture(mostRecent);
-                    if (mostRecent.domTree) {
-                        setTreeData(mostRecent.domTree);
+                const mostRecent = captures[0];
+                setSelectedCapture(mostRecent);
+                
+                // Transform DOM content if available
+                if (mostRecent.domContent) {
+                    console.log("Found DOM content in most recent capture");
+                    const treeData = transformDOMToTree(mostRecent.domContent);
+                    if (treeData) {
+                        console.log("Tree data created successfully");
+                        setTreeData(treeData);
+                    } else {
+                        console.error("Failed to transform DOM content to tree");
                     }
+                } else if (mostRecent.domTree) {
+                    console.log("Using existing domTree from capture");
+                    setTreeData(mostRecent.domTree);
+                } else {
+                    console.warn("No DOM data in the most recent capture");
                 }
+            } else {
+                console.log("No captures available or invalid captures format");
+                setCaptures([]);
+                setTreeData(null);
             }
         } catch (err) {
             console.error('Error loading captures:', err);
@@ -65,11 +83,22 @@ const DOMVisualizer = ({ onBrowserLaunch }) => {
         try {
             // Get the full capture data from the backend
             const response = await browserApi.getExtensionCapture(capture.id);
-            if (response && response.domTree) {
-                setTreeData(response.domTree);
-                setSelectedCapture(capture);
-            } else {
-                setError('DOM data not available for this capture');
+            if (response) {
+                if (response.domContent) {
+                    const treeData = transformDOMToTree(response.domContent);
+                    if (treeData) {
+                        setTreeData(treeData);
+                        setSelectedCapture(capture);
+                    } else {
+                        setError('Could not parse DOM data');
+                    }
+                } else if (response.domTree) {
+                    // Fall back to existing domTree if available
+                    setTreeData(response.domTree);
+                    setSelectedCapture(capture);
+                } else {
+                    setError('DOM data not available for this capture');
+                }
             }
         } catch (err) {
             console.error('Error loading capture:', err);
@@ -83,14 +112,29 @@ const DOMVisualizer = ({ onBrowserLaunch }) => {
         window.open(url, '_blank');
     };
 
-    const renderCustomNode = ({ nodeDatum }) => (
-        <g key={`${nodeDatum.tagName}-${nodeDatum.contentDescription}`}>
-            <circle {...getCustomNodeProps().nodeSvgShape.shapeProps} />
-            <text {...getCustomNodeProps().textProps}>
-                {getNodeLabel(nodeDatum)}
-            </text>
-        </g>
-    );
+    const renderCustomNode = ({ nodeDatum }) => {
+        // Determine color based on node type
+        let nodeColor = '#555';
+        if (nodeDatum.tagName === 'a') nodeColor = '#0077cc';
+        else if (nodeDatum.tagName === 'button') nodeColor = '#5c6bc0';
+        else if (nodeDatum.tagName === 'img') nodeColor = '#43a047';
+        else if (nodeDatum.tagName === 'input') nodeColor = '#f57c00';
+        else if (nodeDatum.tagName === 'div') nodeColor = '#7e57c2';
+        else if (nodeDatum.tagName === '#text') nodeColor = '#9e9e9e';
+        
+        const nodeProps = getCustomNodeProps();
+        // Override the fill color
+        nodeProps.nodeSvgShape.shapeProps.fill = nodeColor;
+        
+        return (
+            <g>
+                <circle {...nodeProps.nodeSvgShape.shapeProps} />
+                <text {...nodeProps.textProps}>
+                    {nodeDatum.name || ''}
+                </text>
+            </g>
+        );
+    };
 
     const formatDate = (timestamp) => {
         return new Date(timestamp).toLocaleString();
@@ -204,21 +248,34 @@ const DOMVisualizer = ({ onBrowserLaunch }) => {
                             elevation={3} 
                             sx={{ 
                                 flex: 1,
-                                overflow: 'hidden',
+                                overflow: 'auto',
                                 position: 'relative',
                                 minHeight: '400px'
                             }}
                         >
-                            <Tree
-                                data={treeData}
-                                orientation="vertical"
-                                renderCustomNodeElement={renderCustomNode}
-                                translate={{ x: window.innerWidth / 2, y: 50 }}
-                                separation={{ siblings: 2, nonSiblings: 2 }}
-                                zoom={0.8}
-                                enableLegacyTransitions={true}
-                                transitionDuration={800}
-                            />
+                            <div style={{ width: '100%', height: '500px' }}>
+                                <Tree
+                                    data={treeData}
+                                    orientation="vertical"
+                                    pathFunc="diagonal"
+                                    renderCustomNodeElement={renderCustomNode}
+                                    translate={{ x: 250, y: 20 }}
+                                    separation={{ siblings: 1.5, nonSiblings: 2 }}
+                                    nodeSize={{ x: 300, y: 40 }}
+                                    zoomable
+                                    scaleExtent={{ min: 0.1, max: 2 }}
+                                    zoom={0.8}
+                                />
+                            </div>
+                            <style>{`
+                                .rd3t-link {
+                                    stroke: #bbb;
+                                    stroke-width: 0.8;
+                                }
+                                .rd3t-label__title {
+                                    fill: #333;
+                                }
+                            `}</style>
                         </Paper>
                     ) : (
                         <Paper sx={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>

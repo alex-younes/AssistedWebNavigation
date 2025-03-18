@@ -45,8 +45,19 @@ const getLocalIpAddress = () => {
     return 'localhost';
 };
 
-// Middleware
+// Enable CORS for all routes
 app.use(cors(CORS_CONFIG));
+
+// Add OPTIONS handler for preflight requests
+app.options('*', cors(CORS_CONFIG));
+
+// Request logging middleware
+app.use((req, res, next) => {
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+    next();
+});
+
+// Parse JSON bodies
 app.use(express.json({ limit: '50mb' })); // Increased limit for DOM content
 
 // Health check endpoint
@@ -54,10 +65,10 @@ app.get('/health', (req, res) => {
     res.json({ status: 'ok' });
 });
 
-// Routes
+// Mount routes
 app.use('/api', browserRoutes);
 app.use('/api', recorderRoutes);
-app.use('/api/extension', extensionRoutes);
+app.use('/api', extensionRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {
@@ -67,9 +78,6 @@ app.use((err, req, res, next) => {
         details: process.env.DEBUG === 'true' ? err.message : undefined
     });
 });
-
-// Add OPTIONS handler for preflight requests
-app.options('*', cors());
 
 const localIp = getLocalIpAddress();
 app.listen(PORT, '0.0.0.0', () => {

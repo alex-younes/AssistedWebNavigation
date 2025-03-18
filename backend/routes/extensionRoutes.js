@@ -4,7 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const debug = require('../utils/debug');
-const browserService = require('../services/BrowserService');
+
 // Handle missing database gracefully
 let db;
 try {
@@ -56,7 +56,7 @@ const getUserStatus = (userId) => {
 };
 
 // Verify connection endpoint
-router.post('/recorder/verifyConnection', (req, res) => {
+router.post('/extension/recorder/verifyConnection', (req, res) => {
     console.log('[Backend] Received connection verification request');
     res.json({ 
         success: true, 
@@ -66,7 +66,7 @@ router.post('/recorder/verifyConnection', (req, res) => {
 });
 
 // Endpoint to save a recording session
-router.post('/recorder/saveSession', async (req, res) => {
+router.post('/extension/recorder/saveSession', async (req, res) => {
   try {
     debug('Received recording session data');
     const sessionData = req.body;
@@ -113,7 +113,7 @@ router.post('/recorder/saveSession', async (req, res) => {
 });
 
 // Endpoint to save an interaction
-router.post('/recorder/saveInteractions', async (req, res) => {
+router.post('/extension/recorder/saveInteractions', async (req, res) => {
     try {
         const { interactions, sessionId, userId } = req.body;
         console.log(`[Backend] Received ${interactions?.length} interactions for session ${sessionId} user ${userId}`);
@@ -177,7 +177,7 @@ router.post('/recorder/saveInteractions', async (req, res) => {
 });
 
 // Endpoint to get interactions for a session
-router.get('/recorder/interactions/:sessionId', async (req, res) => {
+router.get('/extension/recorder/interactions/:sessionId', async (req, res) => {
     try {
         const { sessionId } = req.params;
         const { userId } = req.query;
@@ -212,11 +212,11 @@ router.get('/recorder/interactions/:sessionId', async (req, res) => {
     }
 });
 
-// Extension integration endpoint
-router.post('/extension/analyze', async (req, res) => {
+// Extension integration endpoint for DOM capture
+router.post('/extension/capture', async (req, res) => {
   try {
-    debug('Received extension analyze request');
-    const { domContent, sourceUrl } = req.body;
+    debug('Received extension capture request');
+    const { url, domContent, metadata } = req.body;
     
     if (!domContent || !domContent.html) {
       debug('Missing DOM content');
@@ -226,111 +226,151 @@ router.post('/extension/analyze', async (req, res) => {
       });
     }
     
-    // Generate a unique session ID
-    const sessionId = `ext-${Date.now()}-${Math.random().toString(36).substring(2, 10)}`;
-    debug(`Generated session ID: ${sessionId}`);
+    // Generate a unique capture ID
+    const captureId = `capture-${Date.now()}-${Math.random().toString(36).substring(2, 10)}`;
+    debug(`Generated capture ID: ${captureId}`);
     
-    // Store the DOM content for processing
-    const tempFilePath = path.join(os.tmpdir(), `${sessionId}.html`);
-    fs.writeFileSync(tempFilePath, domContent.html);
-    debug(`Stored DOM content at: ${tempFilePath}`);
-    
-    // Store metadata for retrieval later
-    const sessionData = {
-      id: sessionId,
-      sourceUrl: sourceUrl,
-      status: 'processing',
-      metadata: domContent.metadata || {
-        url: sourceUrl,
-        title: 'Unknown',
-        timestamp: Date.now()
+    // Store the DOM content
+    const captureData = {
+      id: captureId,
+      url: url,
+      domContent: domContent,
+      metadata: metadata || {
+        url: url,
+        title: domContent.title || 'Unknown',
+        timestamp: new Date().toISOString()
       },
-      createdAt: Date.now(),
-      results: null
+      createdAt: Date.now()
     };
     
-    // In a production app, you would store this in a database
-    // For this example, we'll use a global variable in memory
-    global.sessionStore = global.sessionStore || {};
-    global.sessionStore[sessionId] = sessionData;
+    // Store in database
+    const savedCapture = await db.saveDOMCapture(captureData);
     
-    // Start processing in the background (non-blocking)
-    processExtensionCapture(sessionId, tempFilePath, domContent.metadata, sourceUrl);
+    // Also store in memory for quick access
+    captureStore.captures.push(savedCapture);
     
-    // Respond to the extension
+    debug('DOM capture saved successfully');
     res.json({
       success: true,
-      sessionId,
-      message: 'DOM received and processing started'
+      captureId: captureId,
+      message: 'DOM capture stored successfully'
     });
   } catch (error) {
-    console.error('Error processing extension DOM:', error);
+    console.error('Error processing DOM capture:', error);
     res.status(500).json({
       success: false,
-      error: 'Server error processing the DOM content'
+      error: 'Failed to process DOM capture: ' + error.message
     });
   }
 });
 
-// Get analysis results by session ID
-router.get('/analysis/:sessionId', async (req, res) => {
+// Get all DOM captures
+router.get('/extension/captures', async (req, res) => {
   try {
-    const { sessionId } = req.params;
-    debug(`Fetching analysis results for session: ${sessionId}`);
-    
-    // Check if we have this session in our store
-    if (!global.sessionStore || !global.sessionStore[sessionId]) {
-      return res.status(404).json({
-        success: false,
-        error: 'Session not found'
-      });
-    }
-    
-    const session = global.sessionStore[sessionId];
-    
-    // If processing is complete, return the results
-    if (session.status === 'completed' && session.results) {
-      return res.json({
-        success: true,
-        status: 'completed',
-        results: session.results
-      });
-    } 
-    
-    // If still processing, just return the status
-    if (session.status === 'processing') {
-      return res.json({
-        success: true,
-        status: 'processing',
-        progress: 'DOM analysis in progress'
-      });
-    }
-    
-    // If there was an error
-    if (session.status === 'error') {
-      return res.status(500).json({
-        success: false,
-        error: session.error || 'Unknown error during processing'
-      });
-    }
-    
-    // Fallback for any other state
-    return res.json({
+    const captures = await db.getDOMCaptures();
+    res.json({
       success: true,
-      status: session.status,
-      message: 'Session exists but status is ambiguous'
+      captures: captures
     });
   } catch (error) {
-    console.error(`Error fetching analysis for session ${req.params.sessionId}:`, error);
+    debug('Error retrieving DOM captures:', error);
     res.status(500).json({
       success: false,
-      error: 'Failed to fetch analysis results'
+      error: 'Failed to retrieve DOM captures'
+    });
+  }
+});
+
+// Get specific DOM capture
+router.get('/extension/captures/:captureId', async (req, res) => {
+  try {
+    const { captureId } = req.params;
+    const captures = await db.getDOMCaptures();
+    const capture = captures.find(c => c.id === captureId);
+    
+    if (!capture) {
+      return res.status(404).json({
+        success: false,
+        error: 'Capture not found'
+      });
+    }
+    
+    res.json({
+      success: true,
+      capture: capture
+    });
+  } catch (error) {
+    debug('Error retrieving DOM capture:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to retrieve DOM capture'
+    });
+  }
+});
+
+// Store interaction results
+router.post('/extension/storeResults', async (req, res) => {
+  try {
+    const { sessionId, results } = req.body;
+    
+    if (!sessionId || !results) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required data'
+      });
+    }
+    
+    // Store results in database
+    await db.updateSession(sessionId, { results });
+    
+    res.json({
+      success: true,
+      message: 'Results stored successfully'
+    });
+  } catch (error) {
+    debug('Error storing results:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to store results'
+    });
+  }
+});
+
+// Clear interactions for a session
+router.post('/extension/recorder/clearInteractions/:sessionId', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    
+    if (!sessionId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing session ID'
+      });
+    }
+    
+    // Clear interactions from database
+    await db.clearInteractions(sessionId);
+    
+    // Clear from memory store
+    if (interactionStore.sessions[sessionId]) {
+      interactionStore.sessions[sessionId].interactions = [];
+    }
+    
+    res.json({
+      success: true,
+      message: 'Interactions cleared successfully'
+    });
+  } catch (error) {
+    debug('Error clearing interactions:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to clear interactions'
     });
   }
 });
 
 // Endpoint to finalize a recording session
-router.post('/recorder/completeSession', async (req, res) => {
+router.post('/extension/recorder/completeSession', async (req, res) => {
   try {
     const { sessionId, endTime, interactionCount, status, reason } = req.body;
     console.log(`[Backend] Completing session ${sessionId}`);
@@ -377,7 +417,7 @@ router.post('/recorder/completeSession', async (req, res) => {
 });
 
 // Endpoint to get all recording sessions
-router.get('/recorder/sessions', async (req, res) => {
+router.get('/extension/recorder/sessions', async (req, res) => {
   try {
     // Get all sessions, sorted by startTime in descending order
     const sessions = Object.values(interactionStore.sessions)
@@ -397,7 +437,7 @@ router.get('/recorder/sessions', async (req, res) => {
 });
 
 // Route to update extension recording status
-router.post('/recorder/status', async (req, res) => {
+router.post('/extension/recorder/status', async (req, res) => {
     try {
         const { status, sessionId, userId, sessionData } = req.body;
         
@@ -453,7 +493,7 @@ router.post('/recorder/status', async (req, res) => {
 });
 
 // Route to get extension recording status
-router.get('/recorder/status', (req, res) => {
+router.get('/extension/recorder/status', (req, res) => {
     const { userId } = req.query;
     
     // If no userId is provided, return a default status
@@ -487,407 +527,6 @@ router.get('/recorder/status', (req, res) => {
         }
     });
 });
-
-// New endpoint to store results directly from content script
-router.post('/extension/storeResults', async (req, res) => {
-  try {
-    debug('Storing DOM results from content script');
-    const { sessionId, domTree, metadata } = req.body;
-    
-    if (!sessionId || !domTree) {
-      debug('Missing required data for storing results');
-      return res.status(400).json({
-        success: false,
-        error: 'Missing required data (sessionId, domTree)'
-      });
-    }
-    
-    debug(`Received DOM tree structure from content script: ${typeof domTree}, with keys: ${Object.keys(domTree).join(', ')}`);
-    
-    // Initialize session store if needed
-    global.sessionStore = global.sessionStore || {};
-    
-    // Store the results directly from the content script without any transformation
-    global.sessionStore[sessionId] = {
-      id: sessionId,
-      status: 'completed',
-      metadata: metadata || {
-        url: 'Unknown URL',
-        title: 'Unknown Page',
-        timestamp: Date.now()
-      },
-      createdAt: Date.now(),
-      results: {
-        // Store the DOM tree exactly as received from the content script
-        domTree: domTree,
-        metadata
-      }
-    };
-    
-    debug(`Successfully stored DOM results from content script for session: ${sessionId}`);
-    
-    res.json({
-      success: true,
-      sessionId: sessionId,
-      message: 'DOM results stored successfully'
-    });
-  } catch (error) {
-    console.error('Error storing content script DOM results:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to store results'
-    });
-  }
-});
-
-// Endpoint to capture DOM directly with Playwright and store as a session
-router.post('/extension/captureWithPlaywright', async (req, res) => {
-  try {
-    debug('Received direct Playwright capture request');
-    const { url } = req.body;
-    
-    if (!url) {
-      debug('Missing URL for Playwright capture');
-      return res.status(400).json({
-        success: false,
-        error: 'URL is required for Playwright DOM capture'
-      });
-    }
-    
-    // Generate a unique session ID
-    const sessionId = `ext-${Date.now()}-${Math.random().toString(36).substring(2, 10)}`;
-    debug(`Generated session ID: ${sessionId}`);
-    
-    // Initialize the browser if needed or if it was closed
-    try {
-      // Check if browser is defined but closed (page.goto will fail)
-      if (browserService.browser) {
-        debug('Testing if browser is still active...');
-        // This is a simple test to see if the browser is responsive
-        await browserService.browser.contexts();
-      }
-    } catch (browserError) {
-      debug('Browser instance is closed or unresponsive, will reinitialize');
-      // Close it properly first if it exists but is in a bad state
-      if (browserService.browser) {
-        try {
-          await browserService.closeBrowser();
-        } catch (closeError) {
-          debug(`Error closing existing browser: ${closeError.message}`);
-          // We'll continue anyway since we're going to create a new one
-        }
-      }
-      browserService.browser = null;
-      browserService.page = null;
-    }
-    
-    // Now launch browser if it's null
-    if (!browserService.browser) {
-      debug('Launching browser for Playwright capture');
-      await browserService.launchBrowser();
-    }
-    
-    try {
-      // Navigate to the URL
-      debug(`Navigating to ${url} for DOM capture`);
-      await browserService.navigateToUrl(url);
-      
-      // Capture the DOM using Playwright
-      debug('Capturing DOM with Playwright');
-      const domTree = await browserService.captureDom();
-      
-      if (!domTree) {
-        debug('Failed to capture DOM with Playwright');
-        return res.status(500).json({
-          success: false,
-          error: 'Failed to capture DOM with Playwright'
-        });
-      }
-      
-      // Store metadata for the session
-      const metadata = {
-        url,
-        title: req.body.pageTitle || 'Captured with Playwright',
-        timestamp: Date.now()
-      };
-      
-      // Store in our session store
-      global.sessionStore = global.sessionStore || {};
-      global.sessionStore[sessionId] = {
-        id: sessionId,
-        status: 'completed',
-        metadata,
-        createdAt: Date.now(),
-        results: {
-          domTree,
-          metadata
-        }
-      };
-      
-      debug(`Successfully captured and stored Playwright DOM for session: ${sessionId}`);
-      
-      // Respond with the session ID
-      res.json({
-        success: true,
-        sessionId,
-        message: 'DOM captured with Playwright and stored successfully'
-      });
-    } catch (navigationError) {
-      debug(`Navigation or DOM capture error: ${navigationError.message}`);
-      
-      // If the error indicates the browser is closed, reinitialize it for next time
-      if (navigationError.message.includes('Target page, context or browser has been closed')) {
-        try {
-          debug('Browser appears to be closed, cleaning up for next capture');
-          browserService.browser = null;
-          browserService.page = null;
-        } catch (cleanupError) {
-          debug(`Error during browser cleanup: ${cleanupError.message}`);
-        }
-      }
-      
-      throw navigationError; // Re-throw to be caught by outer catch block
-    }
-    
-  } catch (error) {
-    console.error('Error in direct Playwright capture:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message || 'Error during Playwright DOM capture'
-    });
-  }
-});
-
-// Endpoint to capture DOM from the extension
-router.post('/capture', async (req, res) => {
-  try {
-    console.log('[Backend] Received DOM capture from extension');
-    const { url, domContent, metadata } = req.body;
-    
-    if (!domContent || !domContent.html) {
-      console.error('[Backend] Missing DOM content in capture request');
-      return res.status(400).json({
-        success: false,
-        error: 'Missing DOM content'
-      });
-    }
-    
-    // Create a capture ID
-    const captureId = `dom-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
-    
-    // Process the DOM to extract relevant information
-    const title = domContent.title || extractTitle(domContent.html) || 'Unnamed Page';
-    
-    // Process the HTML to extract the DOM tree
-    const domTree = processHTML(domContent.html);
-    
-    // Create the capture object
-    const capture = {
-      id: captureId,
-      url: url,
-      title: title,
-      timestamp: new Date().toISOString(),
-      metadata: {
-        ...metadata,
-        capturedWith: 'extension'
-      },
-      // Store a preview/summary of the DOM tree, not the full HTML
-      domTree: domTree
-    };
-    
-    // Store in memory
-    captureStore.captures.unshift(capture); // Add at the beginning (newest first)
-    
-    // Keep only the last 20 captures
-    if (captureStore.captures.length > 20) {
-      captureStore.captures = captureStore.captures.slice(0, 20);
-    }
-    
-    // Try to store in the database, but don't let it fail the request
-    try {
-      if (db && typeof db.saveDOMCapture === 'function') {
-        await db.saveDOMCapture(capture);
-        console.log(`[Backend] DOM capture saved to database with ID: ${captureId}`);
-      } else {
-        console.log(`[Backend] DOM capture not saved to database (no database available)`);
-      }
-    } catch (dbError) {
-      console.error(`[Backend] Error saving DOM capture to database: ${dbError.message}`);
-      // Continue with the request even if database save fails
-    }
-    
-    console.log(`[Backend] DOM capture saved with ID: ${captureId}`);
-    
-    res.json({
-      success: true,
-      captureId: captureId,
-      message: 'DOM capture saved successfully'
-    });
-  } catch (error) {
-    console.error('[Backend] Error saving DOM capture:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Server error processing DOM capture: ' + error.message
-    });
-  }
-});
-
-// Get all DOM captures
-router.get('/captures', async (req, res) => {
-  try {
-    console.log('[Backend] Getting all DOM captures');
-    
-    // Get captures from memory
-    const allCaptures = [...captureStore.captures];
-    
-    // Try to get captures from database as well
-    try {
-      if (db && typeof db.getDOMCaptures === 'function') {
-        const dbCaptures = await db.getDOMCaptures();
-        if (Array.isArray(dbCaptures)) {
-          // Merge with in-memory captures, avoiding duplicates
-          dbCaptures.forEach(dbCapture => {
-            if (!allCaptures.some(c => c.id === dbCapture.id)) {
-              allCaptures.push(dbCapture);
-            }
-          });
-          console.log(`[Backend] Retrieved ${dbCaptures.length} captures from database`);
-        }
-      } else {
-        console.log('[Backend] Skipping database capture retrieval (no database available)');
-      }
-    } catch (dbError) {
-      console.error(`[Backend] Error getting captures from database: ${dbError.message}`);
-      // Continue with just the in-memory captures
-    }
-    
-    // Sort by timestamp (newest first)
-    allCaptures.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-    
-    console.log(`[Backend] Returning ${allCaptures.length} DOM captures`);
-    
-    res.json({
-      success: true,
-      captures: allCaptures
-    });
-  } catch (error) {
-    console.error('[Backend] Error getting DOM captures:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Server error getting DOM captures: ' + error.message
-    });
-  }
-});
-
-// Get a specific DOM capture
-router.get('/captures/:captureId', async (req, res) => {
-  try {
-    const { captureId } = req.params;
-    console.log(`[Backend] Getting DOM capture with ID: ${captureId}`);
-    
-    // Find in memory
-    let capture = captureStore.captures.find(c => c.id === captureId);
-    
-    // If not found in memory, try database
-    if (!capture) {
-      try {
-        if (db && typeof db.getDOMCaptures === 'function') {
-          capture = await db.getDOMCaptures({ id: captureId });
-          if (capture) {
-            console.log(`[Backend] Retrieved capture ${captureId} from database`);
-          }
-        } else {
-          console.log('[Backend] Skipping database capture retrieval (no database available)');
-        }
-      } catch (dbError) {
-        console.error(`[Backend] Error getting capture from database: ${dbError.message}`);
-        // Continue without the database capture
-      }
-    }
-    
-    if (!capture) {
-      return res.status(404).json({
-        success: false,
-        error: 'DOM capture not found'
-      });
-    }
-    
-    res.json({
-      success: true,
-      ...capture
-    });
-  } catch (error) {
-    console.error(`[Backend] Error getting DOM capture ${req.params.captureId}:`, error);
-    res.status(500).json({
-      success: false,
-      error: 'Server error getting DOM capture: ' + error.message
-    });
-  }
-});
-
-// Helper function to extract title from HTML
-function extractTitle(html) {
-  const titleMatch = html.match(/<title>(.*?)<\/title>/i);
-  return titleMatch ? titleMatch[1] : null;
-}
-
-// Helper function to process HTML and extract DOM structure
-function processHTML(html) {
-  try {
-    // Create a DOM parser
-    const { JSDOM } = require('jsdom');
-    const dom = new JSDOM(html);
-    const document = dom.window.document;
-    
-    // Extract the DOM tree
-    function extractNode(element) {
-      if (!element) return null;
-      
-      const nodeInfo = {
-        tagName: element.tagName?.toLowerCase() || 'unknown',
-      };
-      
-      // Add class if exists
-      if (element.className && typeof element.className === 'string' && element.className.trim()) {
-        nodeInfo.className = element.className.trim();
-      }
-      
-      // Get text content if it's a leaf node or has minimal children
-      if (element.childNodes.length === 0 || 
-          (element.childNodes.length === 1 && element.childNodes[0].nodeType === 3)) {
-        const text = element.textContent?.trim();
-        if (text) {
-          nodeInfo.contentDescription = text.substring(0, 100);
-        }
-      }
-      
-      // Process children (excluding script, style, etc.)
-      const children = Array.from(element.children || [])
-        .filter(child => {
-          return child.nodeType === 1 && 
-                !['script', 'style', 'meta', 'link', 'noscript'].includes(child.tagName.toLowerCase());
-        })
-        .map(extractNode)
-        .filter(Boolean);
-      
-      if (children.length > 0) {
-        nodeInfo.children = children;
-      }
-      
-      return nodeInfo;
-    }
-    
-    // Start from the body or html element
-    const rootElement = document.body || document.documentElement;
-    return extractNode(rootElement);
-  } catch (error) {
-    console.error('[Backend] Error processing HTML:', error);
-    return {
-      tagName: 'body',
-      contentDescription: 'Error processing HTML: ' + error.message
-    };
-  }
-}
 
 // Endpoint to clear all interactions for a specific session (this matches what frontend is calling)
 router.post('/recorder/clearInteractions/:sessionId', async (req, res) => {

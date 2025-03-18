@@ -110,6 +110,33 @@ export const browserApi = {
         }
     },
 
+    // Get all DOM captures
+    getCaptures: async () => {
+        try {
+            console.log('Getting DOM captures...');
+            const response = await axios.get(`${API_BASE_URL}/extension/captures`);
+            console.log('DOM captures response:', response.data);
+            return response.data.captures || [];
+        } catch (error) {
+            handleError(error);
+            return [];
+        }
+    },
+
+    // Get a specific DOM capture
+    getCapture: async (captureId) => {
+        try {
+            console.log(`Getting DOM capture with ID ${captureId}...`);
+            const response = await axios.get(`${API_BASE_URL}/extension/captures/${captureId}`);
+            console.log('DOM capture response:', response.data);
+            return response.data.capture;
+        } catch (error) {
+            handleError(error);
+            return null;
+        }
+    },
+
+    // Get extension recording sessions
     getExtensionSessions: async (userId) => {
         try {
             console.log('Getting extension recording sessions...');
@@ -124,6 +151,7 @@ export const browserApi = {
         }
     },
 
+    // Get interactions for a session
     getExtensionInteractions: async (sessionId, userId) => {
         try {
             const response = await axios.get(`${API_BASE_URL}/extension/recorder/interactions/${sessionId}`, {
@@ -136,6 +164,7 @@ export const browserApi = {
         }
     },
 
+    // Get extension recording status
     getExtensionRecordingStatus: async (userId) => {
         try {
             const response = await axios.get(`${API_BASE_URL}/extension/recorder/status`, {
@@ -153,7 +182,7 @@ export const browserApi = {
         }
     },
 
-    // New function to explicitly stop recording from the frontend
+    // Stop extension recording
     stopExtensionRecording: async () => {
         try {
             const response = await axios.post(`${API_BASE_URL}/extension/recorder/status`, {
@@ -169,7 +198,7 @@ export const browserApi = {
         }
     },
 
-    // New function to clear all interactions for a session
+    // Clear interactions for a session
     clearExtensionInteractions: async (sessionId, userId) => {
         try {
             const response = await axios.post(`${API_BASE_URL}/extension/recorder/clearInteractions/${sessionId}`, {
@@ -182,32 +211,62 @@ export const browserApi = {
         }
     },
 
-    // New function to get all DOM captures from the extension
-    getExtensionCaptures: async () => {
+    // Store results from extension
+    storeExtensionResults: async (sessionId, results) => {
         try {
-            console.log('Getting DOM captures from extension...');
-            const response = await axios.get(`${API_BASE_URL}/extension/captures`);
-            console.log('Extension captures response:', response.data);
+            const response = await axios.post(`${API_BASE_URL}/extension/storeResults`, {
+                sessionId,
+                results
+            });
             return response.data;
         } catch (error) {
-            console.error('Error getting extension captures:', error);
-            // If the endpoint doesn't exist yet, return an empty array
-            if (error.response && error.response.status === 404) {
-                return { captures: [] };
-            }
             handleError(error);
         }
     },
 
-    // New function to get a specific DOM capture by ID
+    // Get all DOM captures
+    getExtensionCaptures: async () => {
+        try {
+            console.log('Getting DOM captures...');
+            const response = await axios.get(`${API_BASE_URL}/extension/captures`);
+            console.log('DOM captures response:', response.data);
+            
+            // Add more detailed logging
+            if (response.data) {
+                console.log('Response data type:', typeof response.data);
+                console.log('Response data has captures property:', 'captures' in response.data);
+                if ('captures' in response.data) {
+                    console.log('Captures array length:', response.data.captures.length);
+                    console.log('First capture item (if any):', response.data.captures[0]);
+                } else {
+                    console.log('Full response data:', JSON.stringify(response.data, null, 2));
+                }
+            }
+            
+            // If response.data is an array, return it directly
+            if (Array.isArray(response.data)) {
+                console.log('Response data is an array with length:', response.data.length);
+                return response.data;
+            }
+            
+            // Otherwise, try to extract captures
+            return response.data.captures || [];
+        } catch (error) {
+            handleError(error);
+            return [];
+        }
+    },
+
+    // Get a specific DOM capture
     getExtensionCapture: async (captureId) => {
         try {
             console.log(`Getting DOM capture with ID ${captureId}...`);
             const response = await axios.get(`${API_BASE_URL}/extension/captures/${captureId}`);
-            console.log('Extension capture response:', response.data);
-            return response.data;
+            console.log('DOM capture response:', response.data);
+            return response.data.capture;
         } catch (error) {
             handleError(error);
+            return null;
         }
     }
 };

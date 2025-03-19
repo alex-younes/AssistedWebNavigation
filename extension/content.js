@@ -20,33 +20,55 @@ const stateManager = {
     stateHistory: [], // Array of state transitions
     fingerprints: new Map(), // Map of fingerprint -> stateId
 
-    // Save counter to sessionStorage to persist between page navigations in same session
+    // Save counter and fingerprints to sessionStorage to persist between page navigations in same session
     saveStateCounter() {
         try {
             if (sessionId) {
-                // Use sessionId to create a unique storage key for this recording session
+                // Save counter
                 sessionStorage.setItem(`fypTracker_stateCounter_${sessionId}`, this.stateCounter.toString());
-                debugLog(`Saved state counter to sessionStorage: ${this.stateCounter}`);
+                
+                // Save fingerprints map to persist between page navigations
+                const fingerprintsData = {};
+                this.fingerprints.forEach((stateId, fingerprint) => {
+                    fingerprintsData[fingerprint] = stateId;
+                });
+                sessionStorage.setItem(`fypTracker_fingerprints_${sessionId}`, JSON.stringify(fingerprintsData));
+                
+                debugLog(`Saved state counter (${this.stateCounter}) and ${Object.keys(fingerprintsData).length} fingerprints to sessionStorage`);
             }
         } catch (error) {
-            console.error('[FYP Tracker] Error saving state counter:', error);
+            console.error('[FYP Tracker] Error saving state counter and fingerprints:', error);
         }
     },
 
-    // Restore counter from sessionStorage when navigating between pages in the same session
+    // Restore counter and fingerprints from sessionStorage
     restoreStateCounter() {
         try {
             if (sessionId) {
+                // Restore counter
                 const savedCounter = sessionStorage.getItem(`fypTracker_stateCounter_${sessionId}`);
                 if (savedCounter) {
                     this.stateCounter = parseInt(savedCounter, 10);
-                    debugLog(`Restored state counter from sessionStorage: ${this.stateCounter}`);
+                    
+                    // Restore fingerprints
+                    const savedFingerprints = sessionStorage.getItem(`fypTracker_fingerprints_${sessionId}`);
+                    if (savedFingerprints) {
+                        const fingerprintsData = JSON.parse(savedFingerprints);
+                        this.fingerprints = new Map();
+                        Object.entries(fingerprintsData).forEach(([fingerprint, stateId]) => {
+                            this.fingerprints.set(fingerprint, stateId);
+                        });
+                        
+                        debugLog(`Restored state counter (${this.stateCounter}) and ${this.fingerprints.size} fingerprints from sessionStorage`);
+                    } else {
+                        debugLog(`Restored only state counter (${this.stateCounter}) from sessionStorage`);
+                    }
                     return true;
                 }
             }
             return false;
         } catch (error) {
-            console.error('[FYP Tracker] Error restoring state counter:', error);
+            console.error('[FYP Tracker] Error restoring state counter and fingerprints:', error);
             return false;
         }
     },
@@ -113,7 +135,23 @@ const stateManager = {
         // Check if we already have a state with this fingerprint
         const existingStateId = this.fingerprints.get(fingerprint);
         if (existingStateId) {
-            const existingState = this.states.get(existingStateId);
+            // We have the fingerprint but might not have the state object if we just navigated
+            let existingState = this.states.get(existingStateId);
+            
+            // If we don't have the state in memory, create it from the fingerprint data
+            if (!existingState) {
+                debugLog(`Found existing fingerprint (${existingStateId}) but state object not in memory. Recreating it.`);
+                existingState = {
+                    id: existingStateId,
+                    url: window.location.href,
+                    fingerprint,
+                    timestamp: new Date().toISOString(),
+                    domSize: document.documentElement.outerHTML.length,
+                    elementCount: document.querySelectorAll('*').length
+                };
+                this.states.set(existingStateId, existingState);
+            }
+            
             debugLog('Reusing existing state', { stateId: existingStateId, url: window.location.href });
             this.currentState = existingState;
             this.recordStateTransition(existingState, false);
@@ -242,20 +280,27 @@ const stateManager = {
         // Don't reset the counter when clearing states during active recording
         if (!isRecording) {
             this.stateCounter = 0;
-            // Clear any saved counter in sessionStorage
+            // Clear any saved counter and fingerprints in sessionStorage
             try {
+                if (sessionId) {
+                    sessionStorage.removeItem(`fypTracker_stateCounter_${sessionId}`);
+                    sessionStorage.removeItem(`fypTracker_fingerprints_${sessionId}`);
+                }
+                
+                // Also try to clean up any other session data
                 for (let i = 0; i < sessionStorage.length; i++) {
                     const key = sessionStorage.key(i);
-                    if (key && key.startsWith('fypTracker_stateCounter_')) {
+                    if (key && (key.startsWith('fypTracker_stateCounter_') || 
+                               key.startsWith('fypTracker_fingerprints_'))) {
                         sessionStorage.removeItem(key);
                     }
                 }
             } catch (error) {
-                console.error('[FYP Tracker] Error clearing state counter:', error);
+                console.error('[FYP Tracker] Error clearing state data:', error);
             }
-            debugLog('Reset state counter to 0');
+            debugLog('Reset state counter to 0 and cleared all fingerprints');
         } else {
-            debugLog(`Preserved state counter at: ${this.stateCounter}`);
+            debugLog(`Preserved state counter at: ${this.stateCounter} and ${this.fingerprints.size} fingerprints`);
         }
     }
 };

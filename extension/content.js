@@ -8,6 +8,200 @@ let interactionCount = 0;
 let previousUrl = null;
 let lastNavigationTime = 0;
 
+// State Management System
+const stateManager = {
+    states: new Map(), // Map of stateId -> state
+    currentState: null,
+    stateCounter: 0,
+    stateHistory: [], // Array of state transitions
+    fingerprints: new Map(), // Map of fingerprint -> stateId
+
+    // Generate a fingerprint for the current DOM state
+    generateFingerprint() {
+        try {
+            const dom = document.documentElement;
+            const fingerprint = {
+                url: window.location.href,
+                domSize: dom.outerHTML.length,
+                elementCount: dom.querySelectorAll('*').length,
+                structure: this.getDomStructure(dom),
+                contentHash: this.hashContent(dom)
+            };
+            return JSON.stringify(fingerprint);
+        } catch (error) {
+            console.error('[FYP Tracker] Error generating fingerprint:', error);
+            return null;
+        }
+    },
+
+    // Get a simplified structure of the DOM
+    getDomStructure(element) {
+        const structure = {
+            tagName: element.tagName?.toLowerCase(),
+            id: element.id,
+            className: element.className,
+            childCount: element.childElementCount,
+            children: []
+        };
+
+        // Only process first 5 children to keep fingerprint manageable
+        Array.from(element.children).slice(0, 5).forEach(child => {
+            structure.children.push(this.getDomStructure(child));
+        });
+
+        return structure;
+    },
+
+    // Create a hash of the content
+    hashContent(element) {
+        // Get text content from important elements
+        const content = Array.from(element.querySelectorAll('h1, h2, h3, p, a, button, input, textarea'))
+            .map(el => el.textContent?.trim())
+            .filter(text => text && text.length > 0)
+            .join('|');
+
+        // Simple hash function
+        let hash = 0;
+        for (let i = 0; i < content.length; i++) {
+            const char = content.charCodeAt(i);
+            hash = ((hash << 5) - hash) + char;
+            hash = hash & hash;
+        }
+        return hash.toString(36);
+    },
+
+    // Create a new state
+    createState() {
+        const fingerprint = this.generateFingerprint();
+        if (!fingerprint) return null;
+
+        // Check if we already have a state with this fingerprint
+        const existingStateId = this.fingerprints.get(fingerprint);
+        if (existingStateId) {
+            const existingState = this.states.get(existingStateId);
+            debugLog('Reusing existing state', { stateId: existingStateId, url: window.location.href });
+            this.currentState = existingState;
+            this.recordStateTransition(existingState, false);
+            
+            // Send state information to background script
+            this.sendStateInfo(existingState, false);
+            
+            return existingState;
+        }
+
+        // Create new state
+        const stateId = `state_${this.stateCounter++}`;
+        const newState = {
+            id: stateId,
+            url: window.location.href,
+            fingerprint,
+            timestamp: new Date().toISOString(),
+            domSize: document.documentElement.outerHTML.length,
+            elementCount: document.querySelectorAll('*').length
+        };
+
+        this.states.set(stateId, newState);
+        this.fingerprints.set(fingerprint, stateId);
+        this.currentState = newState;
+        this.recordStateTransition(newState, true);
+        
+        // Send state information to background script
+        this.sendStateInfo(newState, true);
+
+        debugLog('Created new state', { stateId, url: window.location.href });
+        return newState;
+    },
+
+    // Send state information to background script
+    sendStateInfo(state, isNew) {
+        if (!isRecording || !sessionId || !port) return;
+        
+        try {
+            port.postMessage({
+                action: 'saveState',
+                state: {
+                    stateId: state.id,
+                    url: state.url,
+                    timestamp: state.timestamp,
+                    isNewState: isNew,
+                    domSize: state.domSize,
+                    elementCount: state.elementCount,
+                    fingerprint: state.fingerprint // Send full fingerprint
+                },
+                sessionId,
+                userId
+            });
+            
+            debugLog(`Sent ${isNew ? 'new' : 'existing'} state info to background script: ${state.id}`);
+        } catch (error) {
+            console.error('[FYP Tracker] Error sending state info:', error);
+        }
+    },
+
+    // Record a state transition in history
+    recordStateTransition(state, isNewState) {
+        const transition = {
+            id: this.stateHistory.length + 1,
+            stateId: state.id,
+            url: state.url,
+            timestamp: state.timestamp,
+            isNewState,
+            domSize: state.domSize,
+            elementCount: state.elementCount
+        };
+        
+        this.stateHistory.push(transition);
+
+        // Keep history manageable
+        if (this.stateHistory.length > 100) {
+            this.stateHistory.shift();
+        }
+        
+        // Send state transition to background script
+        if (isRecording && sessionId && port) {
+            try {
+                port.postMessage({
+                    action: 'saveStateTransition',
+                    transition,
+                    sessionId,
+                    userId
+                });
+                
+                debugLog('Sent state transition to background script');
+            } catch (error) {
+                console.error('[FYP Tracker] Error sending state transition:', error);
+            }
+        }
+    },
+
+    // Check if current DOM state is different from current state
+    isStateChanged() {
+        if (!this.currentState) return true;
+
+        const currentFingerprint = this.generateFingerprint();
+        return currentFingerprint !== this.currentState.fingerprint;
+    },
+
+    // Get current state info
+    getCurrentState() {
+        return this.currentState;
+    },
+
+    // Get state history
+    getStateHistory() {
+        return this.stateHistory;
+    },
+
+    // Clear all states (useful when stopping recording)
+    clear() {
+        this.states.clear();
+        this.fingerprints.clear();
+        this.stateHistory = [];
+        this.currentState = null;
+        this.stateCounter = 0;
+    }
+};
+
 // Add tracking for last event times to prevent duplicates
 const lastEventTimes = {
     page_info: 0,
@@ -333,6 +527,9 @@ function handlePageLoad() {
             }
         });
 
+        // Create initial state for the new page
+        stateManager.createState();
+
         // Add special handling to detect DOM changes after page load
         // Take a snapshot of the DOM right after navigation
         const initialDomSize = document.documentElement.outerHTML.length;
@@ -378,8 +575,13 @@ function handlePageLoad() {
                         }
                     }
                 });
+
+                // Check if we need to create a new state after page load mutations
+                if (stateManager.isStateChanged()) {
+                    stateManager.createState();
+                }
             }
-        }, 300); // Check shortly after initial load
+        }, 300);
         
         // Send a render_complete event after a short delay to ensure DOM has had time to render
         setTimeout(() => {
@@ -404,78 +606,13 @@ function handlePageLoad() {
                         }
                     }
                 });
-            }
-        }, 500); // 500ms delay to ensure DOM has loaded some content
-        
-        // Track page load states more aggressively
-        
-        // Instead of multiple forced page_info calls, just send one guaranteed page_info
-        // and let the natural lifecycle events handle the rest
-        debugLog(`Current readyState: ${document.readyState}`);
 
-        // Since we're already sending a navigation event, only send one page_info
-        // with a forced flag to ensure it's not deduplicated
-        setTimeout(() => {
-            if (isRecording && sessionId) {
-                debugLog(`Sending single forced page_info, readyState: ${document.readyState}`);
-                // Use the forced flag to bypass deduplication only once
-                sendPageInfo('forced');
-            }
-        }, 100);
-
-        // Skip the additional forced events that were bypassing deduplication
-        // by setting lastEventTimes to 0
-
-        // Instead, listen for the natural lifecycle events without forcing
-        if (document.readyState !== 'complete') {
-            // If document is not loaded yet, set up listeners for regular events
-            if (document.readyState === 'loading') {
-                document.addEventListener('DOMContentLoaded', () => {
-                    if (isRecording && sessionId) {
-                        debugLog(`DOMContentLoaded fired naturally, readyState: ${document.readyState}`);
-                        // No need to reset timers, just send the event normally
-                        sendPageInfo('domcontentloaded');
-                        
-                        // Also send render_complete event after DOMContentLoaded
-                        setTimeout(() => {
-                            debugLog(`Sending render_complete event after DOMContentLoaded for ${window.location.href}`);
-                            sendInteraction({
-                                type: 'render_complete',
-                                timestamp: new Date().toISOString(),
-                                details: {
-                                    url: window.location.href,
-                                    readyState: document.readyState,
-                                    source: 'domcontentloaded',
-                                    timing: {
-                                        navigationStart: window.performance?.timing?.navigationStart,
-                                        renderComplete: Date.now(),
-                                        domContentLoaded: window.performance?.timing?.domContentLoadedEventEnd
-                                    },
-                                    contentStats: {
-                                        bodyElementCount: document.body?.childElementCount || 0,
-                                        hasImages: !!document.querySelectorAll('img').length,
-                                        hasMainContent: !!document.querySelector('main, #content, .content, article, section, .container')
-                                    }
-                                }
-                            });
-                        }, 300);
-                    }
-                }, { once: true });
-            }
-            
-            // Listen for load event naturally
-            window.addEventListener('load', () => {
-                if (isRecording && sessionId) {
-                    debugLog(`Load event fired naturally, readyState: ${document.readyState}`);
-                    // No need to reset timers, just send the event normally
-                    sendPageInfo('load');
+                // Final state check after render complete
+                if (stateManager.isStateChanged()) {
+                    stateManager.createState();
                 }
-            }, { once: true });
-        } else {
-            // Document already complete, send a single page_info
-            debugLog(`Document already complete, sending single page_info`);
-            sendPageInfo('already_complete');
-        }
+            }
+        }, 500);
     }
     
     // Update previousUrl after navigation event is sent
@@ -690,14 +827,37 @@ function sendInteraction(interaction) {
         }
         }
         
-        // Add session info to interaction
+        // Get current state info
+        const currentState = stateManager.getCurrentState();
+        const stateId = currentState ? currentState.id : null;
+        
+        // Add session info and state info to interaction
         const enrichedInteraction = {
             ...interaction,
             sessionId,
             userId,
             url: window.location.href,
-            timestamp: interaction.timestamp || new Date().toISOString()
+            timestamp: interaction.timestamp || new Date().toISOString(),
+            stateId // Add the current state ID to the interaction
         };
+        
+        // For certain events, add more detailed state information
+        if (['navigation', 'dom_mutation', 'page_info', 'render_complete'].includes(eventType)) {
+            if (!enrichedInteraction.details) {
+                enrichedInteraction.details = {};
+            }
+            
+            // Add state information to details
+            enrichedInteraction.details.state = {
+                id: stateId,
+                isNewState: currentState ? 
+                    stateManager.stateHistory.length > 0 && 
+                    stateManager.stateHistory[stateManager.stateHistory.length - 1].isNewState : false,
+                domSize: currentState ? currentState.domSize : null,
+                elementCount: currentState ? currentState.elementCount : null,
+                fingerprint: currentState ? currentState.fingerprint : null // Add fingerprint to state details
+            };
+        }
         
         try {
             // Try to send via port
@@ -709,7 +869,7 @@ function sendInteraction(interaction) {
             interactionCount++;
             
             // Log successful event sending
-            debugLog(`Sent ${eventType} interaction to background script`);
+            debugLog(`Sent ${eventType} interaction to background script with stateId: ${stateId}`);
         } catch (portError) {
             console.error('[FYP Tracker] Error sending via port, will reconnect:', portError);
             
@@ -728,6 +888,10 @@ function sendInteraction(interaction) {
 // Fallback method to send interactions via chrome.runtime.sendMessage
 function sendMessageFallback(interaction) {
     try {
+        // Get current state info for fallback method
+        const currentState = stateManager.getCurrentState();
+        const stateId = currentState ? currentState.id : null;
+        
         chrome.runtime.sendMessage({
             action: 'saveInteraction',
             interaction: {
@@ -735,10 +899,11 @@ function sendMessageFallback(interaction) {
                 sessionId,
                 userId,
                 url: window.location.href,
-                timestamp: interaction.timestamp || new Date().toISOString()
+                timestamp: interaction.timestamp || new Date().toISOString(),
+                stateId // Add state ID to fallback method as well
             }
         });
-        debugLog(`Sent interaction via fallback method: ${interaction.type}`);
+        debugLog(`Sent interaction via fallback method: ${interaction.type} with stateId: ${stateId}`);
     } catch (error) {
         console.error('[FYP Tracker] Error using fallback send method:', error);
     }
@@ -820,6 +985,11 @@ function setupMutationObserver() {
                         }
                     }
                 });
+
+                // Check if we need to create a new state
+                if (stateManager.isStateChanged()) {
+                    stateManager.createState();
+                }
                 
                 // Update tracking data
                 lastMutationTime = now;
@@ -918,26 +1088,6 @@ function setupMutationObserver() {
                         return;
                     }
                     
-                    // Skip source fingerprinting for now to detect more mutations
-                    /*
-                    // Create source fingerprint to help deduplicate similar mutations
-                    const sourcePath = pendingMutations.slice(0, 3).map(m => getXPath(m.target)).join('|');
-                    if (seenMutationSources.has(sourcePath) && currentTime - lastDomMutationStats.timestamp < 10000) {
-                        debugLog(`Skipping DOM mutation from previously seen source: ${sourcePath}`);
-                        pendingMutations = [];
-                        return;
-                    }
-                    
-                    // Remember this source
-                    seenMutationSources.add(sourcePath);
-                    // Limit the set size to prevent memory leaks
-                    if (seenMutationSources.size > 50) {
-                        // Convert to array, remove oldest entry, convert back to Set
-                        const entries = Array.from(seenMutationSources);
-                        seenMutationSources = new Set(entries.slice(-50));
-                    }
-                    */
-                    
                     // Update tracking for mutations
                     lastMutationTime = currentTime;
                     lastEventTimes.dom_mutation = currentTime;
@@ -988,6 +1138,11 @@ function setupMutationObserver() {
                             mutations: mutationDetails
                         }
                     });
+
+                    // Check if we need to create a new state after significant mutations
+                    if (stateManager.isStateChanged()) {
+                        stateManager.createState();
+                    }
                 }
                 pendingMutations = [];
             }, 500); // Reduce to 500ms to capture changes more quickly
@@ -1272,9 +1427,9 @@ function stopRecording() {
     }
     
     // Reset state
-        isRecording = false;
-        sessionId = null;
-        userId = null;
+    isRecording = false;
+    sessionId = null;
+    userId = null;
     interactionCount = 0;
     
     // Clear stored state
@@ -1283,6 +1438,9 @@ function stopRecording() {
     } catch (error) {
         debugLog('Error clearing recording state', error);
     }
+    
+    // Clear state management system
+    stateManager.clear();
     
     // Notify background script that recording has stopped
     if (port) {

@@ -12,6 +12,13 @@ let interactionCount = 0;
 let userId = null;
 let connectionId = null;
 
+// State management 
+let stateBuffer = []; // Buffer to store state information
+let stateTransitionBuffer = []; // Buffer to store state transitions
+let currentState = null; // Current state reference
+let stateMap = new Map(); // Map of stateId -> state object
+let stateCount = 0; // Counter for total states
+
 // Debug configuration
 const DEBUG = true;
 let lastStateCheck = Date.now();
@@ -1134,6 +1141,20 @@ const flushInteractionBuffer = async () => {
 // Set up periodic buffer flushing (every 1.5 seconds)
 setInterval(flushInteractionBuffer, 1500);
 
+// Set up periodic state buffer flushing (every 3 seconds)
+setInterval(() => {
+    if (stateBuffer.length > 0) {
+        sendStatesToBackend();
+    }
+}, 3000);
+
+// Set up periodic state transition buffer flushing (every 3 seconds)
+setInterval(() => {
+    if (stateTransitionBuffer.length > 0) {
+        sendStateTransitionsToBackend();
+    }
+}, 3000);
+
 // Handle connections from content scripts
 chrome.runtime.onConnect.addListener((port) => {
   // Accept connections from both 'recording-port' and 'content-script'
@@ -1322,6 +1343,62 @@ chrome.runtime.onConnect.addListener((port) => {
               isDuplicate: true
             });
           }
+        }
+      } else if (message.action === 'saveState') {
+        // Handle saving a DOM state
+        if (recordingStatus === 'recording' && currentSessionId && message.state) {
+          console.log(`[Extension] Saving state: ${message.state.stateId}`);
+          
+          // Add state to the map
+          stateMap.set(message.state.stateId, message.state);
+          
+          // Update current state reference
+          currentState = message.state;
+          stateCount++;
+          
+          // Add to buffer for sending to backend
+          stateBuffer.push({
+            ...message.state,
+            sessionId: currentSessionId,
+            userId: userId,
+            timestamp: message.state.timestamp || new Date().toISOString(),
+            fingerprint: message.state.fingerprint // Ensure fingerprint is included
+          });
+          
+          // If buffer gets large enough, send to backend
+          if (stateBuffer.length >= 5) {
+            sendStatesToBackend();
+          }
+          
+          // Send acknowledgment to content script
+          port.postMessage({
+            action: 'state_acknowledged',
+            stateId: message.state.stateId
+          });
+        }
+      } else if (message.action === 'saveStateTransition') {
+        // Handle saving a state transition
+        if (recordingStatus === 'recording' && currentSessionId && message.transition) {
+          console.log(`[Extension] Saving state transition: ${message.transition.stateId}`);
+          
+          // Add to buffer for sending to backend
+          stateTransitionBuffer.push({
+            ...message.transition,
+            sessionId: currentSessionId,
+            userId: userId,
+            timestamp: message.transition.timestamp || new Date().toISOString()
+          });
+          
+          // If buffer gets large enough, send to backend
+          if (stateTransitionBuffer.length >= 5) {
+            sendStateTransitionsToBackend();
+          }
+          
+          // Send acknowledgment to content script
+          port.postMessage({
+            action: 'state_transition_acknowledged',
+            transitionId: message.transition.id
+          });
         }
       } else if (message.action === 'content_recording_status') {
         // Content script is telling us its recording state
@@ -1887,4 +1964,108 @@ const identifyDomState = (interaction) => {
     }
     
     return null;
+};
+
+// Send states to the backend
+const sendStatesToBackend = async () => {
+    if (!API_BASE_URL || !currentSessionId || stateBuffer.length === 0) {
+        return false;
+    }
+    
+    try {
+        console.log(`[Extension] Sending ${stateBuffer.length} states to backend...`);
+        
+        // Get a copy of the current buffer and clear it
+        const currentBuffer = [...stateBuffer];
+        stateBuffer = [];
+        
+        // Send to backend
+        const response = await fetch(`${API_BASE_URL}/sessions/${currentSessionId}/states`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Session-ID': currentSessionId,
+                'X-User-ID': userId,
+                'X-Extension-Version': chrome.runtime.getManifest().version
+            },
+            body: JSON.stringify({
+                states: currentBuffer,
+                session: currentSessionId,
+                user: userId
+            })
+        });
+        
+        if (!response.ok) {
+            console.error('[Extension] Failed to save states:', await response.text());
+            // Restore buffer
+            stateBuffer = [...currentBuffer, ...stateBuffer];
+            return false;
+        }
+        
+        const data = await response.json();
+        if (data.success) {
+            console.log(`[Extension] Successfully sent ${currentBuffer.length} states to backend`);
+            return true;
+        }
+        
+        console.error('[Extension] Backend reported failure saving states:', data);
+        // Restore buffer
+        stateBuffer = [...currentBuffer, ...stateBuffer];
+        return false;
+    } catch (error) {
+        console.error('[Extension] Error sending states:', error);
+        return false;
+    }
+};
+
+// Send state transitions to the backend
+const sendStateTransitionsToBackend = async () => {
+    if (!API_BASE_URL || !currentSessionId || stateTransitionBuffer.length === 0) {
+        return false;
+    }
+    
+    try {
+        console.log(`[Extension] Sending ${stateTransitionBuffer.length} state transitions to backend...`);
+        
+        // Get a copy of the current buffer and clear it
+        const currentBuffer = [...stateTransitionBuffer];
+        stateTransitionBuffer = [];
+        
+        // Send to backend
+        const response = await fetch(`${API_BASE_URL}/sessions/${currentSessionId}/state-transitions`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Session-ID': currentSessionId,
+                'X-User-ID': userId,
+                'X-Extension-Version': chrome.runtime.getManifest().version
+            },
+            body: JSON.stringify({
+                transitions: currentBuffer,
+                session: currentSessionId,
+                user: userId
+            })
+        });
+        
+        if (!response.ok) {
+            console.error('[Extension] Failed to save state transitions:', await response.text());
+            // Restore buffer
+            stateTransitionBuffer = [...currentBuffer, ...stateTransitionBuffer];
+            return false;
+        }
+        
+        const data = await response.json();
+        if (data.success) {
+            console.log(`[Extension] Successfully sent ${currentBuffer.length} state transitions to backend`);
+            return true;
+        }
+        
+        console.error('[Extension] Backend reported failure saving state transitions:', data);
+        // Restore buffer
+        stateTransitionBuffer = [...currentBuffer, ...stateTransitionBuffer];
+        return false;
+    } catch (error) {
+        console.error('[Extension] Error sending state transitions:', error);
+        return false;
+    }
 }; 

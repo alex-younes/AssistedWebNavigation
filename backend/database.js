@@ -50,10 +50,37 @@ const domCaptureSchema = new mongoose.Schema({
   content: { type: String, required: true }
 }, { timestamps: true });
 
+// Define DOM State schema
+const domStateSchema = new mongoose.Schema({
+  stateId: { type: String, required: true },
+  sessionId: { type: String, required: true },
+  userId: { type: String, required: true },
+  url: { type: String, required: true },
+  timestamp: { type: Date, default: Date.now },
+  isNewState: { type: Boolean, default: true },
+  domSize: { type: Number },
+  elementCount: { type: Number },
+  fingerprint: mongoose.Schema.Types.Mixed
+}, { timestamps: true });
+
+// Define State Transition schema
+const stateTransitionSchema = new mongoose.Schema({
+  sessionId: { type: String, required: true },
+  userId: { type: String, required: true },
+  fromStateId: { type: String },
+  toStateId: { type: String, required: true },
+  timestamp: { type: Date, default: Date.now },
+  transitionType: { type: String },
+  url: { type: String },
+  details: mongoose.Schema.Types.Mixed
+}, { timestamps: true });
+
 // Create models
 const Interaction = mongoose.model('Interaction', interactionSchema);
 const Session = mongoose.model('Session', sessionSchema);
 const DOMCapture = mongoose.model('DOMCapture', domCaptureSchema);
+const DOMState = mongoose.model('DOMState', domStateSchema);
+const StateTransition = mongoose.model('StateTransition', stateTransitionSchema);
 
 // Database operations
 const db = {
@@ -113,6 +140,46 @@ const db = {
 
   async getDOMCaptures(query = {}) {
     return await DOMCapture.find(query).sort({ timestamp: 1 });
+  },
+
+  // Add method to save DOM state
+  async saveDOMState(state) {
+    console.log('[Database] Saving DOM state:', state.stateId);
+    const doc = new DOMState(state);
+    const saved = await doc.save();
+    return saved;
+  },
+  
+  // Add method to save multiple DOM states at once
+  async saveDOMStates(states) {
+    console.log(`[Database] Saving ${states.length} DOM states`);
+    const result = await DOMState.insertMany(states);
+    return result;
+  },
+  
+  // Add method to get DOM states for a session
+  async getDOMStates(query = {}) {
+    return await DOMState.find(query).sort({ timestamp: 1 });
+  },
+
+  // Add method to save state transition
+  async saveStateTransition(transition) {
+    console.log('[Database] Saving state transition:', transition.toStateId);
+    const doc = new StateTransition(transition);
+    const saved = await doc.save();
+    return saved;
+  },
+  
+  // Add method to save multiple state transitions at once
+  async saveStateTransitions(transitions) {
+    console.log(`[Database] Saving ${transitions.length} state transitions`);
+    const result = await StateTransition.insertMany(transitions);
+    return result;
+  },
+  
+  // Add method to get state transitions for a session
+  async getStateTransitions(query = {}) {
+    return await StateTransition.find(query).sort({ timestamp: 1 });
   }
 };
 

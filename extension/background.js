@@ -1386,7 +1386,7 @@ chrome.runtime.onConnect.addListener((port) => {
       } else if (message.action === 'saveState') {
         // Handle saving a DOM state
         if (recordingStatus === 'recording' && currentSessionId && message.state) {
-          console.log(`[Extension] Saving state: ${message.state.stateId}`);
+          console.log(`[Extension] Saving state: ${message.state.stateId} for URL: ${message.state.url}`);
           
           // Add state to the map
           stateMap.set(message.state.stateId, message.state);
@@ -1405,7 +1405,9 @@ chrome.runtime.onConnect.addListener((port) => {
           });
           
           // If buffer gets large enough, send to backend
-          if (stateBuffer.length >= 5) {
+          // Lower threshold to 2 to send states more frequently
+          if (stateBuffer.length >= 2) {
+            console.log(`[Extension] State buffer threshold reached (${stateBuffer.length}). Sending to backend...`);
             sendStatesToBackend();
           }
           
@@ -1760,6 +1762,18 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       console.log('[Extension] Stopping recording session:', currentSessionId);
       
       try {
+        // First, make sure any remaining state data is sent to the backend
+        if (stateBuffer.length > 0) {
+          console.log(`[Extension] Sending ${stateBuffer.length} remaining states to backend before stopping...`);
+          await sendStatesToBackend();
+        }
+        
+        // Also send any remaining state transitions
+        if (stateTransitionBuffer.length > 0) {
+          console.log(`[Extension] Sending ${stateTransitionBuffer.length} remaining state transitions to backend before stopping...`);
+          await sendStateTransitionsToBackend();
+        }
+        
         // Update recording status first to prevent race conditions
         updateRecordingStatus('idle');
         
@@ -2023,7 +2037,7 @@ const sendStatesToBackend = async () => {
         stateBuffer = [];
         
         // Send to backend
-        const response = await fetch(`${API_BASE_URL}/sessions/${currentSessionId}/states`, {
+        const response = await fetch(`${API_BASE_URL}/extension/recorder/states`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -2033,8 +2047,8 @@ const sendStatesToBackend = async () => {
             },
             body: JSON.stringify({
                 states: currentBuffer,
-                session: currentSessionId,
-                user: userId
+                sessionId: currentSessionId,
+                userId: userId
             })
         });
         
@@ -2075,7 +2089,7 @@ const sendStateTransitionsToBackend = async () => {
         stateTransitionBuffer = [];
         
         // Send to backend
-        const response = await fetch(`${API_BASE_URL}/sessions/${currentSessionId}/state-transitions`, {
+        const response = await fetch(`${API_BASE_URL}/extension/recorder/state-transitions`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -2085,8 +2099,8 @@ const sendStateTransitionsToBackend = async () => {
             },
             body: JSON.stringify({
                 transitions: currentBuffer,
-                session: currentSessionId,
-                user: userId
+                sessionId: currentSessionId,
+                userId: userId
             })
         });
         

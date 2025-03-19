@@ -489,4 +489,130 @@ router.post('/extension/recorder/reset', async (req, res) => {
     }
 });
 
+// Add an endpoint for handling DOM state data
+router.post('/extension/recorder/states', async (req, res) => {
+    try {
+        const { states, sessionId, userId } = req.body;
+        
+        if (!sessionId || !states || !Array.isArray(states) || states.length === 0) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Invalid request. sessionId and states array are required.'
+            });
+        }
+        
+        // Check if the session exists and is active
+        const session = await db.getSessions({ id: sessionId });
+        if (!session) {
+            return res.status(404).json({ 
+                success: false, 
+                message: 'Session not found' 
+            });
+        }
+        
+        // Handle both single document and array results from getSessions
+        const sessionStatus = Array.isArray(session) 
+            ? (session.length > 0 ? session[0].status : null)
+            : session.status;
+            
+        if (sessionStatus !== 'active') {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Cannot save states for inactive session' 
+            });
+        }
+        
+        console.log(`[Backend] Saving ${states.length} DOM states for session ${sessionId}`);
+        
+        // Make sure states have proper format with sessionId and stateId
+        const formattedStates = states.map(state => {
+            return {
+                ...state,
+                sessionId,
+                userId,
+                stateId: state.id || state.stateId // Ensure we have stateId
+            };
+        });
+        
+        // Save the DOM states to the database
+        const savedStates = await db.saveDOMStates(formattedStates);
+        
+        return res.json({
+            success: true,
+            message: `Successfully saved ${savedStates.length} DOM states`,
+            count: savedStates.length
+        });
+    } catch (error) {
+        console.error('[Backend] Error saving DOM states:', error);
+        return res.status(500).json({ 
+            success: false, 
+            message: 'Server error while saving DOM states',
+            error: error.message
+        });
+    }
+});
+
+// Add an endpoint for handling state transitions
+router.post('/extension/recorder/state-transitions', async (req, res) => {
+    try {
+        const { transitions, sessionId, userId } = req.body;
+        
+        if (!sessionId || !transitions || !Array.isArray(transitions) || transitions.length === 0) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Invalid request. sessionId and transitions array are required.'
+            });
+        }
+        
+        // Check if the session exists and is active
+        const session = await db.getSessions({ id: sessionId });
+        if (!session) {
+            return res.status(404).json({ 
+                success: false, 
+                message: 'Session not found' 
+            });
+        }
+        
+        // Handle both single document and array results from getSessions
+        const sessionStatus = Array.isArray(session) 
+            ? (session.length > 0 ? session[0].status : null)
+            : session.status;
+            
+        if (sessionStatus !== 'active') {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Cannot save state transitions for inactive session' 
+            });
+        }
+        
+        console.log(`[Backend] Saving ${transitions.length} state transitions for session ${sessionId}`);
+        
+        // Make sure transitions have proper format with sessionId
+        const formattedTransitions = transitions.map(transition => {
+            return {
+                ...transition,
+                sessionId,
+                userId,
+                timestamp: transition.timestamp || new Date().toISOString()
+            };
+        });
+        
+        // Save the state transitions to the database
+        const savedTransitions = await db.saveStateTransitions(formattedTransitions);
+        
+        return res.json({
+            success: true,
+            message: `Successfully saved ${savedTransitions.length} state transitions`,
+            count: savedTransitions.length
+        });
+    } catch (error) {
+        console.error('[Backend] Error saving state transitions:', error);
+        return res.status(500).json({ 
+            success: false, 
+            message: 'Server error while saving state transitions',
+            error: error.message
+        });
+    }
+});
+
 module.exports = router; 

@@ -20,6 +20,37 @@ const stateManager = {
     stateHistory: [], // Array of state transitions
     fingerprints: new Map(), // Map of fingerprint -> stateId
 
+    // Initialize the counter from the highest state ID in the database
+    initializeStateCounter(highestStateId = null) {
+        try {
+            // If we received a highest state ID from the backend, use it
+            if (highestStateId !== null && typeof highestStateId === 'number') {
+                this.stateCounter = highestStateId + 1; // Start from the next available ID
+                debugLog(`Initialized global state counter from database: ${this.stateCounter}`);
+                return;
+            }
+            
+            // Fallback to localStorage (for backward compatibility)
+            const savedCounter = localStorage.getItem('fypTracker_globalStateCounter');
+            if (savedCounter) {
+                this.stateCounter = parseInt(savedCounter, 10);
+                debugLog(`Loaded global state counter from localStorage: ${this.stateCounter}`);
+            }
+        } catch (error) {
+            console.error('[FYP Tracker] Error initializing global state counter:', error);
+        }
+    },
+
+    // Save counter to localStorage (keeping for backward compatibility)
+    saveStateCounter() {
+        try {
+            localStorage.setItem('fypTracker_globalStateCounter', this.stateCounter.toString());
+            debugLog(`Saved global state counter: ${this.stateCounter}`);
+        } catch (error) {
+            console.error('[FYP Tracker] Error saving global state counter:', error);
+        }
+    },
+
     // Generate a fingerprint for the current DOM state
     generateFingerprint() {
         try {
@@ -83,18 +114,31 @@ const stateManager = {
         const existingStateId = this.fingerprints.get(fingerprint);
         if (existingStateId) {
             const existingState = this.states.get(existingStateId);
-            debugLog('Reusing existing state', { stateId: existingStateId, url: window.location.href });
-            this.currentState = existingState;
-            this.recordStateTransition(existingState, false);
-            
-            // Send state information to background script
-            this.sendStateInfo(existingState, false);
-            
-            return existingState;
+            // ONLY reuse state if URL is exactly the same and we're on the same page
+            if (existingState && existingState.url === window.location.href) {
+                debugLog('Reusing existing state', { stateId: existingStateId, url: window.location.href });
+                this.currentState = existingState;
+                this.recordStateTransition(existingState, false);
+                
+                // Send state information to background script
+                this.sendStateInfo(existingState, false);
+                
+                return existingState;
+            }
+            // Different URL means we MUST create a new state
+            debugLog('URL changed, creating new state instead of reusing existing one', {
+                existing: existingState?.url,
+                current: window.location.href
+            });
         }
 
-        // Create new state
+        // Create new state with GLOBAL counter
         const stateId = `state_${this.stateCounter++}`;
+        debugLog(`Creating new state with GLOBAL ID ${stateId} for URL: ${window.location.href}, counter after increment: ${this.stateCounter}`);
+        
+        // Save the updated counter to maintain sequence across pages
+        this.saveStateCounter();
+        
         const newState = {
             id: stateId,
             url: window.location.href,
@@ -198,11 +242,21 @@ const stateManager = {
 
     // Clear all states (useful when stopping recording)
     clear() {
+        // Save the current counter before clearing
+        const currentCounter = this.stateCounter;
+        
         this.states.clear();
         this.fingerprints.clear();
         this.stateHistory = [];
         this.currentState = null;
-        this.stateCounter = 0;
+        
+        // Preserve the counter to maintain sequence across sessions
+        this.stateCounter = currentCounter;
+        
+        // Save the counter to localStorage
+        this.saveStateCounter();
+        
+        debugLog(`Cleared state manager, preserved counter at: ${this.stateCounter}`);
     }
 };
 
@@ -432,6 +486,10 @@ function initializeContentScript() {
     
     debugLog('Initializing content script');
     
+    // Initialize the global state counter
+    stateManager.initializeStateCounter();
+    debugLog(`Initialized global state counter: ${stateManager.stateCounter}`);
+    
     // Initialize previousUrl with the current location
     previousUrl = window.location.href;
     
@@ -471,6 +529,27 @@ function handlePageLoad() {
     // Set page loading phase to true
     pageLoadingPhase = true;
     initialLoadState = null;
+    
+    // Check if we've navigated to a new URL - if so, invalidate existing fingerprints
+    // This ensures different pages always get different states
+    const currentUrl = window.location.href;
+    if (previousUrl && previousUrl !== currentUrl) {
+        debugLog(`URL changed from ${previousUrl} to ${currentUrl}, resetting state manager but KEEPING COUNTER`);
+        
+        // Backup the current counter before clearing
+        const currentCounter = stateManager.stateCounter;
+        
+        // Clear state maps but don't reset counter
+        stateManager.fingerprints.clear();
+        stateManager.states.clear(); // Clear all saved states
+        stateManager.stateHistory = []; // Clear state history
+        stateManager.currentState = null;
+        
+        // Restore the counter to maintain sequence
+        stateManager.stateCounter = currentCounter;
+        
+        debugLog(`State management system reset for new page, counter preserved at: ${stateManager.stateCounter}`);
+    }
     
     // Reconnect to background if needed
     if (!port) {
@@ -523,6 +602,25 @@ function handlePageLoad() {
         // Log the navigation event - only one per page load
         debugLog(`Recording navigation from ${previousUrl || 'new session'} to ${window.location.href}`);
         
+        // When navigating to a new page, explicitly invalidate any previous state
+        if (!sameAsPrevious) {
+            debugLog('Navigation to new page - resetting state tracking but KEEPING COUNTER');
+            
+            // Backup the current counter before clearing
+            const currentCounter = stateManager.stateCounter;
+            
+            // Force a new state to be created for this page by clearing the state manager
+            stateManager.fingerprints.clear();
+            stateManager.states.clear(); // Clear all saved states
+            stateManager.stateHistory = []; // Clear state history
+            stateManager.currentState = null;
+            
+            // Restore the counter to maintain sequence
+            stateManager.stateCounter = currentCounter;
+            
+            debugLog(`State tracking system reset for new page, counter preserved at: ${stateManager.stateCounter}`);
+        }
+        
         // Send just one navigation event
         sendInteraction({
             type: 'navigation',
@@ -535,9 +633,13 @@ function handlePageLoad() {
             }
         });
 
-        // Create initial state for the new page - MODIFY THIS
-        // Don't create state yet, let DOM mutations handle it during loading phase
-        // stateManager.createState();
+        // Create initial state for the new page immediately after navigation
+        // This ensures navigation, page_info and other early events have a state ID
+        debugLog('Creating initial state during navigation to new page');
+        // No longer reset the counter - we want global sequential IDs
+        debugLog(`Global state counter before creating initial state: ${stateManager.stateCounter}`);
+        const initialState = stateManager.createState();
+        debugLog(`Created initial navigation state: ${initialState?.id} for URL: ${window.location.href}`);
 
         // Add special handling to detect DOM changes after page load
         // Take a snapshot of the DOM right after navigation
@@ -587,7 +689,9 @@ function handlePageLoad() {
 
                 // Check if we need to create a new state after page load mutations
                 if (stateManager.isStateChanged()) {
-                    stateManager.createState();
+                    // Double-check that we're still on the same page before creating a state
+                    const newState = stateManager.createState();
+                    debugLog(`Created new state from DOM mutation: ${newState?.id} for URL: ${window.location.href}`);
                 }
             }
         }, 300);
@@ -1041,7 +1145,9 @@ function setupMutationObserver() {
                 } else {
                     // Normal state tracking after loading is complete
                     if (stateManager.isStateChanged()) {
-                        stateManager.createState();
+                        // Double-check that we're still on the same page before creating a state
+                        const newState = stateManager.createState();
+                        debugLog(`Created new state from DOM mutation: ${newState?.id} for URL: ${window.location.href}`);
                     }
                 }
                 
@@ -1217,7 +1323,9 @@ function setupMutationObserver() {
                     } else {
                         // Normal state tracking after loading is complete
                         if (stateManager.isStateChanged()) {
-                            stateManager.createState();
+                            // Double-check that we're still on the same page before creating a state
+                            const newState = stateManager.createState();
+                            debugLog(`Created new state from DOM mutation: ${newState?.id} for URL: ${window.location.href}`);
                         }
                     }
                 }
@@ -1234,48 +1342,6 @@ function setupMutationObserver() {
     });
     
     return observer;
-}
-
-// Set up scroll capture (only for significant scrolls)
-function setupScrollCapture() {
-    let lastScrollTime = 0;
-    let lastScrollY = window.scrollY;
-    let lastScrollX = window.scrollX;
-    const SCROLL_THROTTLE = 1000; // 1 second
-    const SCROLL_THRESHOLD = 100; // pixels
-    
-    const scrollHandler = () => {
-        if (!isRecording) return;
-        
-        const now = Date.now();
-        if (now - lastScrollTime < SCROLL_THROTTLE) return;
-        
-        // Check if scroll distance is significant
-        const scrollDiffY = Math.abs(window.scrollY - lastScrollY);
-        const scrollDiffX = Math.abs(window.scrollX - lastScrollX);
-        
-        if (scrollDiffY < SCROLL_THRESHOLD && scrollDiffX < SCROLL_THRESHOLD) return;
-        
-            lastScrollTime = now;
-        lastScrollY = window.scrollY;
-        lastScrollX = window.scrollX;
-            
-        sendInteraction({
-                type: 'scroll',
-                details: {
-                    scrollX: window.scrollX,
-                    scrollY: window.scrollY,
-                    scrollHeight: document.documentElement.scrollHeight,
-                scrollWidth: document.documentElement.scrollWidth,
-                viewportHeight: window.innerHeight,
-                viewportWidth: window.innerWidth
-            }
-        });
-    };
-    
-    window.addEventListener('scroll', scrollHandler, { passive: true });
-    
-    return scrollHandler;
 }
 
 // Set up all interaction recording mechanisms
@@ -1432,8 +1498,6 @@ function setupInteractionRecording() {
         document.addEventListener(type, eventHandlers[type], { capture: true, passive: true });
     });
     
-    const scrollHandler = setupScrollCapture();
-    
     // Store cleanup function
     window._interactionCleanup = () => {
         observer.disconnect();
@@ -1442,8 +1506,6 @@ function setupInteractionRecording() {
         for (const [type, handler] of Object.entries(eventHandlers)) {
             document.removeEventListener(type, handler, { capture: true });
         }
-        
-        window.removeEventListener('scroll', scrollHandler);
     };
     
     debugLog('Interaction recording set up');
@@ -1458,7 +1520,7 @@ function cleanupInteractionRecording() {
 }
 
 // Start recording user interactions
-function startRecording(sessionID, userID) {
+function startRecording(sessionID, userID, highestStateId = null) {
     if (isRecording) {
         // Already recording (could be handled by updating session)
         if (sessionID !== sessionId) {
@@ -1466,6 +1528,10 @@ function startRecording(sessionID, userID) {
             debugLog(`Switching to session ${sessionID} from ${sessionId}`);
             sessionId = sessionID;
             userId = userID;
+            
+            // Re-initialize state counter with the new highest state ID
+            stateManager.initializeStateCounter(highestStateId);
+            
             saveRecordingState();
         }
         return;
@@ -1478,6 +1544,9 @@ function startRecording(sessionID, userID) {
     sessionId = sessionID;
     userId = userID;
     
+    // Initialize state counter with the highest state ID from the database
+    stateManager.initializeStateCounter(highestStateId);
+    
     // Save recording state
     saveRecordingState();
     
@@ -1485,7 +1554,7 @@ function startRecording(sessionID, userID) {
     sendPageInfo();
     
     // Set up all interaction recording mechanisms
-            setupInteractionRecording();
+    setupInteractionRecording();
     
     debugLog('Recording started');
 }
@@ -1753,7 +1822,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     debugLog('Received message', request);
     
     if (request.action === 'startRecording') {
-        const result = startRecording(request.sessionId, request.userId);
+        const result = startRecording(request.sessionId, request.userId, request.highestStateId);
         sendResponse(result);
     }
     

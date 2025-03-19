@@ -264,6 +264,44 @@ const updateRecordingStatus = (status, sessionId = null) => {
 // Check connection periodically (every 30 seconds)
 setInterval(checkServerConnection, 30000);
 
+// Fetch the highest state ID from the database for a given session
+const getHighestStateId = async (sessionId) => {
+    if (!API_BASE_URL || !sessionId) {
+        return 0; // Default to 0 if no session or API URL
+    }
+    
+    try {
+        console.log(`[Extension] Fetching highest state ID for session ${sessionId}...`);
+        
+        const response = await fetch(`${API_BASE_URL}/sessions/${sessionId}/highestStateId`, {
+            method: 'GET',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Session-ID': sessionId,
+                'X-User-ID': userId,
+                'X-Extension-Version': chrome.runtime.getManifest().version
+            }
+        });
+        
+        if (!response.ok) {
+            console.error('[Extension] Failed to fetch highest state ID:', await response.text());
+            return 0; // Default to 0 on error
+        }
+        
+        const data = await response.json();
+        if (data.success && typeof data.highestStateId === 'number') {
+            console.log(`[Extension] Highest state ID for session ${sessionId} is ${data.highestStateId}`);
+            return data.highestStateId;
+        }
+        
+        console.error('[Extension] Backend reported failure or invalid data:', data);
+        return 0;
+    } catch (error) {
+        console.error('[Extension] Error fetching highest state ID:', error);
+        return 0;
+    }
+};
+
 // Update the start recording function to notify all existing tabs
 const startRecordingSession = async (sessionId, tabInfo = null) => {
   try {
@@ -279,8 +317,8 @@ const startRecordingSession = async (sessionId, tabInfo = null) => {
       sessionId = `session_${Date.now()}_${Math.random().toString(36).substring(2, 12)}`;
     }
     
-    // Save session to backend
-    console.log(`[Extension] Starting recording session ${sessionId}`);
+    // Fetch the highest state ID before starting the recording
+    const highestStateId = await getHighestStateId(sessionId);
     
     // Get active tab info if not provided
     if (!tabInfo) {
@@ -316,7 +354,8 @@ const startRecordingSession = async (sessionId, tabInfo = null) => {
             action: 'recording_status_changed',
             status: 'recording',
             sessionId,
-            userId
+            userId,
+            highestStateId
           }).catch(() => {
             // Ignore errors - tabs without content scripts
           });
@@ -1630,6 +1669,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         interactionBuffer = [];
         interactionCount = 0;
         
+        // Fetch the highest state ID before starting the recording
+        const highestStateId = await getHighestStateId(sessionId);
+        
         // Mark as recording before sending to content script
         updateRecordingStatus('recording', sessionId);
         
@@ -1637,7 +1679,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 chrome.tabs.sendMessage(activeTab.id, { 
                     action: 'startRecording',
           sessionId: sessionId,
-                    userId: userId
+                    userId: userId,
+                    highestStateId
         }, async (response) => {
           // Check for any errors
             if (chrome.runtime.lastError) {
@@ -1866,7 +1909,7 @@ const identifyDomState = (interaction) => {
         const existingState = stateMap.get(normalizedUrl);
         
         const timestamp = new Date().toISOString();
-        const stateId = `state_${stateCounter}`;
+        const stateId = `state_${stateCount}`;
         
         // Check if we're returning to an existing state
         if (existingState) {
@@ -1909,7 +1952,7 @@ const identifyDomState = (interaction) => {
         };
         
         stateMap.set(normalizedUrl, newState);
-        stateCounter++;
+        stateCount++;
         
         // Record in history that we created a new state
         stateHistory.push({

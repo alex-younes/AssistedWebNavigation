@@ -8,6 +8,10 @@ let interactionCount = 0;
 let previousUrl = null;
 let lastNavigationTime = 0;
 
+// Add new tracking variables for page loading phase
+let pageLoadingPhase = false;
+let initialLoadState = null;
+
 // State Management System
 const stateManager = {
     states: new Map(), // Map of stateId -> state
@@ -464,6 +468,10 @@ initializeContentScript();
 function handlePageLoad() {
     debugLog('Page loaded');
     
+    // Set page loading phase to true
+    pageLoadingPhase = true;
+    initialLoadState = null;
+    
     // Reconnect to background if needed
     if (!port) {
         connectToBackground();
@@ -527,8 +535,9 @@ function handlePageLoad() {
             }
         });
 
-        // Create initial state for the new page
-        stateManager.createState();
+        // Create initial state for the new page - MODIFY THIS
+        // Don't create state yet, let DOM mutations handle it during loading phase
+        // stateManager.createState();
 
         // Add special handling to detect DOM changes after page load
         // Take a snapshot of the DOM right after navigation
@@ -587,6 +596,27 @@ function handlePageLoad() {
         setTimeout(() => {
             if (isRecording && sessionId) {
                 debugLog(`Sending render_complete event for ${window.location.href}`);
+                
+                // Check if we have an initial load state from DOM mutations
+                if (pageLoadingPhase) {
+                    if (initialLoadState === null) {
+                        // No DOM mutations happened during loading, create first state now
+                        debugLog('No DOM mutations during loading, creating initial state at render_complete');
+                        initialLoadState = stateManager.createState();
+                    } else {
+                        // We already have a state from DOM mutations, update it
+                        debugLog('Using existing state from DOM mutations for render_complete');
+                        // Update timestamp to mark as finalized
+                        initialLoadState.timestamp = new Date().toISOString();
+                        stateManager.sendStateInfo(initialLoadState, false);
+                    }
+                    
+                    // End loading phase
+                    pageLoadingPhase = false;
+                    
+                    debugLog('Page loading phase complete, normal state tracking resumes');
+                }
+                
                 sendInteraction({
                     type: 'render_complete',
                     timestamp: new Date().toISOString(),
@@ -606,11 +636,12 @@ function handlePageLoad() {
                         }
                     }
                 });
-
+                
+                // No need to create new state after render_complete if we're using the loading state
                 // Final state check after render complete
-                if (stateManager.isStateChanged()) {
-                    stateManager.createState();
-                }
+                // if (stateManager.isStateChanged()) {
+                //     stateManager.createState();
+                // }
             }
         }, 500);
     }
@@ -986,9 +1017,32 @@ function setupMutationObserver() {
                     }
                 });
 
-                // Check if we need to create a new state
-                if (stateManager.isStateChanged()) {
-                    stateManager.createState();
+                // MODIFY THE STATE CREATION LOGIC
+                // Check if we're in the loading phase
+                if (pageLoadingPhase) {
+                    if (initialLoadState === null) {
+                        // First significant mutation during loading
+                        debugLog('Creating initial state from significant DOM mutation during page load');
+                        initialLoadState = stateManager.createState();
+                    } else {
+                        // Update existing state during loading phase
+                        debugLog('Updating initial state with new DOM mutation during page load');
+                        const currentFingerprint = stateManager.generateFingerprint();
+                        if (currentFingerprint !== initialLoadState.fingerprint) {
+                            // DOM changed, update state data but keep same ID
+                            initialLoadState.fingerprint = currentFingerprint;
+                            initialLoadState.domSize = document.documentElement.outerHTML.length;
+                            initialLoadState.elementCount = document.querySelectorAll('*').length;
+                            initialLoadState.timestamp = new Date().toISOString();
+                            // Notify background of update
+                            stateManager.sendStateInfo(initialLoadState, false);
+                        }
+                    }
+                } else {
+                    // Normal state tracking after loading is complete
+                    if (stateManager.isStateChanged()) {
+                        stateManager.createState();
+                    }
                 }
                 
                 // Update tracking data
@@ -1139,9 +1193,32 @@ function setupMutationObserver() {
                         }
                     });
 
-                    // Check if we need to create a new state after significant mutations
-                    if (stateManager.isStateChanged()) {
-                        stateManager.createState();
+                    // MODIFY STATE CREATION LOGIC
+                    // Check if we're in the loading phase
+                    if (pageLoadingPhase) {
+                        if (initialLoadState === null) {
+                            // First significant mutation during loading
+                            debugLog('Creating initial state from DOM mutation during page load');
+                            initialLoadState = stateManager.createState();
+                        } else {
+                            // Update existing state during loading phase
+                            debugLog('Updating initial state with new DOM mutation during page load');
+                            const currentFingerprint = stateManager.generateFingerprint();
+                            if (currentFingerprint !== initialLoadState.fingerprint) {
+                                // DOM changed, update state data but keep same ID
+                                initialLoadState.fingerprint = currentFingerprint;
+                                initialLoadState.domSize = document.documentElement.outerHTML.length;
+                                initialLoadState.elementCount = document.querySelectorAll('*').length;
+                                initialLoadState.timestamp = new Date().toISOString();
+                                // Notify background of update
+                                stateManager.sendStateInfo(initialLoadState, false);
+                            }
+                        }
+                    } else {
+                        // Normal state tracking after loading is complete
+                        if (stateManager.isStateChanged()) {
+                            stateManager.createState();
+                        }
                     }
                 }
                 pendingMutations = [];

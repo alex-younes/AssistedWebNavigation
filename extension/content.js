@@ -32,15 +32,15 @@ function sendToBackground(action, data) {
     });
 }
 
-// Calculate hash of the DOM - Improved version with better precision
+// Calculate hash of the DOM - Improved version with better precision and sensitivity
 function calculateDomHash() {
     try {
         // Get the URL path
         const urlObj = new URL(window.location.href);
         const pagePath = urlObj.pathname;
         
-        // Create a structural representation of the DOM with key elements
-        const domFingerprint = generateDOMFingerprint();
+        // Create a more detailed structural representation of the DOM with key elements
+        const domFingerprint = generateEnhancedDOMFingerprint();
         
         // Combine path and fingerprint for the hash input
         const hashInput = pagePath + '_' + domFingerprint;
@@ -65,18 +65,30 @@ function calculateDomHash() {
     }
 }
 
-// Generate a detailed fingerprint of the DOM's structure and content
-function generateDOMFingerprint() {
+// Generate a more detailed fingerprint of the DOM's structure and content
+function generateEnhancedDOMFingerprint() {
     const fingerprint = [];
     
-    // Capture important structural elements
-    const mainElements = document.querySelectorAll('main, section, article, form, .main-content');
+    // Capture all visible structural elements
+    const mainElements = document.querySelectorAll('main, section, article, form, div[role="main"], .main-content, div.container');
     Array.from(mainElements).forEach(element => {
         const elementInfo = getElementInfo(element);
         fingerprint.push(elementInfo);
     });
     
-    // Capture interactive elements (buttons, links, form elements)
+    // Get ALL images with their attributes for more sensitivity to image changes
+    const imageElements = document.querySelectorAll('img');
+    const imageInfo = Array.from(imageElements).map(img => {
+        const src = img.src || '';
+        const alt = img.alt || '';
+        const width = img.width || 0;
+        const height = img.height || 0;
+        const classes = Array.from(img.classList).join(' ');
+        return `img:${src.substring(src.lastIndexOf('/') + 1)}:${width}x${height}:${alt}:${classes}`;
+    }).join('|');
+    fingerprint.push(`images:${imageInfo}`);
+    
+    // Capture ALL interactive elements (buttons, links, form elements) in more detail
     const interactiveElements = document.querySelectorAll('button, a, input, select, textarea');
     const interactiveInfo = Array.from(interactiveElements).map(el => {
         const type = el.tagName.toLowerCase();
@@ -85,33 +97,53 @@ function generateDOMFingerprint() {
         const classes = Array.from(el.classList).join(' ');
         const isVisible = isElementVisible(el);
         
-        // For form fields, include whether they have values
-        let hasValue = false;
+        // For form fields, include whether they have values and what they are
+        let valueInfo = '';
         if (el.tagName === 'INPUT' || el.tagName === 'SELECT' || el.tagName === 'TEXTAREA') {
-            hasValue = !!el.value;
+            const hasValue = !!el.value;
+            // Include a hint of the actual value (first 3 chars) to detect content changes
+            const valueHint = el.value ? el.value.substring(0, 3) : '';
+            valueInfo = `:${hasValue}:${valueHint}`;
         }
         
-        return `${type}#${id}.${classes}:${isVisible}:${hasValue}`;
+        // For buttons and links, include text content
+        const textContent = (el.textContent || '').trim().substring(0, 15);
+        
+        return `${type}#${id}.${classes}:${isVisible}${valueInfo}:${textContent}`;
     }).join('|');
     fingerprint.push(`interactive:${interactiveInfo}`);
     
-    // Capture key text content from headings
+    // Capture key text content from headings and text nodes
     const headings = document.querySelectorAll('h1, h2, h3');
     const headingTexts = Array.from(headings).map(h => {
-        return `${h.tagName.toLowerCase()}:${h.textContent.trim().substring(0, 20)}`;
+        return `${h.tagName.toLowerCase()}:${h.textContent.trim().substring(0, 30)}`;
     }).join('|');
     fingerprint.push(`headings:${headingTexts}`);
     
-    // Add visible content sections (paragraphs, lists)
-    const contentElements = document.querySelectorAll('p, ul, ol, table');
-    const contentInfo = Array.from(contentElements).slice(0, 10).map(el => {
+    // Add visible content sections (paragraphs, lists) with more detail
+    const contentElements = document.querySelectorAll('p, ul, ol, table, div.content');
+    const contentInfo = Array.from(contentElements).slice(0, 20).map(el => {
         const type = el.tagName.toLowerCase();
-        // For content elements, include a content hash based on text length and first chars
+        // For content elements, include a content hash based on text length and first/last chars
         const contentText = el.textContent.trim();
-        const contentHash = contentText.length + ':' + contentText.substring(0, 10).replace(/\s+/g, '');
+        const contentLength = contentText.length;
+        const contentStart = contentText.substring(0, 15).replace(/\s+/g, '');
+        const contentEnd = contentText.length > 15 ? 
+            contentText.substring(contentText.length - 15).replace(/\s+/g, '') : '';
+        const contentHash = `${contentLength}:${contentStart}:${contentEnd}`;
         return `${type}:${contentHash}`;
     }).join('|');
     fingerprint.push(`content:${contentInfo}`);
+    
+    // Include details about DOM size and structure
+    const domStats = {
+        bodyChildren: document.body.children.length,
+        totalElements: document.querySelectorAll('*').length,
+        forms: document.querySelectorAll('form').length,
+        inputs: document.querySelectorAll('input').length,
+        images: document.querySelectorAll('img').length
+    };
+    fingerprint.push(`stats:${JSON.stringify(domStats)}`);
     
     // Include details about CSS variables and styles that affect layout
     const computedStyle = window.getComputedStyle(document.body);
@@ -215,45 +247,20 @@ function createStateObject(stateId, url, hash, isNewState) {
     };
 }
 
-// Set up DOM mutation observer to detect changes
-function setupMutationObserver() {
-    if (mutationObserver) {
-        mutationObserver.disconnect();
-    }
-    
-    // Configuration for the observer (observe everything)
-    const config = {
-        attributes: true,
-        childList: true,
-        subtree: true,
-        characterData: true
-    };
-    
-    // Create an observer instance
-    mutationObserver = new MutationObserver(mutations => {
-        if (!isRecording) return;
-        
-        console.log(`[DOM Tracker] DOM changed: ${mutations.length} mutations`);
-        
-        // Create a new state for any DOM change
-        processMutations(mutations);
-    });
-    
-    // Start observing the entire document
-    mutationObserver.observe(document.documentElement, config);
-    
-    return mutationObserver;
-}
-
 // Process mutations and create a new state with debouncing
 function processMutations(mutations) {
     if (!isRecording) return;
     
     const now = Date.now();
     
-    // Skip if we're already processing mutations or if it's too soon
-    if (processingMutations || (now - lastMutationTime < 500)) {
-        console.log('[DOM Tracker] Skipping mutation processing - debounced');
+    // Keep a short debounce time for responsiveness
+    if (processingMutations || (now - lastMutationTime < 100)) {
+        console.log('[DOM Tracker] Queuing mutation processing - fast debounce');
+        
+        // Queue another check if we're not already processing
+        if (!processingMutations) {
+            setTimeout(() => processMutations(mutations), 50);
+        }
         return;
     }
     
@@ -261,69 +268,138 @@ function processMutations(mutations) {
     processingMutations = true;
     lastMutationTime = now;
     
-    // Use setTimeout to process after a short delay, allowing batching of multiple mutations
-    setTimeout(() => {
-        try {
-            console.log(`[DOM Tracker] Processing mutations after debounce`);
+    // Process immediately for responsive detection
+    try {
+        console.log(`[DOM Tracker] Processing mutations - ${mutations.length} changes`);
+        
+        // Filter meaningful mutations
+        const significantMutations = mutations.filter(mutation => {
+            // Always consider childList changes significant
+            if (mutation.type === 'childList') return true;
             
-            // Calculate current hash
-            const currentHash = calculateDomHash();
+            // For attribute changes, only consider certain attributes significant
+            if (mutation.type === 'attributes') {
+                const significantAttrs = ['src', 'href', 'class', 'id', 'style', 'value', 'checked', 'selected', 'disabled'];
+                return significantAttrs.includes(mutation.attributeName);
+            }
             
-            console.log(`[DOM Tracker] Current hash: ${currentHash}, Last hash: ${lastDomHash}`);
-            
-            // Only create a new state if the hash is different AND we haven't seen it before
-            if (currentHash !== lastDomHash) {
-                console.log(`[DOM Tracker] DOM hash changed: ${lastDomHash} -> ${currentHash}`);
-                
-                // Check if we've already seen this hash in this session
-                if (previousStates[currentHash]) {
-                    console.log(`[DOM Tracker] DOM returned to previously seen state with hash: ${currentHash}, stateId: ${previousStates[currentHash]}`);
-                    lastDomHash = currentHash;
-                    processingMutations = false;
-                    return;
-                }
-                
-                const { state, isNewState } = createDomState();
-                state.hash = currentHash; // Ensure hash is consistent
-                
-                // Send the state to background script
-                sendToBackground('recordState', {
-                    state: state
-                })
-                .then(response => {
-                    console.log(`[DOM Tracker] Background response for recordState:`, response);
-                    
-                    if (response && response.isDuplicate) {
-                        console.log(`[DOM Tracker] *** DUPLICATE DETECTED BY BACKGROUND *** Hash ${currentHash} already exists as ${response.stateId}`);
-                        previousStates[currentHash] = response.stateId;
-                    } 
-                    else if (response && response.stateId) {
-                        // Update our map with the real stateId from the server
-                        previousStates[currentHash] = response.stateId;
-                        currentStateId = response.stateId;
-                        console.log(`[DOM Tracker] Added to previousStates: ${currentHash} -> ${response.stateId}`);
-                    } else {
-                        console.warn('[DOM Tracker] Did not receive valid stateId from background script');
-                    }
-                    
-                    // Always update lastDomHash to the current hash
-                    lastDomHash = currentHash;
-                })
-                .catch(error => {
-                    console.error('[DOM Tracker] Error getting stateId from background:', error);
-                });
-                
-                console.log(`[DOM Tracker] Created new state due to DOM change with hash: ${currentHash}`);
-            } else {
-                console.log('[DOM Tracker] DOM changed but hash remains the same');
-                }
-            } catch (error) {
-            console.error('[DOM Tracker] Error processing mutations:', error);
-        } finally {
-            // Clear debounce flag
+            // Consider all characterData changes significant
+            return mutation.type === 'characterData';
+        });
+        
+        if (significantMutations.length === 0) {
+            console.log('[DOM Tracker] No significant mutations found, skipping state creation');
             processingMutations = false;
+            return;
         }
-    }, 300); // Short delay to allow multiple mutations to batch
+        
+        // Calculate current hash
+        const currentHash = calculateDomHash();
+        
+        console.log(`[DOM Tracker] Current hash: ${currentHash}, Last hash: ${lastDomHash}`);
+        console.log(`[DOM Tracker] Known states:`, Object.keys(previousStates));
+        
+        // Only create a new state if the hash is different from the last one
+        if (currentHash !== lastDomHash) {
+            console.log(`[DOM Tracker] DOM hash changed due to mutation: ${lastDomHash} -> ${currentHash}`);
+            
+            // CRITICAL: Check if we've already seen this hash during this session
+            if (previousStates[currentHash]) {
+                console.log(`[DOM Tracker] *** DUPLICATE STATE DETECTED *** DOM returned to previously seen state with hash: ${currentHash}, reusing stateId: ${previousStates[currentHash]}`);
+                
+                // Just update the last hash but don't create a new state
+                lastDomHash = currentHash;
+                currentStateId = previousStates[currentHash];
+                processingMutations = false;
+                return;
+            }
+            
+            // This is a genuinely new state we haven't seen before
+            const { state, isNewState } = createDomState();
+            state.hash = currentHash; // Ensure hash is consistent
+            
+            // Add information about what changed
+            state.mutationInfo = {
+                count: significantMutations.length,
+                types: [...new Set(significantMutations.map(m => m.type))],
+                timestamp: now
+            };
+            
+            // Wait for the lock to be released if there's a pending state creation
+            // This helps prevent race conditions where multiple states are created at once
+            sendToBackground('recordState', {
+                state: state
+            })
+            .then(response => {
+                console.log(`[DOM Tracker] Background response for recordState:`, response);
+                
+                if (response && response.isDuplicate) {
+                    console.log(`[DOM Tracker] *** DUPLICATE DETECTED BY BACKGROUND *** Hash ${currentHash} already exists as ${response.stateId}`);
+                    previousStates[currentHash] = response.stateId;
+                    currentStateId = response.stateId;
+                } 
+                else if (response && response.stateId) {
+                    // Update our map with the real stateId from the server
+                    previousStates[currentHash] = response.stateId;
+                    currentStateId = response.stateId;
+                    console.log(`[DOM Tracker] Added to previousStates: ${currentHash} -> ${response.stateId}`);
+                } else {
+                    console.warn('[DOM Tracker] Did not receive valid stateId from background script');
+                }
+                
+                // Only update lastDomHash to the current hash after we've processed the state
+                lastDomHash = currentHash;
+            })
+            .catch(error => {
+                console.error('[DOM Tracker] Error getting stateId from background:', error);
+            });
+            
+            console.log(`[DOM Tracker] Created state due to DOM change with hash: ${currentHash}`);
+        } else {
+            console.log('[DOM Tracker] DOM changed but hash remains the same, no new state needed');
+        }
+    } catch (error) {
+        console.error('[DOM Tracker] Error processing mutations:', error);
+    } finally {
+        // Clear debounce flag
+        processingMutations = false;
+    }
+}
+
+// Set up DOM mutation observer to detect changes
+function setupMutationObserver() {
+    if (mutationObserver) {
+        mutationObserver.disconnect();
+    }
+    
+    // Configuration for the observer (observe everything with higher sensitivity)
+    const config = {
+        attributes: true,
+        childList: true,
+        subtree: true,
+        characterData: true,
+        attributeOldValue: true,  // Capture old attribute values
+        characterDataOldValue: true  // Capture old text values
+    };
+    
+    // Create an observer instance with immediate processing
+    mutationObserver = new MutationObserver(mutations => {
+        if (!isRecording) return;
+        
+        if (mutations.length > 0) {
+            console.log(`[DOM Tracker] DOM changed: ${mutations.length} mutations detected`);
+            
+            // Start processing immediately
+            processMutations(mutations);
+        }
+    });
+    
+    // Start observing the entire document with the configured parameters
+    mutationObserver.observe(document.documentElement, config);
+    
+    console.log('[DOM Tracker] Mutation observer set up with enhanced sensitivity');
+    
+    return mutationObserver;
 }
 
 // Set up reload detection

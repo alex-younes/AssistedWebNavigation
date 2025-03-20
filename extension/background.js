@@ -186,7 +186,7 @@ const saveDOMState = async (state) => {
     
     // Print detailed debugging info
     console.log(`[Extension] Request to save state with hash: ${state.hash}`);
-    console.log(`[Extension] Current tracked hashes:`, Object.keys(sessionStateHashes));
+    console.log(`[Extension] Current tracked hashes:`, Object.keys(sessionStateHashes).join(', '));
     
     // Check if this is a navigation, reload or initial load
     const isSpecialEvent = 
@@ -196,6 +196,8 @@ const saveDOMState = async (state) => {
     
     // Check if we've seen this hash before
     const existingStateId = state.hash && sessionStateHashes[state.hash];
+    
+    // CRITICAL STATE HANDLING LOGIC
     
     // For navigation or reload events to already seen pages
     if (isSpecialEvent && existingStateId) {
@@ -235,17 +237,19 @@ const saveDOMState = async (state) => {
       // Increment counter after saving
       sessionStateCounter++;
     }
-    // Normal new DOM change states (not reload or navigation)
+    // Normal DOM change state with existing hash - RETURN DUPLICATE
     else if (existingStateId) {
-      console.log(`[Extension] Regular DOM change with existing hash: ${state.hash}, already saved as state ${existingStateId}`);
+      console.log(`[Extension] *** DUPLICATE PREVENTION *** Regular DOM change with existing hash: ${state.hash}, already saved as state ${existingStateId}`);
       return { 
         success: true, 
         stateId: existingStateId,
         isDuplicate: true
       };
     }
-    // Brand new state for a DOM change
+    // Brand new state hash from a DOM change
     else {
+      console.log(`[Extension] New DOM change with previously unseen hash: ${state.hash}`);
+      
       state.stateNumber = sessionStateCounter;
       state.stateId = `state_${sessionStateCounter}`;
       state.isNewState = true;
@@ -265,16 +269,16 @@ const saveDOMState = async (state) => {
     
     // Send DOM state to backend
     const response = await fetch(`${API_BASE_URL}/extension/recorder/saveDOMState`, {
-            method: 'POST',
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
+      body: JSON.stringify({
         state,
-              sessionId: currentSessionId,
+        sessionId: currentSessionId,
         userId
-            })
-        });
-        
-        if (!response.ok) {
+      })
+    });
+    
+    if (!response.ok) {
       throw new Error(`Failed to save DOM state: ${response.status}`);
     }
     
@@ -282,7 +286,7 @@ const saveDOMState = async (state) => {
     
     // Return the assigned state ID so content script can track it
     return { success: true, stateId: state.stateId };
-    } catch (error) {
+  } catch (error) {
     console.error('[Extension] Error saving DOM state:', error);
     return { success: false, error: error.message };
   }

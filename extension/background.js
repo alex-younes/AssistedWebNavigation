@@ -188,31 +188,80 @@ const saveDOMState = async (state) => {
     console.log(`[Extension] Request to save state with hash: ${state.hash}`);
     console.log(`[Extension] Current tracked hashes:`, Object.keys(sessionStateHashes));
     
-    // Check if we've already seen this hash in this session
-    if (state.hash && sessionStateHashes[state.hash]) {
-      console.log(`[Extension] *** DUPLICATE PREVENTION *** Hash ${state.hash} already saved as state ${sessionStateHashes[state.hash]}`);
+    // Check if this is a navigation, reload or initial load
+    const isSpecialEvent = 
+      state.isNavigation === true || 
+      state.isReload === true || 
+      state.isInitial === true;
+    
+    // Check if we've seen this hash before
+    const existingStateId = state.hash && sessionStateHashes[state.hash];
+    
+    // For navigation or reload events to already seen pages
+    if (isSpecialEvent && existingStateId) {
+      const eventType = state.isNavigation ? 'navigation' : 
+                        state.isReload ? 'reload' : 
+                        'initial load';
+      
+      console.log(`[Extension] Special event (${eventType}) with EXISTING hash: ${state.hash}, reusing state ID: ${existingStateId}`);
+      
+      // Reuse the existing state ID but mark isNewState as false
+      state.stateId = existingStateId;
+      state.stateNumber = parseInt(existingStateId.split('_')[1]);
+      state.isNewState = false;
+      
+      console.log(`[Extension] Saving REPEAT ${eventType.toUpperCase()} DOM state with reused ID: ${state.stateId} (hash: ${state.hash})`);
+    }
+    // For initial page visits or navigations to new pages
+    else if (isSpecialEvent) {
+      const eventType = state.isNavigation ? 'navigation' : 
+                        state.isReload ? 'reload' : 
+                        'initial load';
+      
+      console.log(`[Extension] Special event (${eventType}) with NEW hash: ${state.hash}, creating new state ID`);
+      
+      // Create a new state ID for this hash
+      state.stateNumber = sessionStateCounter;
+      state.stateId = `state_${sessionStateCounter}`;
+      state.isNewState = true;
+      
+      // Store the hash mapping and increment counter
+      if (state.hash) {
+        sessionStateHashes[state.hash] = state.stateId;
+        console.log(`[Extension] Adding new hash to tracking: ${state.hash} -> ${state.stateId}`);
+        console.log(`[Extension] Total hashes in session: ${Object.keys(sessionStateHashes).length}`);
+      }
+      
+      // Increment counter after saving
+      sessionStateCounter++;
+    }
+    // Normal new DOM change states (not reload or navigation)
+    else if (existingStateId) {
+      console.log(`[Extension] Regular DOM change with existing hash: ${state.hash}, already saved as state ${existingStateId}`);
       return { 
         success: true, 
-        stateId: sessionStateHashes[state.hash],
+        stateId: existingStateId,
         isDuplicate: true
       };
     }
-    
-    // Override the state number and ID to ensure sequential numbering
-    state.stateNumber = sessionStateCounter;
-    state.stateId = `state_${sessionStateCounter}`;
-    
-    console.log(`[Extension] Saving NEW DOM state: ${state.stateId} (#${sessionStateCounter}) with hash: ${state.hash}`);
-    
-    // Store the hash mapping BEFORE incrementing counter
-    if (state.hash) {
-      sessionStateHashes[state.hash] = state.stateId;
-      console.log(`[Extension] Adding hash to tracking: ${state.hash} -> ${state.stateId}`);
-      console.log(`[Extension] Total hashes in session: ${Object.keys(sessionStateHashes).length}`);
+    // Brand new state for a DOM change
+    else {
+      state.stateNumber = sessionStateCounter;
+      state.stateId = `state_${sessionStateCounter}`;
+      state.isNewState = true;
+      
+      console.log(`[Extension] Saving NEW DOM state: ${state.stateId} (#${sessionStateCounter}) with hash: ${state.hash}`);
+      
+      // Store the hash mapping
+      if (state.hash) {
+        sessionStateHashes[state.hash] = state.stateId;
+        console.log(`[Extension] Adding hash to tracking: ${state.hash} -> ${state.stateId}`);
+        console.log(`[Extension] Total hashes in session: ${Object.keys(sessionStateHashes).length}`);
+      }
+      
+      // Increment counter after saving
+      sessionStateCounter++;
     }
-    
-    // Increment counter after saving
-    sessionStateCounter++;
     
     // Send DOM state to backend
     const response = await fetch(`${API_BASE_URL}/extension/recorder/saveDOMState`, {
@@ -229,7 +278,7 @@ const saveDOMState = async (state) => {
       throw new Error(`Failed to save DOM state: ${response.status}`);
     }
     
-    console.log(`[Extension] Successfully saved DOM state: ${state.stateId}`);
+    console.log(`[Extension] Successfully saved DOM state: ${state.stateId} (isNewState: ${state.isNewState})`);
     
     // Return the assigned state ID so content script can track it
     return { success: true, stateId: state.stateId };
@@ -251,6 +300,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   try {
     console.log('[Extension] Received message:', message.action);
+    console.log('[Extension] Message details:', message); // Log full message for debugging
     
     // If message is from a content script in a tab, update the recordingTabId
     if (sender.tab && recordingStatus === 'recording') {
@@ -303,6 +353,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         (async () => {
           try {
             const state = message.state;
+            
+            // Transfer special event flags from message to state if they exist
+            if (message.isNavigation === true) state.isNavigation = true;
+            if (message.isReload === true) state.isReload = true;
+            if (message.isInitial === true) state.isInitial = true;
+            
             const result = await saveDOMState(state);
             sendResponse(result);
           } catch (error) {

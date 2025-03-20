@@ -171,17 +171,16 @@ function isElementVisible(element) {
 function createDomState() {
     const url = window.location.href;
     const hash = calculateDomHash();
-    const isNewState = true; // Always create a new state for now
     
-    // Create a simple state ID - background script will replace with proper sequential ID
+    // Default to new state, but background script will determine if it's really new based on hash
+    const isNewState = true; 
+    
+    // Create a simple state ID - background script will replace with proper sequential ID or reuse existing
     const stateId = 'state_temp';
-    console.log(`[DOM Tracker] Creating NEW state with hash: ${hash}`);
+    console.log(`[DOM Tracker] Creating state with hash: ${hash}`);
     
     const state = createStateObject(stateId, url, hash, isNewState);
     currentStateId = stateId; // This will be replaced by background script's ID
-    
-    // Note: We don't store in previousStates here anymore - we'll do it after
-    // getting the real state ID from the background script
     
     return { state, isNewState };
 }
@@ -271,7 +270,6 @@ function processMutations(mutations) {
             const currentHash = calculateDomHash();
             
             console.log(`[DOM Tracker] Current hash: ${currentHash}, Last hash: ${lastDomHash}`);
-            console.log(`[DOM Tracker] Known states:`, previousStates);
             
             // Only create a new state if the hash is different AND we haven't seen it before
             if (currentHash !== lastDomHash) {
@@ -288,7 +286,7 @@ function processMutations(mutations) {
                 const { state, isNewState } = createDomState();
                 state.hash = currentHash; // Ensure hash is consistent
                 
-                // Send the state to background script to check for duplicates and get real stateId
+                // Send the state to background script
                 sendToBackground('recordState', {
                     state: state
                 })
@@ -328,6 +326,28 @@ function processMutations(mutations) {
     }, 300); // Short delay to allow multiple mutations to batch
 }
 
+// Set up reload detection
+function setupReloadDetection() {
+    // Add a session storage flag to detect reloads
+    if (sessionStorage.getItem('pageLoadCount')) {
+        // If pageLoadCount exists, this is a reload or back/forward navigation
+        const count = parseInt(sessionStorage.getItem('pageLoadCount') || '0');
+        sessionStorage.setItem('pageLoadCount', (count + 1).toString());
+        sessionStorage.setItem('isReload', 'true');
+        console.log('[DOM Tracker] Page reload detected (load count: ' + (count + 1) + ')');
+    } else {
+        // First time loading this page
+        sessionStorage.setItem('pageLoadCount', '1');
+        sessionStorage.setItem('isReload', 'false');
+        console.log('[DOM Tracker] First page load detected');
+    }
+    
+    // Clear reload flag on unload to help detect back/forward navigation
+    window.addEventListener('beforeunload', () => {
+        sessionStorage.setItem('lastPageUrl', window.location.href);
+    });
+}
+
 // Track URL/page changes
 function setupNavigationTracking() {
     // Listen for URL changes
@@ -350,65 +370,58 @@ function setupNavigationTracking() {
         console.log('[DOM Tracker] Navigation detected (replaceState)');
         handleNavigation();
     };
+}
+
+// Handle navigation events
+function handleNavigation() {
+    if (!isRecording) return;
     
-    // Handle navigation events
-    function handleNavigation() {
-        if (!isRecording) return;
-        
-        const url = window.location.href;
-        console.log(`[DOM Tracker] Page changed to: ${url}`);
-        
-        // Reset hash
-        lastDomHash = null;
-        
-        // Clear previousStates when navigating to a new page
-        console.log('[DOM Tracker] Clearing previousStates for new page');
-        previousStates = {};
-        
-        // Create a new state for the new page
-        setTimeout(() => {
-            try {
-                // Calculate hash once and reuse it
-                const currentHash = calculateDomHash();
-                console.log(`[DOM Tracker] Navigation state hash: ${currentHash}`);
+    const url = window.location.href;
+    console.log(`[DOM Tracker] Page changed to: ${url}`);
+    
+    // Reset hash for this new page load
+    lastDomHash = null;
+    
+    // Create a new state for the new page
+    setTimeout(() => {
+        try {
+            // Calculate hash once and reuse it
+            const currentHash = calculateDomHash();
+            console.log(`[DOM Tracker] Navigation state hash: ${currentHash}`);
+            
+            const { state, isNewState } = createDomState();
+            state.hash = currentHash; // Ensure hash is consistent
+            state.isNavigation = true; // Mark this as a navigation event
+            
+            // This is critical - send the isNavigation flag at the top level of the message
+            sendToBackground('recordState', {
+                state: state,
+                isNavigation: true
+            })
+            .then(response => {
+                console.log(`[DOM Tracker] Background response for navigation state:`, response);
                 
-                const { state, isNewState } = createDomState();
-                state.hash = currentHash; // Ensure hash is consistent
-                
-                // Send the state to background with navigation flag
-                sendToBackground('recordState', {
-                    state: state,
-                    isNavigation: true
-                })
-                .then(response => {
-                    console.log(`[DOM Tracker] Background response for navigation state:`, response);
-                    
-                    if (response && response.isDuplicate) {
-                        console.log(`[DOM Tracker] *** DUPLICATE NAVIGATION STATE DETECTED *** Hash ${currentHash} already exists as ${response.stateId}`);
-                        previousStates[currentHash] = response.stateId;
-                    }
-                    else if (response && response.stateId) {
-                        // Update our map with the real stateId from the server
-                        previousStates[currentHash] = response.stateId;
-                        currentStateId = response.stateId;
-                        console.log(`[DOM Tracker] Added navigation state to previousStates: ${currentHash} -> ${response.stateId}`);
-                    } else {
-                        console.warn('[DOM Tracker] Did not receive valid stateId from background script for navigation');
-                    }
+                if (response && response.stateId) {
+                    // Update our map with the real stateId from the server
+                    previousStates[currentHash] = response.stateId;
+                    currentStateId = response.stateId;
+                    console.log(`[DOM Tracker] Added navigation state to previousStates: ${currentHash} -> ${response.stateId}`);
                     
                     // Always update lastDomHash to the current hash
                     lastDomHash = currentHash;
-                })
-                .catch(error => {
-                    console.error('[DOM Tracker] Error getting stateId for navigation state:', error);
-                });
-                
-                console.log(`[DOM Tracker] Created new state after navigation with hash: ${currentHash}`);
-            } catch (error) {
-                console.error('[DOM Tracker] Error handling navigation state:', error);
-            }
-        }, 500); // Short delay to allow page to settle
-    }
+                } else {
+                    console.warn('[DOM Tracker] Did not receive valid stateId from background script for navigation');
+                }
+            })
+            .catch(error => {
+                console.error('[DOM Tracker] Error getting stateId for navigation state:', error);
+            });
+            
+            console.log(`[DOM Tracker] Created state after navigation with hash: ${currentHash}`);
+        } catch (error) {
+            console.error('[DOM Tracker] Error handling navigation state:', error);
+        }
+    }, 500); // Short delay to allow page to settle
 }
 
 // Start recording
@@ -483,6 +496,9 @@ function stopRecording() {
 function initialize() {
     console.log('[DOM Tracker] Content script initializing...');
     
+    // Set up reload detection
+    setupReloadDetection();
+    
     // Check if we should already be recording
     chrome.runtime.sendMessage({ action: 'getStatus' }, response => {
         console.log('[DOM Tracker] Got status from background:', response);
@@ -501,37 +517,52 @@ function initialize() {
             const currentHash = calculateDomHash();
             console.log(`[DOM Tracker] Page load state hash: ${currentHash}`);
             
+            // Check if this is a reload
+            const isReload = sessionStorage.getItem('isReload') === 'true';
+            
             // Capture initial page state
             const { state, isNewState } = createDomState();
             state.hash = currentHash; // Ensure hash is consistent
             
-            // Send initial state and get the real stateId back
+            // Mark the state based on the load type
+            if (isReload) {
+                state.isReload = true;
+                console.log('[DOM Tracker] Setting isReload flag for state');
+            } else {
+                state.isInitial = true;
+                console.log('[DOM Tracker] Setting isInitial flag for state');
+            }
+            
+            // IMPORTANT: Pass the flags at the top level of the message
             sendToBackground('recordState', {
                 state: state,
-                isInitial: true
+                isInitial: !isReload,
+                isReload: isReload
             })
             .then(response => {
                 console.log(`[DOM Tracker] Background response for page load state:`, response);
                 
-                if (response && response.isDuplicate) {
-                    console.log(`[DOM Tracker] *** DUPLICATE PAGE LOAD STATE DETECTED *** Hash ${currentHash} already exists as ${response.stateId}`);
-                    previousStates[currentHash] = response.stateId;
-                }
-                else if (response && response.stateId) {
+                if (response && response.stateId) {
                     // Update our map with the real stateId from the server
                     previousStates[currentHash] = response.stateId;
                     currentStateId = response.stateId;
                     console.log(`[DOM Tracker] Updated page load state tracking with server-assigned ID: ${response.stateId}`);
+                    
+                    // Always update lastDomHash to the current hash
+                    lastDomHash = currentHash;
+                    
+                    // Reset the reload flag now that we've handled it
+                    if (isReload) {
+                        sessionStorage.setItem('isReload', 'false');
+                    }
                 }
-                
-                // Always update lastDomHash to the current hash
-                lastDomHash = currentHash;
             })
             .catch(error => {
                 console.error('[DOM Tracker] Error getting stateId for page load state:', error);
             });
             
-            console.log(`[DOM Tracker] Page load state created with hash: ${currentHash}`);
+            const loadType = isReload ? "RELOAD" : "INITIAL LOAD";
+            console.log(`[DOM Tracker] Page ${loadType} state created with hash: ${currentHash}`);
         }
     });
 }

@@ -1,12 +1,13 @@
-# Web Interaction Recorder - Browser Extension
+# DOM State Tracker - Browser Extension
 
-This browser extension allows you to record user interactions on web pages and analyze DOM structures. It works in conjunction with the main application to provide a seamless experience for recording and analyzing web interactions.
+This browser extension captures user interactions and DOM state changes on web pages. It focuses on tracking how the DOM changes in response to user actions, providing a clear mapping between interactions and state transitions.
 
-## Features
+## Core Functionality
 
-- Record clicks, form submissions, and other interactions on any web page
-- Capture the DOM structure of web pages for analysis
-- Seamlessly integrate with the main application
+- Records user interactions (clicks, form inputs, etc.) on web pages
+- Tracks DOM state changes triggered by user interactions
+- Creates a sequential record of state transitions
+- Sends data to a backend server for analysis
 
 ## Installation
 
@@ -16,33 +17,49 @@ This browser extension allows you to record user interactions on web pages and a
 
 ## Usage
 
-### Recording Interactions
+### Setting Up
 
-1. Navigate to any web page you want to record
+1. Click the extension icon in the browser toolbar
+2. Enter your backend server IP address and port (default: localhost:3001)
+3. Click "Save Configuration" to connect to the backend
+
+### Recording Interactions and States
+
+1. Navigate to the web page you want to analyze
 2. Click the extension icon in the toolbar
-3. Click "Start Recording" to begin capturing interactions
-4. Interact with the page normally
-5. Click "Stop Recording" when you're done
-6. View the recorded interactions in the main application
+3. Click "Start Recording" to begin tracking interactions and state changes
+4. Interact with the page normally (click buttons, fill forms, etc.)
+5. Notice the extension keeps track of interactions and duration
+6. Click "Stop Recording" when you're done
 
-### Capturing DOM Structure
+### Viewing Results
 
-1. Navigate to the page you want to analyze
-2. Click the extension icon in the toolbar
-3. Click "Capture DOM Structure"
-4. View the DOM analysis in the main application
+The recorded data is sent to the backend server, where you can:
+1. View the sequence of state transitions
+2. See which interactions triggered each state change
+3. Analyze the DOM structure at each state
 
-## Integration with Main Application
+## How It Works
 
-The extension automatically communicates with the main application. Make sure the backend server is running on `http://localhost:3001` before using the extension.
+1. **Interaction Tracking**: When a user interacts with a page element (clicks, types, etc.), the extension captures the details of that interaction.
 
-In the main application:
-1. Go to the Interaction Recorder
-2. Select "Browser Extension" as the recording mode
-3. Use the dropdown to select and view your recorded sessions
+2. **DOM Mutation Tracking**: After each interaction, the extension uses MutationObserver to detect changes to the DOM.
+
+3. **State Management**: When a significant DOM change is detected, a new "state" is created with a unique fingerprint.
+
+4. **Data Flow**: Interactions and state data are buffered locally and periodically sent to the backend server.
+
+## Server Integration
+
+The extension communicates with a backend server that:
+- Stores user interactions
+- Stores DOM states
+- Maintains session information
+
+Make sure the backend server is running at the configured address before using the extension.
 
 ## Troubleshooting
 
-- If the extension isn't recording, make sure the content script is properly loaded
-- If you see connection errors, check that the backend server is running
-- Try refreshing the page if the extension isn't responding 
+- If the extension can't connect to the server, check your server configuration
+- If interactions aren't being recorded, try refreshing the page
+- Check the browser console for any error messages 

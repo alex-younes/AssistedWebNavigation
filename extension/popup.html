@@ -1,285 +1,282 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>DOM Analyzer Extension</title>
-  <style>
-    body {
-      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-      width: 320px;
-      padding: 16px;
-      margin: 0;
-      background-color: #f7f9fc;
-      color: #333;
-    }
-    .header {
-      text-align: center;
-      margin-bottom: 20px;
-    }
-    h1 {
-      font-size: 18px;
-      margin: 0 0 8px 0;
-      color: #2c3e50;
-    }
-    .subtitle {
-      font-size: 12px;
-      color: #7f8c8d;
-      margin: 0;
-    }
-    .card {
-      background-color: white;
-      border-radius: 8px;
-      padding: 16px;
-      margin-bottom: 16px;
-      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-    }
-    .card-title {
-      font-size: 14px;
-      font-weight: bold;
-      margin-top: 0;
-      margin-bottom: 12px;
-      color: #2c3e50;
-    }
-    .btn {
-      display: block;
-      width: 100%;
-      padding: 10px 16px;
-      border: none;
-      border-radius: 4px;
-      background-color: #3498db;
-      color: white;
-      font-size: 14px;
-      font-weight: 500;
-      cursor: pointer;
-      margin-bottom: 8px;
-      transition: background-color 0.2s;
-    }
-    .btn:hover {
-      background-color: #2980b9;
-    }
-    .btn:active {
-      background-color: #1c6ea4;
-    }
-    .btn:disabled {
-      background-color: #bdc3c7;
-      cursor: not-allowed;
-    }
-    .btn-danger {
-      background-color: #e74c3c;
-    }
-    .btn-danger:hover {
-      background-color: #c0392b;
-    }
-    .btn-danger:active {
-      background-color: #a93226;
-    }
-    .status {
-      background-color: #f8f9fa;
-      border-radius: 4px;
-      padding: 12px;
-      margin-top: 16px;
-      font-size: 13px;
-      color: #555;
-      border-left: 4px solid #3498db;
-    }
-    .status.error {
-      border-left-color: #e74c3c;
-      color: #e74c3c;
-    }
-    .status.success {
-      border-left-color: #2ecc71;
-      color: #27ae60;
-    }
-    .status.recording {
-      border-left-color: #e74c3c;
-      color: #e74c3c;
-    }
-    .status-label {
-      display: inline-block;
-      border-radius: 3px;
-      padding: 3px 6px;
-      font-size: 10px;
-      font-weight: bold;
-      text-transform: uppercase;
-      margin-bottom: 8px;
-    }
-    .status-label.recording {
-      background-color: #e74c3c;
-      color: white;
-    }
-    .status-label.idle {
-      background-color: #95a5a6;
-      color: white;
-    }
-    .status-label.success {
-      background-color: #2ecc71;
-      color: white;
-    }
-    .counter {
-      display: inline-block;
-      background-color: #ecf0f1;
-      padding: 2px 8px;
-      border-radius: 10px;
-      font-size: 12px;
-      margin-left: 10px;
-    }
-    .actions {
-      display: flex;
-      gap: 8px;
-      margin-top: 16px;
-    }
-    .actions .btn {
-      margin-bottom: 0;
-    }
-    .divider {
-      height: 1px;
-      background-color: #ecf0f1;
-      margin: 16px 0;
-    }
-    .settings-input {
-      width: 100%;
-      padding: 8px;
-      border: 1px solid #ddd;
-      border-radius: 4px;
-      margin-bottom: 8px;
-      font-size: 14px;
-    }
-    .settings-input:focus {
-      border-color: #3498db;
-      outline: none;
-    }
-    .settings-save {
-      background-color: #2ecc71;
-    }
-    .settings-save:hover {
-      background-color: #27ae60;
-    }
-    .server-status {
-      display: flex;
-      align-items: center;
-      margin-bottom: 12px;
-      padding: 8px;
-      background: #f8f9fa;
-      border-radius: 4px;
-    }
-    .status-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background-color: #95a5a6;
-      margin-right: 8px;
-    }
-    .status-dot.connected {
-      background-color: #2ecc71;
-    }
-    .status-dot.error {
-      background-color: #e74c3c;
-    }
-    .status-text {
-      font-size: 12px;
-      color: #666;
-    }
-    .button-group {
-      display: flex;
-      gap: 8px;
-      margin-bottom: 8px;
-    }
-    .button-group .btn {
-      flex: 1;
-      margin-bottom: 0;
-    }
-    .btn-secondary {
-      background-color: #7f8c8d;
-    }
-    .btn-secondary:hover {
-      background-color: #6c7a7d;
-    }
-    #openFrontendContainer {
-      margin-top: 12px;
-    }
-    
-    .btn-primary {
-      background-color: #3498db;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 8px;
-    }
-    
-    .btn-primary:hover {
-      background-color: #2980b9;
-    }
-    
-    .btn-icon {
-      font-size: 16px;
-    }
-    
-    #error-message {
-      display: none;
-      background-color: #fee;
-      border-left: 4px solid #e74c3c;
-      color: #e74c3c;
-      padding: 12px;
-      margin-top: 8px;
-      border-radius: 4px;
-      font-size: 13px;
-    }
-  </style>
+    <meta charset="UTF-8">
+    <title>DOM State Tracker</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+            width: 320px;
+            margin: 0;
+            padding: 0;
+            color: #333;
+            background-color: #f5f5f7;
+        }
+        
+        .container {
+            padding: 16px;
+        }
+        
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid #ddd;
+        }
+        
+        .header h1 {
+            font-size: 16px;
+            margin: 0;
+            color: #333;
+        }
+        
+        .status-label {
+            font-size: 12px;
+            font-weight: 500;
+            padding: 4px 8px;
+            border-radius: 12px;
+            color: white;
+        }
+        
+        .status-label.idle {
+            background-color: #8e8e93;
+        }
+        
+        .status-label.recording {
+            background-color: #ff3b30;
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+        
+        .button-group {
+            display: flex;
+            gap: 8px;
+            margin-top: 12px;
+        }
+        
+        button {
+            flex: 1;
+            padding: 8px 16px;
+            border-radius: 4px;
+            border: none;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        
+        #startRecordingBtn {
+            background-color: #007aff;
+            color: white;
+        }
+        
+        #startRecordingBtn:hover:not(:disabled) {
+            background-color: #0062cc;
+        }
+        
+        #stopRecordingBtn {
+            background-color: #ff3b30;
+            color: white;
+        }
+        
+        #stopRecordingBtn:hover:not(:disabled) {
+            background-color: #d9302c;
+        }
+        
+        .stats-card {
+            background-color: white;
+            border-radius: 8px;
+            padding: 12px;
+            margin-top: 16px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+        
+        .stats-card h2 {
+            font-size: 14px;
+            margin: 0 0 8px 0;
+            color: #666;
+        }
+        
+        .stats-row {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            padding: 4px 0;
+        }
+        
+        .stats-label {
+            color: #666;
+            font-weight: 500;
+        }
+        
+        .stats-value {
+            font-weight: 600;
+        }
+        
+        .status {
+            font-size: 12px;
+            padding: 8px;
+            margin-top: 12px;
+            border-radius: 4px;
+            text-align: center;
+        }
+        
+        .status.error {
+            background-color: #ffebeb;
+            color: #cc0000;
+        }
+        
+        .status.success {
+            background-color: #e7f7e7;
+            color: #006600;
+        }
+        
+        .status.info {
+            background-color: #e6f3ff;
+            color: #0066cc;
+        }
+        
+        .error-message {
+            display: none;
+            font-size: 12px;
+            padding: 8px;
+            margin-top: 12px;
+            border-radius: 4px;
+            background-color: #ffebeb;
+            color: #cc0000;
+            text-align: center;
+        }
+        
+        .server-section {
+            margin-top: 16px;
+            padding-top: 16px;
+            border-top: 1px solid #ddd;
+        }
+        
+        .server-section h2 {
+            font-size: 14px;
+            margin: 0 0 8px 0;
+            color: #666;
+        }
+        
+        .server-form {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        
+        .form-row {
+            display: flex;
+            gap: 8px;
+        }
+        
+        .form-row input {
+            flex: 1;
+            padding: 6px 8px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+        
+        .server-form button {
+            background-color: #5ac8fa;
+            color: white;
+            padding: 6px 12px;
+            font-size: 12px;
+        }
+        
+        .server-form button:hover:not(:disabled) {
+            background-color: #4ba3d8;
+        }
+        
+        .server-status {
+            display: flex;
+            align-items: center;
+            margin-top: 8px;
+            gap: 8px;
+            font-size: 12px;
+        }
+        
+        .status-indicator {
+            font-size: 11px;
+            padding: 2px 6px;
+            border-radius: 10px;
+        }
+        
+        .status-indicator.connected {
+            background-color: #36cf58;
+            color: white;
+        }
+        
+        .status-indicator.disconnected {
+            background-color: #8e8e93;
+            color: white;
+        }
+        
+        .status-indicator.error {
+            background-color: #ff3b30;
+            color: white;
+        }
+    </style>
 </head>
 <body>
-  <div class="header">
-    <h1>Web Interaction Recorder</h1>
-    <p class="subtitle">Record user interactions on the current tab</p>
-  </div>
-  
-  <div class="card" id="statusCard">
-    <div class="card-title">
-      <span>Status</span>
-      <span id="statusLabel" class="status-label idle">Idle</span>
+    <div class="container">
+        <div class="header">
+            <h1>DOM State Tracker</h1>
+            <div id="statusLabel" class="status-label idle">Idle</div>
+        </div>
+        
+        <div class="button-group">
+            <button id="startRecordingBtn">Start Recording</button>
+            <button id="stopRecordingBtn" disabled>Stop Recording</button>
+        </div>
+        
+        <div id="status" class="status" style="display: none;"></div>
+        <div id="error-message" class="error-message"></div>
+        
+        <div id="statsCard" class="stats-card" style="display: none;">
+            <h2>Recording Stats</h2>
+            <div class="stats-row">
+                <span class="stats-label">Session ID:</span>
+                <span id="sessionId" class="stats-value">-</span>
+            </div>
+            <div class="stats-row">
+                <span class="stats-label">Interactions:</span>
+                <span id="interactionCount" class="stats-value">0</span>
+            </div>
+            <div class="stats-row">
+                <span class="stats-label">Duration:</span>
+                <span id="duration" class="stats-value">0s</span>
+            </div>
+        </div>
+        
+        <div class="server-section">
+            <h2>Server Configuration</h2>
+            <form id="serverConfigForm" class="server-form">
+                <div class="form-row">
+                    <input type="text" id="serverIp" placeholder="Server IP" value="localhost" required>
+                    <input type="text" id="serverPort" placeholder="Port" value="3001" required>
+                </div>
+                <button type="submit">Save Configuration</button>
+            </form>
+            <div class="server-status">
+                Status: <span id="serverStatus" class="status-indicator disconnected">Disconnected</span>
+            </div>
+        </div>
     </div>
-    <div id="status" class="status">
-      Ready to analyze or record the current tab.
-    </div>
-    <div id="error-message"></div>
-  </div>
-  
-  <div class="card">
-    <div class="card-title">Recorder Controls</div>
-    <button id="startRecordingBtn" class="btn">Start Recording</button>
-    <button id="stopRecordingBtn" class="btn btn-danger" disabled>Stop Recording</button>
     
-    <div class="divider"></div>
-    
-    <div class="card-title">DOM Analysis</div>
-    <button id="captureBtn" class="btn">Capture DOM Structure</button>
-  </div>
-  
-  <div class="card" id="statsCard" style="display: none;">
-    <div class="card-title">Recording Statistics</div>
-    <div>Session ID: <span id="sessionId">-</span></div>
-    <div>Interactions: <span id="interactionCount">0</span></div>
-    <div>Duration: <span id="duration">0s</span></div>
-  </div>
-  
-  <div class="card">
-    <div class="card-title">Server Settings</div>
-    <div class="server-status" id="serverStatusIndicator">
-      <span class="status-dot"></span>
-      <span class="status-text">Not Connected</span>
-    </div>
-    <input type="text" id="serverIp" class="settings-input" placeholder="Enter server IP:port (e.g., IP:3001)" />
-    <div class="button-group">
-      <button id="testConnectionBtn" class="btn btn-secondary">Test Connection</button>
-      <button id="saveSettingsBtn" class="btn settings-save">Save Settings</button>
-    </div>
-    <div id="openFrontendContainer" style="display: none;">
-      <button id="openFrontendBtn" class="btn btn-primary">
-        <span class="btn-icon">🌐</span>
-        Open Frontend
-      </button>
-    </div>
-    <div id="settingsStatus" class="status" style="display: none;"></div>
-  </div>
-  
-  <script src="popup.js"></script>
+    <script src="popup.js"></script>
 </body>
 </html> 

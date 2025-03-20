@@ -1,16 +1,7 @@
-// Simple in-memory database module
-// This is a placeholder for a real database implementation
-
+// Database module for MongoDB connection and operations
 const mongoose = require('mongoose');
 require('dotenv').config();
 const debug = require('./utils/debug');
-
-// In-memory storage
-const storage = {
-    interactions: [],
-    sessions: [],
-    domCaptures: [] // DOM captures are not yet implemented
-};
 
 // MongoDB connection
 const connectToDatabase = async () => {
@@ -30,10 +21,11 @@ const interactionSchema = new mongoose.Schema({
   userId: { type: String, required: true },
   type: { type: String, required: true },
   timestamp: { type: Date, default: Date.now },
+  stateId: { type: String },
   targetElement: mongoose.Schema.Types.Mixed,
   details: mongoose.Schema.Types.Mixed,
   url: String
-}, { timestamps: true, strict: false });
+}, { timestamps: true });
 
 const sessionSchema = new mongoose.Schema({
   id: { type: String, required: true },
@@ -42,12 +34,6 @@ const sessionSchema = new mongoose.Schema({
   endTime: { type: Date },
   status: { type: String, enum: ['active', 'completed', 'error'], default: 'active' },
   metadata: mongoose.Schema.Types.Mixed
-}, { timestamps: true, strict: false });
-
-const domCaptureSchema = new mongoose.Schema({
-  sessionId: { type: String, required: true },
-  timestamp: { type: Date, default: Date.now },
-  content: { type: String, required: true }
 }, { timestamps: true });
 
 // Define DOM State schema
@@ -63,24 +49,10 @@ const domStateSchema = new mongoose.Schema({
   fingerprint: mongoose.Schema.Types.Mixed
 }, { timestamps: true });
 
-// Define State Transition schema
-const stateTransitionSchema = new mongoose.Schema({
-  sessionId: { type: String, required: true },
-  userId: { type: String, required: true },
-  fromStateId: { type: String },
-  toStateId: { type: String, required: true },
-  timestamp: { type: Date, default: Date.now },
-  transitionType: { type: String },
-  url: { type: String },
-  details: mongoose.Schema.Types.Mixed
-}, { timestamps: true });
-
 // Create models
 const Interaction = mongoose.model('Interaction', interactionSchema);
 const Session = mongoose.model('Session', sessionSchema);
-const DOMCapture = mongoose.model('DOMCapture', domCaptureSchema);
 const DOMState = mongoose.model('DOMState', domStateSchema);
-const StateTransition = mongoose.model('StateTransition', stateTransitionSchema);
 
 // Database operations
 const db = {
@@ -102,9 +74,19 @@ const db = {
     const saved = await doc.save();
     return saved;
   },
+  
+  async saveInteractions(interactions) {
+    if (!interactions || interactions.length === 0) return [];
+    console.log(`[Database] Saving ${interactions.length} interactions`);
+    return await Interaction.insertMany(interactions);
+  },
 
   async getInteractions(query = {}) {
     return await Interaction.find(query).sort({ timestamp: 1 });
+  },
+  
+  async getInteractionsByState(stateId) {
+    return await Interaction.find({ stateId }).sort({ timestamp: 1 });
   },
   
   async deleteInteractions(query = {}) {
@@ -124,6 +106,10 @@ const db = {
     return await Session.find(query);
   },
 
+  async getActiveSession(userId) {
+    return await Session.findOne({ userId, status: 'active' });
+  },
+
   async updateSession(sessionId, update) {
     console.log('[Database] Updating session:', sessionId);
     return await Session.findOneAndUpdate(
@@ -133,16 +119,7 @@ const db = {
     );
   },
 
-  async saveDOMCapture(capture) {
-    const doc = new DOMCapture(capture);
-    return await doc.save();
-  },
-
-  async getDOMCaptures(query = {}) {
-    return await DOMCapture.find(query).sort({ timestamp: 1 });
-  },
-
-  // Add method to save DOM state
+  // DOM state operations
   async saveDOMState(state) {
     console.log('[Database] Saving DOM state:', state.stateId);
     const doc = new DOMState(state);
@@ -150,36 +127,24 @@ const db = {
     return saved;
   },
   
-  // Add method to save multiple DOM states at once
   async saveDOMStates(states) {
+    if (!states || states.length === 0) return [];
     console.log(`[Database] Saving ${states.length} DOM states`);
-    const result = await DOMState.insertMany(states);
-    return result;
+    return await DOMState.insertMany(states);
   },
   
-  // Add method to get DOM states for a session
   async getDOMStates(query = {}) {
     return await DOMState.find(query).sort({ timestamp: 1 });
   },
-
-  // Add method to save state transition
-  async saveStateTransition(transition) {
-    console.log('[Database] Saving state transition:', transition.toStateId);
-    const doc = new StateTransition(transition);
-    const saved = await doc.save();
-    return saved;
+  
+  async getDOMStateById(stateId) {
+    return await DOMState.findOne({ stateId });
   },
   
-  // Add method to save multiple state transitions at once
-  async saveStateTransitions(transitions) {
-    console.log(`[Database] Saving ${transitions.length} state transitions`);
-    const result = await StateTransition.insertMany(transitions);
-    return result;
-  },
-  
-  // Add method to get state transitions for a session
-  async getStateTransitions(query = {}) {
-    return await StateTransition.find(query).sort({ timestamp: 1 });
+  async getStateSequence(sessionId) {
+    return await DOMState.find({ sessionId })
+      .sort({ timestamp: 1 })
+      .select('stateId url timestamp');
   }
 };
 

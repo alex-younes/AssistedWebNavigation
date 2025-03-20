@@ -7,7 +7,7 @@
 const db = require('../database');
 const debug = require('../utils/debug');
 
-// In-memory recording status tracking (ephemeral)
+// In-memory recording status tracking
 const activeRecordings = new Map();
 const activeConnections = new Map();
 
@@ -23,7 +23,6 @@ class ServiceManager {
     if (this.initialized) return;
     
     try {
-      // Perform any initialization tasks
       console.log('[ServiceManager] Initializing...');
       
       // Load active sessions from database
@@ -66,23 +65,6 @@ class ServiceManager {
   }
 
   /**
-   * Unregister an extension connection
-   * @param {string} connectionId - Connection ID
-   */
-  unregisterConnection(connectionId) {
-    if (!connectionId) return false;
-    
-    if (activeConnections.has(connectionId)) {
-      const connection = activeConnections.get(connectionId);
-      console.log(`[ServiceManager] Unregistered connection ${connectionId} for user ${connection.userId}`);
-      activeConnections.delete(connectionId);
-      return true;
-    }
-    
-    return false;
-  }
-
-  /**
    * Start recording for a user
    * @param {string} userId - User ID
    * @param {string} sessionId - Session ID
@@ -106,14 +88,14 @@ class ServiceManager {
       // Track in memory
       activeRecordings.set(sessionId, {
         userId,
-        startTime: new Date(),
+        startTime: session.startTime,
         status: 'active'
       });
       
       console.log(`[ServiceManager] Started recording session ${sessionId} for user ${userId}`);
       return session;
     } catch (error) {
-      console.error(`[ServiceManager] Error starting recording:`, error);
+      console.error(`[ServiceManager] Error starting recording for ${userId}:`, error);
       throw error;
     }
   }
@@ -129,29 +111,20 @@ class ServiceManager {
     }
     
     try {
-      // Get interaction count
-      const interactions = await db.getInteractions({ sessionId });
-      const interactionCount = interactions?.length || 0;
-      
       // Update session in database
       const session = await db.updateSession(sessionId, {
         endTime: new Date(),
         status: 'completed',
-        metadata: { 
-          reason,
-          interactionCount
-        }
+        'metadata.endReason': reason
       });
       
-      // Update in memory tracking
-      if (activeRecordings.has(sessionId)) {
-        activeRecordings.delete(sessionId);
-      }
+      // Remove from in-memory tracking
+      activeRecordings.delete(sessionId);
       
-      console.log(`[ServiceManager] Stopped recording session ${sessionId} with ${interactionCount} interactions`);
-      return { session, interactionCount };
+      console.log(`[ServiceManager] Stopped recording session ${sessionId}, reason: ${reason}`);
+      return session;
     } catch (error) {
-      console.error(`[ServiceManager] Error stopping recording:`, error);
+      console.error(`[ServiceManager] Error stopping recording for ${sessionId}:`, error);
       throw error;
     }
   }
@@ -163,124 +136,126 @@ class ServiceManager {
   async isSessionActive(sessionId) {
     if (!sessionId) return false;
     
-    // First check in-memory cache
+    // Check in-memory first for performance
     if (activeRecordings.has(sessionId)) {
       return activeRecordings.get(sessionId).status === 'active';
     }
     
-    // Then check database
+    // Fall back to database
     try {
       const session = await db.getSessions({ id: sessionId });
-      console.log(`[ServiceManager] Checking if session ${sessionId} is active. Result:`, session);
-      
-      // If the result is a single document (returned when querying by id)
-      if (session && !Array.isArray(session)) {
-        if (session.status === 'active') {
-          // Update in-memory cache
-          activeRecordings.set(sessionId, {
-            userId: session.userId,
-            startTime: session.startTime,
-            status: 'active'
-          });
-          return true;
-        }
-        return false;
-      }
-      
-      // If the result is an array (multiple sessions)
-      if (Array.isArray(session) && session.length > 0) {
-        const activeSession = session.find(s => s.status === 'active');
-        if (activeSession) {
-          // Update in-memory cache
-          activeRecordings.set(sessionId, {
-            userId: activeSession.userId,
-            startTime: activeSession.startTime,
-            status: 'active'
-          });
-          return true;
-        }
-      }
-      
-      return false;
+      return session && session.status === 'active';
     } catch (error) {
-      console.error(`[ServiceManager] Error checking session:`, error);
+      console.error(`[ServiceManager] Error checking session ${sessionId} status:`, error);
       return false;
     }
   }
 
   /**
-   * Save interactions to the database
-   * @param {Array} interactions - Array of interactions
+   * Get status for a user
+   * @param {string} userId - User ID
+   */
+  async getUserStatus(userId) {
+    if (!userId) return null;
+    
+    try {
+      // Find user's active session
+      const session = await db.getActiveSession(userId);
+      
+      return {
+        status: session ? 'recording' : 'idle',
+        userId,
+        currentSession: session ? session.id : null
+      };
+    } catch (error) {
+      console.error(`[ServiceManager] Error getting user status for ${userId}:`, error);
+      return {
+        status: 'idle',
+        userId,
+        currentSession: null
+      };
+    }
+  }
+
+  /**
+   * Save interactions to database
+   * @param {Array} interactions - Array of interaction objects
    * @param {string} sessionId - Session ID
    * @param {string} userId - User ID
    */
   async saveInteractions(interactions, sessionId, userId) {
-    if (!interactions || !sessionId || !userId) {
-      throw new Error('Interactions, Session ID, and User ID are required');
+    if (!interactions || interactions.length === 0) {
+      return { success: true, count: 0 };
     }
     
-    console.log(`[ServiceManager] Saving ${interactions.length} interactions for session ${sessionId}`);
-    
-    // First check if session is active
-    const isActive = await this.isSessionActive(sessionId);
-    console.log(`[ServiceManager] Session ${sessionId} is active: ${isActive}`);
-    
-    if (!isActive) {
-      // Try to create the session if it doesn't exist
-      try {
-        console.log(`[ServiceManager] Session ${sessionId} not active, creating new session`);
-        await this.startRecording(userId, sessionId, {
-          startTime: new Date(),
-          autoCreated: true
-        });
-        console.log(`[ServiceManager] Created new session ${sessionId} for user ${userId}`);
-      } catch (sessionCreateError) {
-        console.error(`[ServiceManager] Failed to create session:`, sessionCreateError);
-        throw new Error(`Session ${sessionId} is not active and could not be created`);
-      }
+    if (!sessionId || !userId) {
+      throw new Error('Session ID and User ID are required');
     }
     
     try {
-      const savedInteractions = [];
-      
-      // Process each interaction
-      for (const interaction of interactions) {
-        console.log(`[ServiceManager] Processing interaction: ${interaction.type}`);
-        
-        const formattedInteraction = {
-          ...interaction,
-          sessionId,
-          userId,
-          timestamp: interaction.timestamp || new Date().toISOString()
-        };
-        
-        try {
-          const savedInteraction = await db.saveInteraction(formattedInteraction);
-          console.log(`[ServiceManager] Saved interaction ID: ${savedInteraction._id}`);
-          savedInteractions.push(savedInteraction);
-        } catch (saveError) {
-          console.error(`[ServiceManager] Error saving individual interaction:`, saveError);
-          console.error(`[ServiceManager] Failed interaction data:`, JSON.stringify(formattedInteraction));
-        }
+      // Check if session is active
+      const isActive = await this.isSessionActive(sessionId);
+      if (!isActive) {
+        console.log(`[ServiceManager] Session ${sessionId} is not active, not saving interactions`);
+        return { success: false, error: 'Session not active' };
       }
       
-      console.log(`[ServiceManager] Saved ${savedInteractions.length} interactions for session ${sessionId}`);
+      // Make sure each interaction has session and user IDs
+      const processedInteractions = interactions.map(interaction => ({
+        ...interaction,
+        sessionId,
+        userId
+      }));
       
-      // Get updated count
-      const allInteractions = await db.getInteractions({ sessionId });
-      return { 
-        saved: savedInteractions.length,
-        total: allInteractions.length
-      };
+      // Save to database
+      await db.saveInteractions(processedInteractions);
+      
+      console.log(`[ServiceManager] Saved ${processedInteractions.length} interactions for session ${sessionId}`);
+      return { success: true, count: processedInteractions.length };
     } catch (error) {
-      console.error(`[ServiceManager] Error saving interactions:`, error);
+      console.error(`[ServiceManager] Error saving interactions for ${sessionId}:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Save DOM state to database
+   * @param {Object} state - DOM state object
+   * @param {string} sessionId - Session ID
+   * @param {string} userId - User ID
+   */
+  async saveDOMState(state, sessionId, userId) {
+    if (!state || !sessionId || !userId) {
+      throw new Error('State, Session ID and User ID are required');
+    }
+    
+    try {
+      // Check if session is active
+      const isActive = await this.isSessionActive(sessionId);
+      if (!isActive) {
+        console.log(`[ServiceManager] Session ${sessionId} is not active, not saving state`);
+        return { success: false, error: 'Session not active' };
+      }
+      
+      // Make sure state has session and user IDs
+      const processedState = {
+        ...state,
+        sessionId,
+        userId
+      };
+      
+      // Save to database
+      await db.saveDOMState(processedState);
+      
+      console.log(`[ServiceManager] Saved DOM state ${processedState.stateId} for session ${sessionId}`);
+      return { success: true, stateId: processedState.stateId };
+    } catch (error) {
+      console.error(`[ServiceManager] Error saving DOM state for ${sessionId}:`, error);
       throw error;
     }
   }
 }
 
-// Create singleton instance
-const manager = new ServiceManager();
-
-// Export the singleton
-module.exports = manager; 
+// Create and export singleton instance
+const serviceManager = new ServiceManager();
+module.exports = serviceManager; 

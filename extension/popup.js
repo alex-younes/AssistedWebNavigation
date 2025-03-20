@@ -5,7 +5,7 @@ let serverConfig = {
 };
 
 // Global variables for DOM elements
-let startRecordingBtn, stopRecordingBtn, captureBtn, statusLabel;
+let startRecordingBtn, stopRecordingBtn, statusLabel;
 let statsCard, sessionIdElement, interactionCountElement, durationElement;
 let startTime = null;
 let recordingTimer = null;
@@ -56,9 +56,6 @@ function updateStatus(status, sessionId = null) {
     if (!stopRecordingBtn) {
         stopRecordingBtn = document.getElementById('stopRecordingBtn');
     }
-    if (!captureBtn) {
-        captureBtn = document.getElementById('captureBtn');
-    }
     if (!statusLabel) {
         statusLabel = document.getElementById('statusLabel');
     }
@@ -80,7 +77,6 @@ function updateStatus(status, sessionId = null) {
     if (status === 'recording') {
         startRecordingBtn.disabled = true;
         stopRecordingBtn.disabled = false;
-        captureBtn.disabled = true;
         statusLabel.className = 'status-label recording';
         statusLabel.textContent = 'Recording';
         
@@ -95,7 +91,6 @@ function updateStatus(status, sessionId = null) {
     } else {
         startRecordingBtn.disabled = false;
         stopRecordingBtn.disabled = true;
-        captureBtn.disabled = false;
         statusLabel.className = 'status-label idle';
         statusLabel.textContent = 'Idle';
         
@@ -147,361 +142,213 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Initialize DOM element references
     startRecordingBtn = document.getElementById('startRecordingBtn');
     stopRecordingBtn = document.getElementById('stopRecordingBtn');
-    captureBtn = document.getElementById('captureBtn');
     statusLabel = document.getElementById('statusLabel');
     statsCard = document.getElementById('statsCard');
     sessionIdElement = document.getElementById('sessionId');
     interactionCountElement = document.getElementById('interactionCount');
     durationElement = document.getElementById('duration');
-
-    // Load saved server settings
-    const saved = await chrome.storage.sync.get(['serverConfig']);
-    if (saved.serverConfig) {
-        serverConfig = saved.serverConfig;
-        document.getElementById('serverIp').value = `${serverConfig.ip}:${serverConfig.port}`;
-        // Test connection on load if we have saved settings
-        testServerConnection();
-    }
     
-    // Initialize by checking current recording status
-    chrome.runtime.sendMessage({ action: "getRecordingStatus" }, (response) => {
-      if (response && response.success) {
-        updateStatus(response.status, response.sessionId);
-      }
-    });
-
-    // Listen for status updates from background script
-    chrome.runtime.onMessage.addListener((message) => {
-      if (message.action === 'recordingStatusUpdate') {
-        updateStatus(message.status, message.sessionId);
-      }
-      return false;
-    });
-
-    // DOM capture button
-    captureBtn.addEventListener('click', () => {
-      showStatus('Capturing page...', 'idle');
-      
-      chrome.runtime.sendMessage({ action: "captureDOM" }, (response) => {
-        if (response && response.success) {
-          showStatus('Page captured successfully! View the analysis in the web app.', 'success');
-        } else {
-          showStatus('Error: ' + (response?.error || 'Unknown error'), 'error');
-        }
-      });
-    });
-
-    // Start recording button
-    startRecordingBtn.addEventListener('click', () => {
-      showStatus('Starting recording...', 'idle');
-      
-      startRecording();
-    });
-
-    // Stop recording button
-    stopRecordingBtn.addEventListener('click', () => {
-      showStatus('Stopping recording...', 'idle');
-      
-      chrome.runtime.sendMessage({ action: "stopRecording" }, (response) => {
-        if (response && response.success) {
-          updateStatus('idle');
-          clearInterval(recordingTimer);
-          recordingTimer = null;
-          
-          // Update stats
-          interactionCount = response.interactionCount || 0;
-          updateStatsCard();
-          
-          showStatus(`Recording stopped. Recorded ${interactionCount} interaction(s).`, 'success');
-        } else {
-          showStatus('Error: ' + (response?.error || 'Failed to stop recording'), 'error');
-        }
-      });
-    });
-
-    // Add test connection handler
-    document.getElementById('testConnectionBtn').addEventListener('click', testServerConnection);
-
-    // Update server settings handler
-    document.getElementById('saveSettingsBtn').addEventListener('click', async () => {
-        const input = document.getElementById('serverIp').value.trim();
-        const statusEl = document.getElementById('settingsStatus');
-        const statusDot = document.querySelector('.status-dot');
-        const statusText = document.querySelector('.status-text');
-        const openFrontendContainer = document.getElementById('openFrontendContainer');
-        
-        try {
-            // Validate input format (IP:PORT or domain:PORT)
-            const [ip, port] = input.split(':');
-            if (!ip || !port) {
-                throw new Error('Please enter the server address in format: IP:PORT or domain:PORT');
-            }
+    // Check server configuration
+    await checkServerConfiguration();
+    
+    // Get current recording status
+    await updateCurrentStatus();
+    
+    // Set up event listeners
+    startRecordingBtn.addEventListener('click', startRecording);
+    stopRecordingBtn.addEventListener('click', stopRecording);
+    
+    // Set up server config form
+    const serverForm = document.getElementById('serverConfigForm');
+    if (serverForm) {
+        serverForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
             
-            // Validate port number
-            const portNum = parseInt(port);
-            if (isNaN(portNum) || portNum < 1 || portNum > 65535) {
-                throw new Error('Invalid port number. Port must be between 1 and 65535');
-            }
+            const ipInput = document.getElementById('serverIp');
+            const portInput = document.getElementById('serverPort');
             
-            // Update serverConfig first
-            serverConfig = { 
-                ip: ip.trim(),
-                port: port.trim()
-            };
-            
-            // Save to chrome storage
-            await chrome.storage.sync.set({ serverConfig });
-            
-            // Test connection after saving
-            const isConnected = await testServerConnection();
-            
-            if (isConnected) {
-                // Success state is handled by testServerConnection
-                console.log('[Extension] Server settings saved and connection verified');
-            } else {
-                // Error state
-                statusDot.className = 'status-dot error';
-                statusText.textContent = 'Not Connected';
-                openFrontendContainer.style.display = 'none';
+            if (ipInput && portInput) {
+                serverConfig.ip = ipInput.value.trim();
+                serverConfig.port = portInput.value.trim();
                 
-                statusEl.textContent = 'Could not connect to server. Please check the address and try again.';
-                statusEl.className = 'status error';
-                statusEl.style.display = 'block';
-            }
-            
-        } catch (error) {
-            console.error('[Extension] Settings error:', error);
-            statusDot.className = 'status-dot error';
-            statusText.textContent = 'Not Connected';
-            openFrontendContainer.style.display = 'none';
-            
-            statusEl.textContent = error.message;
-            statusEl.className = 'status error';
-            statusEl.style.display = 'block';
-        }
-    });
-
-    // Add frontend button handler
-    document.getElementById('openFrontendBtn').addEventListener('click', async () => {
-        try {
-            // Get server config
-            const config = await new Promise(resolve => {
-                chrome.storage.sync.get(['serverConfig'], result => resolve(result.serverConfig));
-            });
-            
-            if (!config) {
-                alert('Please configure server settings first');
-                return;
-            }
-            
-            // Get user ID
-            const userData = await new Promise(resolve => {
-                chrome.storage.local.get(['userId'], result => resolve(result));
-            });
-            
-            if (!userData.userId) {
-                alert('User ID not found. Please try reloading the extension.');
-                return;
-            }
-            
-            // Construct frontend URL with user ID - using port 3000 for frontend
-            const frontendUrl = `http://${config.ip}:3000?userId=${userData.userId}`;
-            console.log('[Extension] Opening frontend URL:', frontendUrl);
-            
-            // Open in new tab
-            chrome.tabs.create({ url: frontendUrl });
-            
-        } catch (error) {
-            console.error('Error opening frontend:', error);
-            alert('Error opening frontend. Please check your configuration.');
-        }
-    });
-});
-
-// Add server configuration check
-async function checkServerConfiguration() {
-    try {
-        const result = await chrome.storage.sync.get(['serverConfig']);
-        if (!result.serverConfig) {
-            throw new Error('Server not configured');
-        }
-        return true;
-    } catch (error) {
-        console.error('Server configuration error:', error);
-        return false;
-    }
-}
-
-// Add server connection test
-async function testServerConnection() {
-    try {
-        const result = await chrome.storage.sync.get(['serverConfig']);
-        if (!result.serverConfig) {
-            throw new Error('Server not configured');
-        }
-        
-        const { ip, port } = result.serverConfig;
-        const statusDot = document.querySelector('.status-dot');
-        const statusText = document.querySelector('.status-text');
-        const openFrontendContainer = document.getElementById('openFrontendContainer');
-        
-        try {
-            const response = await fetch(`http://${ip}:${port}/api/extension/recorder/verifyConnection`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ test: true })
-            });
-            
-            if (!response.ok) {
-                throw new Error('Server connection failed');
-            }
-            
-            const data = await response.json();
-            if (data.success) {
-                console.log('[Extension] Server connection verified:', data);
-                statusDot.className = 'status-dot connected';
-                statusText.textContent = 'Connected';
-                openFrontendContainer.style.display = 'block';
+                // Save to storage
+                await chrome.storage.local.set({
+                    serverIp: serverConfig.ip,
+                    serverPort: serverConfig.port
+                });
                 
-                // Show success message
-                const statusEl = document.getElementById('settingsStatus');
-                statusEl.textContent = 'Connected successfully!';
-                statusEl.className = 'status success';
-                statusEl.style.display = 'block';
-                
-                // Hide status message after 3 seconds
-                setTimeout(() => {
-                    statusEl.style.display = 'none';
-                }, 3000);
-                
-                return true;
-            }
-        } catch (error) {
-            console.error('Server connection error:', error);
-            statusDot.className = 'status-dot error';
-            statusText.textContent = 'Not Connected';
-            openFrontendContainer.style.display = 'none';
-            
-            // Show error message
-            const statusEl = document.getElementById('settingsStatus');
-            statusEl.textContent = 'Could not connect to server. Please check the address and try again.';
-            statusEl.className = 'status error';
-            statusEl.style.display = 'block';
-            
-            throw error;
-        }
-    } catch (error) {
-        console.error('Server connection error:', error);
-        return false;
-    }
-}
-
-// Update startRecording function
-async function startRecording() {
-    try {
-        // Check server configuration first
-        const isConfigured = await checkServerConfiguration();
-        if (!isConfigured) {
-            showStatus('Please configure server settings first', 'error');
-            return;
-        }
-        
-        // Test server connection
-        const isConnected = await testServerConnection();
-        if (!isConnected) {
-            showStatus('Could not connect to server. Please check server settings.', 'error');
-            return;
-        }
-        
-        // Get the active tab
-        const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-        
-        if (!tabs || tabs.length === 0) {
-            showStatus('No active tab found', 'error');
-            return;
-        }
-        
-        const activeTab = tabs[0];
-        
-        // Check if tab is a valid webpage (not chrome:// or extension://)
-        if (activeTab.url.startsWith('chrome://') || activeTab.url.startsWith('chrome-extension://')) {
-            showStatus('Cannot record on browser pages. Please navigate to a website.', 'error');
-            return;
-        }
-        
-        showStatus('Starting recording...', 'idle');
-        
-        // Start recording with explicit tab info
-        const response = await chrome.runtime.sendMessage({ 
-            action: "startRecording",
-            tabId: activeTab.id,
-            url: activeTab.url,
-            title: activeTab.title,
-            tabInfo: {
-                id: activeTab.id,
-                url: activeTab.url,
-                title: activeTab.title,
-                favIconUrl: activeTab.favIconUrl
+                // Update API URL in background script
+                const apiUrl = `http://${serverConfig.ip}:${serverConfig.port}/api`;
+                chrome.runtime.sendMessage({
+                    action: 'setApiUrl',
+                    url: apiUrl
+                }, (response) => {
+                    if (response && response.success) {
+                        showStatus('Server configuration saved', 'success');
+                        testServerConnection();
+                    } else {
+                        showStatus('Error saving server configuration', 'error');
+                    }
+                });
             }
         });
+    }
+    
+    // Load server config from storage
+    const serverConfigResult = await chrome.storage.local.get(['serverIp', 'serverPort']);
+    if (serverConfigResult.serverIp) {
+        serverConfig.ip = serverConfigResult.serverIp;
+        const ipInput = document.getElementById('serverIp');
+        if (ipInput) {
+            ipInput.value = serverConfig.ip;
+        }
+    }
+    
+    if (serverConfigResult.serverPort) {
+        serverConfig.port = serverConfigResult.serverPort;
+        const portInput = document.getElementById('serverPort');
+        if (portInput) {
+            portInput.value = serverConfig.port;
+        }
+    }
+    
+    // Test server connection
+    await testServerConnection();
+});
+
+// Check if server configuration is set
+async function checkServerConfiguration() {
+    const result = await chrome.storage.local.get(['serverIp', 'serverPort']);
+    
+    if (result.serverIp && result.serverPort) {
+        serverConfig.ip = result.serverIp;
+        serverConfig.port = result.serverPort;
+        return true;
+    }
+    
+    return false;
+}
+
+// Test connection to server
+async function testServerConnection() {
+    const serverStatusElement = document.getElementById('serverStatus');
+    if (!serverStatusElement) return;
+    
+    try {
+        // Use direct URL for health check without the /api prefix
+        const healthUrl = `http://${serverConfig.ip}:${serverConfig.port}/health`;
+        serverStatusElement.textContent = 'Connecting...';
         
-        if (!response || !response.success) {
-            const errorMsg = response?.error || 'Failed to start recording';
-            console.error('[Extension] Recording error:', errorMsg);
-            showStatus(errorMsg, 'error');
+        const response = await fetch(healthUrl, {
+            method: 'GET'
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            
+            if (data.status === 'ok') {
+                serverStatusElement.textContent = 'Connected';
+                serverStatusElement.className = 'status-indicator connected';
+            } else {
+                serverStatusElement.textContent = 'Error';
+                serverStatusElement.className = 'status-indicator error';
+            }
+        } else {
+            throw new Error('Server returned status ' + response.status);
+        }
+    } catch (error) {
+        console.error('Error connecting to server:', error);
+        serverStatusElement.textContent = 'Disconnected';
+        serverStatusElement.className = 'status-indicator disconnected';
+    }
+}
+
+// Get current recording status
+async function updateCurrentStatus() {
+    try {
+        const result = await chrome.runtime.sendMessage({
+            action: 'getStatus'
+        });
+        
+        if (result) {
+            updateStatus(result.recordingStatus, result.currentSessionId);
+            
+            // If we're recording, start the timer
+            if (result.recordingStatus === 'recording') {
+                startTime = new Date();
+                recordingTimer = setInterval(updateDuration, 1000);
+            }
+        }
+    } catch (error) {
+        console.error('Error getting status:', error);
+    }
+}
+
+// Start recording
+async function startRecording() {
+    try {
+        showStatus('Starting recording...', 'info');
+        
+        // Make sure server is configured
+        if (!await checkServerConfiguration()) {
+            showStatus('Please configure server first', 'error');
             return;
         }
         
-        // Update UI for recording state
-        updateStatus('recording', response.sessionId);
-        showStatus('Recording started successfully', 'success');
+        // Tell background script to start recording
+        const result = await chrome.runtime.sendMessage({
+            action: 'startRecording'
+        });
         
+        if (result && result.success) {
+            showStatus('Recording started', 'success');
+            updateStatus('recording', result.sessionId);
+        } else {
+            showStatus('Error starting recording: ' + (result?.error || 'Unknown error'), 'error');
+        }
     } catch (error) {
-        console.error('Start recording error:', error);
-        showStatus('An error occurred while starting recording: ' + error.message, 'error');
+        console.error('Error starting recording:', error);
+        showStatus('Error starting recording: ' + error.message, 'error');
     }
 }
 
-// Function to get the API URL
-function getApiUrl(endpoint) {
-    if (!serverConfig.ip) {
-        throw new Error('Server address not configured. Please set it in the settings.');
-    }
-    return `http://${serverConfig.ip}:${serverConfig.port}/api${endpoint}`;
-}
-
-// Update all existing API calls to use getApiUrl()
-async function sendRequest(endpoint, method = 'GET', data = null) {
+// Stop recording
+async function stopRecording() {
     try {
-        const url = getApiUrl(endpoint);
-        const options = {
-            method,
-            headers: {
-                'Content-Type': 'application/json',
-            },
-        };
-
-        if (data) {
-            options.body = JSON.stringify(data);
-        }
-
-        const response = await fetch(url, options);
+        showStatus('Stopping recording...', 'info');
         
-        if (!response.ok) {
-            throw new Error(`Server returned ${response.status}`);
-        }
+        // Tell background script to stop recording
+        const result = await chrome.runtime.sendMessage({
+            action: 'stopRecording'
+        });
         
-        return await response.json();
+        if (result && result.success) {
+            showStatus('Recording stopped', 'success');
+            updateStatus('idle');
+        } else {
+            showStatus('Error stopping recording: ' + (result?.error || 'Unknown error'), 'error');
+        }
     } catch (error) {
-        console.error('API request failed:', error);
-        throw error;
+        console.error('Error stopping recording:', error);
+        showStatus('Error stopping recording: ' + error.message, 'error');
     }
 }
 
-// Update your existing API calls to use sendRequest
-// Example:
-async function captureDOM() {
-    return sendRequest('/extension/capture', 'POST', { /* your data */ });
-} 
+// Get API URL
+function getApiUrl(endpoint) {
+    const baseUrl = `http://${serverConfig.ip}:${serverConfig.port}/api`;
+    return baseUrl + (endpoint ? `/${endpoint}` : '');
+}
+
+// Listen for messages from background script
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.action === 'updateInteractionCount') {
+        interactionCount = message.count;
+        updateStatsCard();
+    } else if (message.action === 'updateStatus') {
+        updateStatus(message.status, message.sessionId);
+    }
+    
+    // Required for async response
+    return true;
+}); 

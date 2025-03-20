@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Web Interaction Recorder",
+  "name": "DOM State Tracker",
   "version": "1.0",
-  "description": "Record and analyze interactions on web pages",
+  "description": "Track DOM states and user interactions on web pages",
   "permissions": [
     "activeTab",
     "storage",
@@ -16,12 +16,11 @@
     "<all_urls>"
   ],
   "background": {
-    "service_worker": "background.js",
-    "type": "module"
+    "service_worker": "background.js"
   },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Web Interaction Recorder"
+    "default_title": "DOM State Tracker"
   },
   "content_scripts": [
     {

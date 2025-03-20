@@ -13,9 +13,9 @@ let sessionStateHashes = {}; // Track hashes we've already seen
 const initializeState = async () => {
   try {
     const result = await chrome.storage.local.get([
-      'recordingStatus',
-      'userId',
-      'currentSessionId',
+      'recordingStatus', 
+      'userId', 
+      'currentSessionId', 
       'apiBaseUrl'
     ]);
     
@@ -70,7 +70,7 @@ const initializeUserId = async () => {
 // Start a recording session
 const startRecordingSession = async (sessionId, tabInfo = null) => {
   try {
-    await initializeUserId();
+      await initializeUserId();
     
     // Get current tab if not provided
     if (!tabInfo) {
@@ -78,7 +78,7 @@ const startRecordingSession = async (sessionId, tabInfo = null) => {
       if (tabs.length === 0) {
         throw new Error('No active tab found');
       }
-      tabInfo = tabs[0];
+        tabInfo = tabs[0];
     }
     
     // Reset state counter and hash tracking when starting a new session
@@ -114,10 +114,10 @@ const startRecordingSession = async (sessionId, tabInfo = null) => {
         action: 'startRecording',
         sessionId,
         userId
-      });
-    } catch (error) {
+          });
+        } catch (error) {
       console.error('[Extension] Error sending message to content script:', error);
-    }
+        }
     
     return { success: true, sessionId };
   } catch (error) {
@@ -148,25 +148,25 @@ const stopRecordingSession = async () => {
         chrome.tabs.sendMessage(recordingTabId, {
           action: 'stopRecording'
         });
-      } catch (error) {
+  } catch (error) {
         console.log('[Extension] Error sending stop message to content script:', error);
       }
     }
     
     // Notify server that recording has stopped
     await fetch(`${API_BASE_URL}/extension/recorder/stopSession`, {
-      method: 'POST',
+            method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+            body: JSON.stringify({ 
         sessionId,
         userId,
         reason: 'user_stopped'
-      })
-    });
-    
+            })
+        });
+        
     console.log(`[Extension] Stopped recording session ${sessionId}`);
     return { success: true, sessionId };
-  } catch (error) {
+    } catch (error) {
     console.error('[Extension] Error stopping recording session:', error);
     return { success: false, error: error.message };
   }
@@ -265,16 +265,16 @@ const saveDOMState = async (state) => {
     
     // Send DOM state to backend
     const response = await fetch(`${API_BASE_URL}/extension/recorder/saveDOMState`, {
-      method: 'POST',
+            method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+            body: JSON.stringify({
         state,
-        sessionId: currentSessionId,
+              sessionId: currentSessionId,
         userId
-      })
-    });
-    
-    if (!response.ok) {
+            })
+        });
+        
+        if (!response.ok) {
       throw new Error(`Failed to save DOM state: ${response.status}`);
     }
     
@@ -282,7 +282,7 @@ const saveDOMState = async (state) => {
     
     // Return the assigned state ID so content script can track it
     return { success: true, stateId: state.stateId };
-  } catch (error) {
+    } catch (error) {
     console.error('[Extension] Error saving DOM state:', error);
     return { success: false, error: error.message };
   }
@@ -309,32 +309,32 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     
     switch (message.action) {
       case 'startRecording':
-        (async () => {
-          try {
+    (async () => {
+      try {
             const sessionId = 'session_' + Date.now();
             const result = await startRecordingSession(sessionId);
             sendResponse(result);
-          } catch (error) {
-            console.error('[Extension] Error starting recording:', error);
+        } catch (error) {
+        console.error('[Extension] Error starting recording:', error);
             sendResponse({ success: false, error: error.message });
-          }
-        })();
+      }
+    })();
         return true;
         
       case 'stopRecording':
-        (async () => {
+    (async () => {
           try {
             const result = await stopRecordingSession();
             sendResponse(result);
-          } catch (error) {
-            console.error('[Extension] Error stopping recording:', error);
-            sendResponse({ success: false, error: error.message });
-          }
-        })();
-        return true;
-        
+      } catch (error) {
+        console.error('[Extension] Error stopping recording:', error);
+        sendResponse({ success: false, error: error.message });
+      }
+    })();
+    return true;
+  
       case 'getStatus':
-        sendResponse({
+    sendResponse({ 
           recordingStatus,
           currentSessionId,
           userId
@@ -347,7 +347,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           await saveState();
           sendResponse({ success: true });
         })();
-        return true;
+      return true;
         
       case 'recordState':
         (async () => {
@@ -370,11 +370,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         
       default:
         sendResponse({ success: false, error: 'Unknown action' });
-        return true;
-    }
-  } catch (error) {
+            return true;
+        }
+    } catch (error) {
     console.error('[Extension] Error handling message:', error);
     sendResponse({ success: false, error: error.message });
-    return true;
-  }
+            return true;
+        }
 });

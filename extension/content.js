@@ -316,8 +316,8 @@ function processMutations(mutations) {
                 console.log(`[DOM Tracker] Created new state due to DOM change with hash: ${currentHash}`);
             } else {
                 console.log('[DOM Tracker] DOM changed but hash remains the same');
-            }
-        } catch (error) {
+                }
+            } catch (error) {
             console.error('[DOM Tracker] Error processing mutations:', error);
         } finally {
             // Clear debounce flag
@@ -335,7 +335,7 @@ function setupReloadDetection() {
         sessionStorage.setItem('pageLoadCount', (count + 1).toString());
         sessionStorage.setItem('isReload', 'true');
         console.log('[DOM Tracker] Page reload detected (load count: ' + (count + 1) + ')');
-    } else {
+            } else {
         // First time loading this page
         sessionStorage.setItem('pageLoadCount', '1');
         sessionStorage.setItem('isReload', 'false');
@@ -409,7 +409,7 @@ function handleNavigation() {
                     
                     // Always update lastDomHash to the current hash
                     lastDomHash = currentHash;
-                } else {
+                    } else {
                     console.warn('[DOM Tracker] Did not receive valid stateId from background script for navigation');
                 }
             })
@@ -461,7 +461,7 @@ function startRecording(newSessionId, newUserId) {
             previousStates[currentHash] = response.stateId;
             currentStateId = response.stateId;
             console.log(`[DOM Tracker] Updated initial state tracking with server-assigned ID: ${response.stateId}`);
-        } else {
+                        } else {
             console.warn('[DOM Tracker] Did not receive valid stateId from background script');
         }
         
@@ -480,8 +480,8 @@ function startRecording(newSessionId, newUserId) {
 
 // Stop recording
 function stopRecording() {
-    if (!isRecording) return;
-    
+        if (!isRecording) return;
+        
     // Stop the mutation observer
     if (mutationObserver) {
         mutationObserver.disconnect();
@@ -512,7 +512,7 @@ function initialize() {
     // Create initial state when page is fully loaded
     window.addEventListener('load', () => {
         console.log('[DOM Tracker] Page fully loaded');
-        if (isRecording) {
+    if (isRecording) {
             // Calculate hash once and reuse it
             const currentHash = calculateDomHash();
             console.log(`[DOM Tracker] Page load state hash: ${currentHash}`);
@@ -570,7 +570,7 @@ function initialize() {
 // Start the content script
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', initialize);
-} else {
+    } else {
     // Page already loaded
     initialize();
 }

@@ -88,28 +88,45 @@ function generateEnhancedDOMFingerprint() {
     }).join('|');
     fingerprint.push(`images:${imageInfo}`);
     
+    // ENHANCED: Capture form element states with special focus on checkboxes and radio buttons
+    const formElements = document.querySelectorAll('input, select, textarea');
+    const formInfo = Array.from(formElements).map(el => {
+        const type = el.type || el.tagName.toLowerCase();
+        const id = el.id || '';
+        const name = el.name || '';
+        
+        // Special handling for different input types to capture their state accurately
+        let stateInfo = '';
+        
+        if (type === 'checkbox' || type === 'radio') {
+            // For checkable elements, include checked state
+            stateInfo = el.checked ? 'checked' : 'unchecked';
+        } else if (type === 'select-one' || type === 'select-multiple') {
+            // For select elements, include selected options
+            const selectedOptions = Array.from(el.selectedOptions || []).map(opt => opt.value).join(',');
+            stateInfo = `selected:${selectedOptions}`;
+        } else {
+            // For other inputs, include value hint
+            stateInfo = el.value ? `value:${el.value.substring(0, 5)}` : 'empty';
+        }
+        
+        return `${type}#${id}[name=${name}]::${stateInfo}`;
+    }).join('|');
+    fingerprint.push(`forms:${formInfo}`);
+    
     // Capture ALL interactive elements (buttons, links, form elements) in more detail
-    const interactiveElements = document.querySelectorAll('button, a, input, select, textarea');
+    const interactiveElements = document.querySelectorAll('button, a, [role="button"]');
     const interactiveInfo = Array.from(interactiveElements).map(el => {
         const type = el.tagName.toLowerCase();
         const id = el.id || '';
-        const name = el.name || '';
         const classes = Array.from(el.classList).join(' ');
         const isVisible = isElementVisible(el);
         
-        // For form fields, include whether they have values and what they are
-        let valueInfo = '';
-        if (el.tagName === 'INPUT' || el.tagName === 'SELECT' || el.tagName === 'TEXTAREA') {
-            const hasValue = !!el.value;
-            // Include a hint of the actual value (first 3 chars) to detect content changes
-            const valueHint = el.value ? el.value.substring(0, 3) : '';
-            valueInfo = `:${hasValue}:${valueHint}`;
-        }
-        
         // For buttons and links, include text content
         const textContent = (el.textContent || '').trim().substring(0, 15);
+        const disabled = el.disabled ? 'disabled' : 'enabled';
         
-        return `${type}#${id}.${classes}:${isVisible}${valueInfo}:${textContent}`;
+        return `${type}#${id}.${classes}:${isVisible}:${disabled}:${textContent}`;
     }).join('|');
     fingerprint.push(`interactive:${interactiveInfo}`);
     
@@ -500,6 +517,124 @@ function handleNavigation() {
     }, 500); // Short delay to allow page to settle
 }
 
+// Set up form element change detection
+function setupFormChangeDetection() {
+    console.log('[DOM Tracker] Setting up form element change detection');
+    
+    // Capture all form element interactions
+    document.addEventListener('change', (event) => {
+        if (!isRecording) return;
+        
+        const target = event.target;
+        
+        // Check if this is a form element
+        if (target.tagName === 'INPUT' || 
+            target.tagName === 'SELECT' || 
+            target.tagName === 'TEXTAREA' ||
+            target.tagName === 'CHECKBOX' ||
+            target.tagName === 'RADIO') {
+            
+            console.log(`[DOM Tracker] Form element changed: ${target.tagName}#${target.id || ''}.${target.className || ''} type=${target.type || 'unknown'}`);
+            
+            // Artificially trigger DOM state capture after a short delay
+            // This ensures form changes are captured even if they don't trigger mutations
+            setTimeout(() => {
+                forceCaptureState('form-interaction', target);
+            }, 50);
+        }
+    }, true);
+    
+    // Also capture click events on buttons and checkable elements
+    document.addEventListener('click', (event) => {
+        if (!isRecording) return;
+        
+        const target = event.target;
+        const isInteractive = 
+            target.tagName === 'BUTTON' ||
+            target.tagName === 'A' ||
+            (target.tagName === 'INPUT' && (target.type === 'checkbox' || target.type === 'radio')) ||
+            target.role === 'button' ||
+            target.getAttribute('role') === 'button';
+            
+        if (isInteractive) {
+            console.log(`[DOM Tracker] Interactive element clicked: ${target.tagName}#${target.id || ''}.${target.className || ''} type=${target.type || 'unknown'}`);
+            
+            // Add a short delay to allow any DOM changes to complete before capturing
+            setTimeout(() => {
+                forceCaptureState('interactive-click', target);
+            }, 50);
+        }
+    }, true);
+}
+
+// Force a state capture for user interactions
+function forceCaptureState(trigger, element) {
+    try {
+        console.log(`[DOM Tracker] Force capturing state for: ${trigger} on element:`, element);
+        
+        // Calculate current hash
+        const currentHash = calculateDomHash();
+        
+        console.log(`[DOM Tracker] Interaction hash: ${currentHash}, Last hash: ${lastDomHash}`);
+        
+        // Only create a new state if the hash is different from the last one
+        if (currentHash !== lastDomHash) {
+            console.log(`[DOM Tracker] DOM hash changed due to interaction: ${lastDomHash} -> ${currentHash}`);
+            
+            // Still check for duplicates
+            if (previousStates[currentHash]) {
+                console.log(`[DOM Tracker] *** DUPLICATE STATE DETECTED *** for interaction, reusing stateId: ${previousStates[currentHash]}`);
+                lastDomHash = currentHash;
+                currentStateId = previousStates[currentHash];
+                return;
+            }
+            
+            const { state, isNewState } = createDomState();
+            state.hash = currentHash;
+            
+            // Add information about the interaction
+            state.interactionInfo = {
+                trigger: trigger,
+                elementType: element.tagName.toLowerCase(),
+                elementId: element.id || '',
+                elementClass: element.className || '',
+                elementType: element.type || '',
+                timestamp: Date.now()
+            };
+            
+            // Send to background
+            sendToBackground('recordState', {
+                state: state
+            })
+            .then(response => {
+                console.log(`[DOM Tracker] Background response for interaction state:`, response);
+                
+                if (response && response.isDuplicate) {
+                    console.log(`[DOM Tracker] *** DUPLICATE DETECTED BY BACKGROUND *** Hash ${currentHash} already exists as ${response.stateId}`);
+                    previousStates[currentHash] = response.stateId;
+                    currentStateId = response.stateId;
+                } 
+                else if (response && response.stateId) {
+                    previousStates[currentHash] = response.stateId;
+                    currentStateId = response.stateId;
+                    console.log(`[DOM Tracker] Added interaction state to previousStates: ${currentHash} -> ${response.stateId}`);
+                }
+                
+                lastDomHash = currentHash;
+            })
+            .catch(error => {
+                console.error('[DOM Tracker] Error getting stateId for interaction state:', error);
+            });
+            
+            console.log(`[DOM Tracker] Created state due to interaction with hash: ${currentHash}`);
+        } else {
+            console.log('[DOM Tracker] Interaction did not change DOM hash, no new state needed');
+        }
+    } catch (error) {
+        console.error('[DOM Tracker] Error forcing state capture:', error);
+    }
+}
+
 // Start recording
 function startRecording(newSessionId, newUserId) {
     if (isRecording) return;
@@ -514,11 +649,13 @@ function startRecording(newSessionId, newUserId) {
     // Set up DOM tracking
     setupMutationObserver();
     setupNavigationTracking();
+    setupFormChangeDetection(); // Add form change detection
     
     // Create initial state
     const currentHash = calculateDomHash();
     const { state, isNewState } = createDomState();
     state.hash = currentHash; // Ensure consistent hash
+    state.isNewState = true; // Always mark as new state
     
     // Send initial state and get the real stateId back
     sendToBackground('recordState', {
@@ -537,7 +674,7 @@ function startRecording(newSessionId, newUserId) {
             previousStates[currentHash] = response.stateId;
             currentStateId = response.stateId;
             console.log(`[DOM Tracker] Updated initial state tracking with server-assigned ID: ${response.stateId}`);
-                        } else {
+        } else {
             console.warn('[DOM Tracker] Did not receive valid stateId from background script');
         }
         

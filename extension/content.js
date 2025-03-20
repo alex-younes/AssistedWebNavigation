@@ -382,10 +382,10 @@ function processMutations(mutations) {
                 console.error('[DOM Tracker] Error getting stateId from background:', error);
             })
             .finally(() => {
-                // Clear the pending flag with a delay to prevent instant repeated sends
+                // Clear the pending flag with a minimum possible delay
                 setTimeout(() => {
                     delete pendingStateSends[currentHash];
-                }, 300);
+                }, 1); // minimum practical value (browsers treat <1ms as 1ms minimum)
             });
             
             console.log(`[DOM Tracker] Created state due to DOM change with hash: ${currentHash}`);
@@ -657,10 +657,10 @@ function forceCaptureState(trigger, element) {
             console.error('[DOM Tracker] Error getting stateId for interaction state:', error);
         })
         .finally(() => {
-            // Clear the pending flag with a delay to prevent instant repeated sends
+            // Clear the pending flag with a minimum possible delay
             setTimeout(() => {
                 delete pendingStateSends[currentHash];
-            }, 300);
+            }, 1); // minimum practical value (browsers treat <1ms as 1ms minimum)
         });
         
         console.log(`[DOM Tracker] Processed interaction state with hash: ${currentHash}`);

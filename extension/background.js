@@ -321,10 +321,10 @@ const saveDOMState = async (state) => {
           isDuplicate: !state.isNewState 
         };
       } finally {
-        // Clear the lock when done, but add a small delay to prevent instant repeated calls
+        // Clear the lock when done with minimum possible delay
         setTimeout(() => {
           delete stateProcessingLock[lockKey];
-        }, 300);
+        }, 1); // minimum practical value (browsers will treat 0.5ms as 1ms minimum)
       }
     })();
     

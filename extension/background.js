@@ -6,6 +6,8 @@ let currentSessionId = null;
 let recordingTabId = null;
 let recordingStatus = 'idle'; // 'idle', 'recording', 'paused'
 let userId = null;
+let sessionStateCounter = 0; // Track state numbers across navigation
+let sessionStateHashes = {}; // Track hashes we've already seen
 
 // Initialize state from storage on startup
 const initializeState = async () => {
@@ -78,6 +80,11 @@ const startRecordingSession = async (sessionId, tabInfo = null) => {
       }
       tabInfo = tabs[0];
     }
+    
+    // Reset state counter and hash tracking when starting a new session
+    sessionStateCounter = 0;
+    sessionStateHashes = {}; // Clear hash tracking
+    console.log('[Extension] Reset state counter and hash tracking for new session');
     
     // Update recording tab and status
     recordingTabId = tabInfo.id;
@@ -170,14 +177,42 @@ const saveDOMState = async (state) => {
   try {
     if (!state) {
       console.error('[Extension] Cannot save empty state');
-      return false;
+      return { success: false, error: "Empty state" };
     }
     
     // Ensure the state has required fields
     if (!state.sessionId) state.sessionId = currentSessionId;
     if (!state.userId) state.userId = userId;
     
-    console.log(`[Extension] Saving DOM state: ${state.stateId}`);
+    // Print detailed debugging info
+    console.log(`[Extension] Request to save state with hash: ${state.hash}`);
+    console.log(`[Extension] Current tracked hashes:`, Object.keys(sessionStateHashes));
+    
+    // Check if we've already seen this hash in this session
+    if (state.hash && sessionStateHashes[state.hash]) {
+      console.log(`[Extension] *** DUPLICATE PREVENTION *** Hash ${state.hash} already saved as state ${sessionStateHashes[state.hash]}`);
+      return { 
+        success: true, 
+        stateId: sessionStateHashes[state.hash],
+        isDuplicate: true
+      };
+    }
+    
+    // Override the state number and ID to ensure sequential numbering
+    state.stateNumber = sessionStateCounter;
+    state.stateId = `state_${sessionStateCounter}`;
+    
+    console.log(`[Extension] Saving NEW DOM state: ${state.stateId} (#${sessionStateCounter}) with hash: ${state.hash}`);
+    
+    // Store the hash mapping BEFORE incrementing counter
+    if (state.hash) {
+      sessionStateHashes[state.hash] = state.stateId;
+      console.log(`[Extension] Adding hash to tracking: ${state.hash} -> ${state.stateId}`);
+      console.log(`[Extension] Total hashes in session: ${Object.keys(sessionStateHashes).length}`);
+    }
+    
+    // Increment counter after saving
+    sessionStateCounter++;
     
     // Send DOM state to backend
     const response = await fetch(`${API_BASE_URL}/extension/recorder/saveDOMState`, {
@@ -195,10 +230,12 @@ const saveDOMState = async (state) => {
     }
     
     console.log(`[Extension] Successfully saved DOM state: ${state.stateId}`);
-    return true;
+    
+    // Return the assigned state ID so content script can track it
+    return { success: true, stateId: state.stateId };
   } catch (error) {
     console.error('[Extension] Error saving DOM state:', error);
-    return false;
+    return { success: false, error: error.message };
   }
 };
 
@@ -267,7 +304,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           try {
             const state = message.state;
             const result = await saveDOMState(state);
-            sendResponse({ success: result });
+            sendResponse(result);
           } catch (error) {
             console.error('[Extension] Error saving state:', error);
             sendResponse({ success: false, error: error.message });

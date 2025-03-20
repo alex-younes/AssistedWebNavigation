@@ -10,41 +10,43 @@ let stateCounter = 0;
 let lastDomHash = null;
 let mutationObserver = null;
 let previousStates = {}; // StateHash -> StateId mapping
+let processingMutations = false; // Debounce flag
+let lastMutationTime = 0; // Track time of last mutation processing
 
 // Send a message to the background script
 function sendToBackground(action, data) {
     console.log(`[DOM Tracker] Sending to background: ${action}`);
     
     // Simple message passing
-    return chrome.runtime.sendMessage({ action, ...data })
-        .then(response => {
+    return new Promise((resolve, reject) => {
+        chrome.runtime.sendMessage({ action, ...data }, response => {
             if (chrome.runtime.lastError) {
                 console.error('[DOM Tracker] Error sending message:', chrome.runtime.lastError);
-                return false;
+                reject(chrome.runtime.lastError);
+                return;
             }
-            console.log(`[DOM Tracker] Sent ${action} successfully`);
-            return true;
-        })
-        .catch(error => {
-            console.error('[DOM Tracker] Error sending message:', error);
-            return false;
+            
+            console.log(`[DOM Tracker] Response from ${action}:`, response);
+            resolve(response);
         });
+    });
 }
 
-// Calculate hash of the DOM
+// Calculate hash of the DOM - Improved version with better precision
 function calculateDomHash() {
     try {
-        // Get a simplified version of the DOM structure
-        const domStructure = document.documentElement.innerHTML;
-        
-        // Add URL to make the hash page-specific
+        // Get the URL path
         const urlObj = new URL(window.location.href);
         const pagePath = urlObj.pathname;
         
-        // Simple hash function
-        let hash = 0;
-        const hashInput = pagePath + '_' + domStructure.length;
+        // Create a structural representation of the DOM with key elements
+        const domFingerprint = generateDOMFingerprint();
         
+        // Combine path and fingerprint for the hash input
+        const hashInput = pagePath + '_' + domFingerprint;
+        
+        // Create hash from the combined input
+        let hash = 0;
         for (let i = 0; i < hashInput.length; i++) {
             const char = hashInput.charCodeAt(i);
             hash = ((hash << 5) - hash) + char;
@@ -63,30 +65,123 @@ function calculateDomHash() {
     }
 }
 
+// Generate a detailed fingerprint of the DOM's structure and content
+function generateDOMFingerprint() {
+    const fingerprint = [];
+    
+    // Capture important structural elements
+    const mainElements = document.querySelectorAll('main, section, article, form, .main-content');
+    Array.from(mainElements).forEach(element => {
+        const elementInfo = getElementInfo(element);
+        fingerprint.push(elementInfo);
+    });
+    
+    // Capture interactive elements (buttons, links, form elements)
+    const interactiveElements = document.querySelectorAll('button, a, input, select, textarea');
+    const interactiveInfo = Array.from(interactiveElements).map(el => {
+        const type = el.tagName.toLowerCase();
+        const id = el.id || '';
+        const name = el.name || '';
+        const classes = Array.from(el.classList).join(' ');
+        const isVisible = isElementVisible(el);
+        
+        // For form fields, include whether they have values
+        let hasValue = false;
+        if (el.tagName === 'INPUT' || el.tagName === 'SELECT' || el.tagName === 'TEXTAREA') {
+            hasValue = !!el.value;
+        }
+        
+        return `${type}#${id}.${classes}:${isVisible}:${hasValue}`;
+    }).join('|');
+    fingerprint.push(`interactive:${interactiveInfo}`);
+    
+    // Capture key text content from headings
+    const headings = document.querySelectorAll('h1, h2, h3');
+    const headingTexts = Array.from(headings).map(h => {
+        return `${h.tagName.toLowerCase()}:${h.textContent.trim().substring(0, 20)}`;
+    }).join('|');
+    fingerprint.push(`headings:${headingTexts}`);
+    
+    // Add visible content sections (paragraphs, lists)
+    const contentElements = document.querySelectorAll('p, ul, ol, table');
+    const contentInfo = Array.from(contentElements).slice(0, 10).map(el => {
+        const type = el.tagName.toLowerCase();
+        // For content elements, include a content hash based on text length and first chars
+        const contentText = el.textContent.trim();
+        const contentHash = contentText.length + ':' + contentText.substring(0, 10).replace(/\s+/g, '');
+        return `${type}:${contentHash}`;
+    }).join('|');
+    fingerprint.push(`content:${contentInfo}`);
+    
+    // Include details about CSS variables and styles that affect layout
+    const computedStyle = window.getComputedStyle(document.body);
+    const layoutInfo = {
+        width: computedStyle.width,
+        height: computedStyle.height,
+        display: computedStyle.display,
+        position: computedStyle.position
+    };
+    fingerprint.push(`layout:${JSON.stringify(layoutInfo)}`);
+    
+    // Count elements by type for additional structure info
+    const elementCounts = {
+        divs: document.querySelectorAll('div').length,
+        spans: document.querySelectorAll('span').length,
+        images: document.querySelectorAll('img').length,
+        lists: document.querySelectorAll('ul, ol').length,
+        tables: document.querySelectorAll('table').length
+    };
+    fingerprint.push(`counts:${JSON.stringify(elementCounts)}`);
+    
+    // Combine all fingerprint components
+    return fingerprint.join('~');
+}
+
+// Get detailed info about a specific element
+function getElementInfo(element) {
+    if (!element) return '';
+    
+    const tagName = element.tagName.toLowerCase();
+    const id = element.id || '';
+    const classes = Array.from(element.classList).join('.');
+    const childrenCount = element.children.length;
+    
+    // Get first-level children info
+    const childrenInfo = Array.from(element.children).slice(0, 5).map(child => {
+        return child.tagName.toLowerCase() + (child.id ? `#${child.id}` : '');
+    }).join(',');
+    
+    // Create a signature that represents this element and its structure
+    return `${tagName}#${id}.${classes}[${childrenCount}]{${childrenInfo}}`;
+}
+
+// Check if an element is visible in the viewport
+function isElementVisible(element) {
+    if (!element) return false;
+    
+    const style = window.getComputedStyle(element);
+    return style.display !== 'none' && 
+           style.visibility !== 'hidden' && 
+           style.opacity !== '0' && 
+           element.offsetWidth > 0 && 
+           element.offsetHeight > 0;
+}
+
 // Create a DOM state snapshot
 function createDomState() {
     const url = window.location.href;
     const hash = calculateDomHash();
     const isNewState = true; // Always create a new state for now
     
-    // Create a new state ID with sequential number
-    const stateId = `state_${stateCounter}`;
-    console.log(`[DOM Tracker] Creating NEW state: ${stateId} (hash: ${hash})`);
-    stateCounter++; // Increment for next state
+    // Create a simple state ID - background script will replace with proper sequential ID
+    const stateId = 'state_temp';
+    console.log(`[DOM Tracker] Creating NEW state with hash: ${hash}`);
     
     const state = createStateObject(stateId, url, hash, isNewState);
-    currentStateId = stateId;
+    currentStateId = stateId; // This will be replaced by background script's ID
     
-    // Store the state for reference
-    previousStates[hash] = stateId;
-    
-    // Save in session storage
-    try {
-        sessionStorage.setItem('domTracker_stateCounter', stateCounter.toString());
-        sessionStorage.setItem('domTracker_states', JSON.stringify(previousStates));
-    } catch (e) {
-        console.error('[DOM Tracker] Error saving to sessionStorage:', e);
-    }
+    // Note: We don't store in previousStates here anymore - we'll do it after
+    // getting the real state ID from the background script
     
     return { state, isNewState };
 }
@@ -99,8 +194,8 @@ function createStateObject(stateId, url, hash, isNewState) {
     const formElements = document.querySelectorAll('input, select, textarea').length;
     const visibleElements = document.querySelectorAll('button, a[href], input, select, textarea, [role="button"]').length;
     
-    // Extract state number from ID
-    const stateNumber = parseInt(stateId.split('_')[1], 10);
+    // State number will be assigned by background script
+    const stateNumber = 0; 
     
     return {
         stateId,
@@ -151,35 +246,86 @@ function setupMutationObserver() {
     return mutationObserver;
 }
 
-// Process mutations and create a new state
+// Process mutations and create a new state with debouncing
 function processMutations(mutations) {
     if (!isRecording) return;
     
-    console.log(`[DOM Tracker] Processing ${mutations.length} DOM mutations`);
+    const now = Date.now();
     
-    try {
-        // For simplicity: ANY DOM change creates a new state
-        const currentHash = calculateDomHash();
-        
-        // Only create a new state if the hash is different
-        if (currentHash !== lastDomHash) {
-            console.log(`[DOM Tracker] DOM hash changed: ${lastDomHash} -> ${currentHash}`);
-            
-            const { state, isNewState } = createDomState();
-            lastDomHash = currentHash;
-            
-            // Send the state to background
-            sendToBackground('recordState', {
-                state: state
-            });
-            
-            console.log(`[DOM Tracker] Created new state due to DOM change: ${state.stateId}`);
-        } else {
-            console.log('[DOM Tracker] DOM changed but hash remains the same');
-        }
-    } catch (error) {
-        console.error('[DOM Tracker] Error processing mutations:', error);
+    // Skip if we're already processing mutations or if it's too soon
+    if (processingMutations || (now - lastMutationTime < 500)) {
+        console.log('[DOM Tracker] Skipping mutation processing - debounced');
+        return;
     }
+    
+    // Set debounce flags
+    processingMutations = true;
+    lastMutationTime = now;
+    
+    // Use setTimeout to process after a short delay, allowing batching of multiple mutations
+    setTimeout(() => {
+        try {
+            console.log(`[DOM Tracker] Processing mutations after debounce`);
+            
+            // Calculate current hash
+            const currentHash = calculateDomHash();
+            
+            console.log(`[DOM Tracker] Current hash: ${currentHash}, Last hash: ${lastDomHash}`);
+            console.log(`[DOM Tracker] Known states:`, previousStates);
+            
+            // Only create a new state if the hash is different AND we haven't seen it before
+            if (currentHash !== lastDomHash) {
+                console.log(`[DOM Tracker] DOM hash changed: ${lastDomHash} -> ${currentHash}`);
+                
+                // Check if we've already seen this hash in this session
+                if (previousStates[currentHash]) {
+                    console.log(`[DOM Tracker] DOM returned to previously seen state with hash: ${currentHash}, stateId: ${previousStates[currentHash]}`);
+                    lastDomHash = currentHash;
+                    processingMutations = false;
+                    return;
+                }
+                
+                const { state, isNewState } = createDomState();
+                state.hash = currentHash; // Ensure hash is consistent
+                
+                // Send the state to background script to check for duplicates and get real stateId
+                sendToBackground('recordState', {
+                    state: state
+                })
+                .then(response => {
+                    console.log(`[DOM Tracker] Background response for recordState:`, response);
+                    
+                    if (response && response.isDuplicate) {
+                        console.log(`[DOM Tracker] *** DUPLICATE DETECTED BY BACKGROUND *** Hash ${currentHash} already exists as ${response.stateId}`);
+                        previousStates[currentHash] = response.stateId;
+                    } 
+                    else if (response && response.stateId) {
+                        // Update our map with the real stateId from the server
+                        previousStates[currentHash] = response.stateId;
+                        currentStateId = response.stateId;
+                        console.log(`[DOM Tracker] Added to previousStates: ${currentHash} -> ${response.stateId}`);
+                    } else {
+                        console.warn('[DOM Tracker] Did not receive valid stateId from background script');
+                    }
+                    
+                    // Always update lastDomHash to the current hash
+                    lastDomHash = currentHash;
+                })
+                .catch(error => {
+                    console.error('[DOM Tracker] Error getting stateId from background:', error);
+                });
+                
+                console.log(`[DOM Tracker] Created new state due to DOM change with hash: ${currentHash}`);
+            } else {
+                console.log('[DOM Tracker] DOM changed but hash remains the same');
+            }
+        } catch (error) {
+            console.error('[DOM Tracker] Error processing mutations:', error);
+        } finally {
+            // Clear debounce flag
+            processingMutations = false;
+        }
+    }, 300); // Short delay to allow multiple mutations to batch
 }
 
 // Track URL/page changes
@@ -212,21 +358,55 @@ function setupNavigationTracking() {
         const url = window.location.href;
         console.log(`[DOM Tracker] Page changed to: ${url}`);
         
-        // Reset state counter for new page
-        stateCounter = 0;
+        // Reset hash
         lastDomHash = null;
+        
+        // Clear previousStates when navigating to a new page
+        console.log('[DOM Tracker] Clearing previousStates for new page');
+        previousStates = {};
         
         // Create a new state for the new page
         setTimeout(() => {
-            const { state, isNewState } = createDomState();
-            lastDomHash = state.hash;
-            
-            sendToBackground('recordState', {
-                state: state,
-                isNavigation: true
-            });
-            
-            console.log(`[DOM Tracker] Created new state after navigation: ${state.stateId}`);
+            try {
+                // Calculate hash once and reuse it
+                const currentHash = calculateDomHash();
+                console.log(`[DOM Tracker] Navigation state hash: ${currentHash}`);
+                
+                const { state, isNewState } = createDomState();
+                state.hash = currentHash; // Ensure hash is consistent
+                
+                // Send the state to background with navigation flag
+                sendToBackground('recordState', {
+                    state: state,
+                    isNavigation: true
+                })
+                .then(response => {
+                    console.log(`[DOM Tracker] Background response for navigation state:`, response);
+                    
+                    if (response && response.isDuplicate) {
+                        console.log(`[DOM Tracker] *** DUPLICATE NAVIGATION STATE DETECTED *** Hash ${currentHash} already exists as ${response.stateId}`);
+                        previousStates[currentHash] = response.stateId;
+                    }
+                    else if (response && response.stateId) {
+                        // Update our map with the real stateId from the server
+                        previousStates[currentHash] = response.stateId;
+                        currentStateId = response.stateId;
+                        console.log(`[DOM Tracker] Added navigation state to previousStates: ${currentHash} -> ${response.stateId}`);
+                    } else {
+                        console.warn('[DOM Tracker] Did not receive valid stateId from background script for navigation');
+                    }
+                    
+                    // Always update lastDomHash to the current hash
+                    lastDomHash = currentHash;
+                })
+                .catch(error => {
+                    console.error('[DOM Tracker] Error getting stateId for navigation state:', error);
+                });
+                
+                console.log(`[DOM Tracker] Created new state after navigation with hash: ${currentHash}`);
+            } catch (error) {
+                console.error('[DOM Tracker] Error handling navigation state:', error);
+            }
         }, 500); // Short delay to allow page to settle
     }
 }
@@ -237,7 +417,8 @@ function startRecording(newSessionId, newUserId) {
     
     sessionId = newSessionId;
     userId = newUserId;
-    stateCounter = 0;
+    
+    // Reset state tracking
     previousStates = {};
     lastDomHash = null;
     
@@ -246,17 +427,40 @@ function startRecording(newSessionId, newUserId) {
     setupNavigationTracking();
     
     // Create initial state
+    const currentHash = calculateDomHash();
     const { state, isNewState } = createDomState();
-    lastDomHash = state.hash;
+    state.hash = currentHash; // Ensure consistent hash
     
-    // Send initial state
+    // Send initial state and get the real stateId back
     sendToBackground('recordState', {
         state: state,
         isInitial: true
+    })
+    .then(response => {
+        console.log(`[DOM Tracker] Background response for initial state:`, response);
+        
+        if (response && response.isDuplicate) {
+            console.log(`[DOM Tracker] *** DUPLICATE INITIAL STATE DETECTED *** Hash ${currentHash} already exists as ${response.stateId}`);
+            previousStates[currentHash] = response.stateId;
+        }
+        else if (response && response.stateId) {
+            // Update our map with the real stateId from the server
+            previousStates[currentHash] = response.stateId;
+            currentStateId = response.stateId;
+            console.log(`[DOM Tracker] Updated initial state tracking with server-assigned ID: ${response.stateId}`);
+        } else {
+            console.warn('[DOM Tracker] Did not receive valid stateId from background script');
+        }
+        
+        // Always update lastDomHash to the current hash
+        lastDomHash = currentHash;
+    })
+    .catch(error => {
+        console.error('[DOM Tracker] Error capturing initial state ID:', error);
     });
     
     console.log(`[DOM Tracker] Started recording with session ${sessionId}`);
-    console.log(`[DOM Tracker] Initial state created: ${state.stateId}`);
+    console.log(`[DOM Tracker] Initial state created with hash: ${currentHash}`);
     
     isRecording = true;
 }
@@ -293,17 +497,41 @@ function initialize() {
     window.addEventListener('load', () => {
         console.log('[DOM Tracker] Page fully loaded');
         if (isRecording) {
+            // Calculate hash once and reuse it
+            const currentHash = calculateDomHash();
+            console.log(`[DOM Tracker] Page load state hash: ${currentHash}`);
+            
             // Capture initial page state
             const { state, isNewState } = createDomState();
-            lastDomHash = state.hash;
+            state.hash = currentHash; // Ensure hash is consistent
             
-            // Send initial state
+            // Send initial state and get the real stateId back
             sendToBackground('recordState', {
                 state: state,
                 isInitial: true
+            })
+            .then(response => {
+                console.log(`[DOM Tracker] Background response for page load state:`, response);
+                
+                if (response && response.isDuplicate) {
+                    console.log(`[DOM Tracker] *** DUPLICATE PAGE LOAD STATE DETECTED *** Hash ${currentHash} already exists as ${response.stateId}`);
+                    previousStates[currentHash] = response.stateId;
+                }
+                else if (response && response.stateId) {
+                    // Update our map with the real stateId from the server
+                    previousStates[currentHash] = response.stateId;
+                    currentStateId = response.stateId;
+                    console.log(`[DOM Tracker] Updated page load state tracking with server-assigned ID: ${response.stateId}`);
+                }
+                
+                // Always update lastDomHash to the current hash
+                lastDomHash = currentHash;
+            })
+            .catch(error => {
+                console.error('[DOM Tracker] Error getting stateId for page load state:', error);
             });
             
-            console.log(`[DOM Tracker] Page load state created: ${state.stateId}`);
+            console.log(`[DOM Tracker] Page load state created with hash: ${currentHash}`);
         }
     });
 }

@@ -42,11 +42,18 @@ const domStateSchema = new mongoose.Schema({
   sessionId: { type: String, required: true },
   userId: { type: String, required: true },
   url: { type: String, required: true },
+  pathname: { type: String }, // Store just the path part of URL for easier matching
   timestamp: { type: Date, default: Date.now },
   isNewState: { type: Boolean, default: true },
-  domSize: { type: Number },
-  elementCount: { type: Number },
-  fingerprint: mongoose.Schema.Types.Mixed
+  stateNumber: { type: Number, default: 0 }, // Track sequential state number
+  hash: { type: String, required: true }, // Using hash for more consistency with standard terms
+  metrics: {
+    domSize: { type: Number },
+    elementCount: { type: Number },
+    formElements: { type: Number },
+    visibleElements: { type: Number }
+  },
+  title: { type: String }
 }, { timestamps: true });
 
 // Create models

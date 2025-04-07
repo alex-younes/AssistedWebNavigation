@@ -236,6 +236,17 @@ function createDomState() {
     // Capture the current DOM immediately
     const currentDom = document.documentElement.outerHTML;
     
+    // Double-check loading state right before creating the state
+    // If we haven't seen DOM changes for a while, then it's probably not loading
+    if (isPageLoading) {
+        // Check if the DOM has actually changed in the last 100ms
+        const now = Date.now();
+        if (now - lastMutationTime > 100) {
+            console.log('[DOM Tracker] No recent mutations detected, overriding loading state to false');
+            isPageLoading = false;
+        }
+    }
+    
     // Create the state object with the captured DOM
     const state = createStateObject(stateId, url, hash, isNewState);
     
@@ -243,7 +254,7 @@ function createDomState() {
     state.dom = currentDom;
     
     // Log the state for debugging
-    console.log(`[DOM Tracker] Created state with DOM size: ${state.dom.length} bytes`);
+    console.log(`[DOM Tracker] Created state with DOM size: ${state.dom.length} bytes, isLoading: ${isPageLoading}`);
     
     currentStateId = stateId; // This will be replaced by background script's ID
     
@@ -270,25 +281,52 @@ function checkLoadingState() {
     }
 }
 
-// Start loading state detection
+// Start loading detection
 function startLoadingDetection() {
+    // Mark as loading initially - this is important for actual navigation events
     isPageLoading = true;
     loadingStartTime = Date.now();
     lastDomSnapshot = document.documentElement.outerHTML;
+    
+    console.log('[DOM Tracker] Starting loading detection - initially set to loading');
     
     // Check every 10ms for DOM changes
     if (loadingCheckInterval) {
         clearInterval(loadingCheckInterval);
     }
     
-    loadingCheckInterval = setInterval(checkLoadingState, 10);
+    // Set up interval to check for continued loading
+    loadingCheckInterval = setInterval(() => {
+        const currentDom = document.documentElement.outerHTML;
+        
+        // If DOM has changed since last check, page is still loading
+        if (currentDom !== lastDomSnapshot) {
+            isPageLoading = true;
+            lastDomSnapshot = currentDom;
+            console.log('[DOM Tracker] DOM changed, still loading');
+        } else {
+            // If DOM hasn't changed for 100ms, consider it stable
+            const timeSinceChange = Date.now() - loadingStartTime;
+            if (timeSinceChange > 100) {
+                isPageLoading = false;
+                console.log('[DOM Tracker] DOM stable for 100ms, loading complete');
+                
+                // Stop checking once we've determined loading is complete
+                if (loadingCheckInterval) {
+                    clearInterval(loadingCheckInterval);
+                    loadingCheckInterval = null;
+                }
+            }
+        }
+    }, 10);
     
-    // Stop checking after 5 seconds (5000ms) to prevent infinite checking
+    // Set an overall timeout to ensure we don't check forever
     setTimeout(() => {
         if (loadingCheckInterval) {
             clearInterval(loadingCheckInterval);
             loadingCheckInterval = null;
             isPageLoading = false;
+            console.log('[DOM Tracker] Forced end of loading state detection after timeout');
         }
     }, 5000);
 }
@@ -335,13 +373,16 @@ const createStateObject = (stateId, url, hash, isNewState) => {
     // Calculate load time
     const loadTime = Math.max(0, performance.timing.loadEventEnd - performance.timing.navigationStart);
 
+    // Use the current isPageLoading state
+    console.log(`[DOM Tracker] Creating state object with isPageLoading=${isPageLoading}`);
+
     // Create loading info
     const loadingInfo = {
         isNavigation: false,
         isInitial: false,
         isReload: false,
         isFinalState: false,
-        isPartOfLoading: isPageLoading,
+        isPartOfLoading: isPageLoading, // Use the current loading state
         loadTime: loadTime,
         resourceCount: resourceCount,
         resourceTypes: resourceTypes,
@@ -613,11 +654,12 @@ function handleNavigation() {
     // Reset hash for this new page load
     lastDomHash = null;
     
+    // Explicitly set loading state for navigation events
+    isPageLoading = true;
+    
     // Start loading detection
     startLoadingDetection();
     
-    // Set loading state
-    isPageLoading = true;
     loadingStartTime = Date.now();
     
     console.log('[DOM Tracker] Page is now in loading state');
@@ -632,6 +674,12 @@ function handleNavigation() {
             const { state, isNewState } = createDomState();
             state.hash = currentHash; // Ensure hash is consistent
             state.isNavigation = true; // Mark this as a navigation event
+            
+            // Force loading info to be true for navigation events
+            if (state.loadingInfo) {
+                state.loadingInfo.isPartOfLoading = true;
+                state.loadingInfo.isNavigation = true;
+            }
             
             // This is critical - send the isNavigation flag at the top level of the message
             sendToBackground('recordState', {
@@ -818,42 +866,44 @@ function startRecording(newSessionId, newUserId) {
     // Start loading detection
     startLoadingDetection();
     
-    // Create initial state
-    const currentHash = calculateDomHash();
-    const { state, isNewState } = createDomState();
-    state.hash = currentHash; // Ensure consistent hash
-    state.isNewState = true; // Always mark as new state
-    
-    // Send initial state and get the real stateId back
-    sendToBackground('recordState', {
-        state: state,
-        isInitial: true
-    })
-    .then(response => {
-        console.log(`[DOM Tracker] Background response for initial state:`, response);
+    // Create initial state after a short delay to allow loading detection to complete
+    setTimeout(() => {
+        const currentHash = calculateDomHash();
+        const { state, isNewState } = createDomState();
+        state.hash = currentHash; // Ensure consistent hash
+        state.isNewState = true; // Always mark as new state
         
-        if (response && response.isDuplicate) {
-            console.log(`[DOM Tracker] *** DUPLICATE INITIAL STATE DETECTED *** Hash ${currentHash} already exists as ${response.stateId}`);
-            previousStates[currentHash] = response.stateId;
-        }
-        else if (response && response.stateId) {
-            // Update our map with the real stateId from the server
-            previousStates[currentHash] = response.stateId;
-            currentStateId = response.stateId;
-            console.log(`[DOM Tracker] Updated initial state tracking with server-assigned ID: ${response.stateId}`);
-        } else {
-            console.warn('[DOM Tracker] Did not receive valid stateId from background script');
-        }
+        // Send initial state and get the real stateId back
+        sendToBackground('recordState', {
+            state: state,
+            isInitial: true
+        })
+        .then(response => {
+            console.log(`[DOM Tracker] Background response for initial state:`, response);
+            
+            if (response && response.isDuplicate) {
+                console.log(`[DOM Tracker] *** DUPLICATE INITIAL STATE DETECTED *** Hash ${currentHash} already exists as ${response.stateId}`);
+                previousStates[currentHash] = response.stateId;
+            }
+            else if (response && response.stateId) {
+                // Update our map with the real stateId from the server
+                previousStates[currentHash] = response.stateId;
+                currentStateId = response.stateId;
+                console.log(`[DOM Tracker] Updated initial state tracking with server-assigned ID: ${response.stateId}`);
+            } else {
+                console.warn('[DOM Tracker] Did not receive valid stateId from background script');
+            }
+            
+            // Always update lastDomHash to the current hash
+            lastDomHash = currentHash;
+        })
+        .catch(error => {
+            console.error('[DOM Tracker] Error capturing initial state ID:', error);
+        });
         
-        // Always update lastDomHash to the current hash
-        lastDomHash = currentHash;
-    })
-    .catch(error => {
-        console.error('[DOM Tracker] Error capturing initial state ID:', error);
-    });
-    
-    console.log(`[DOM Tracker] Started recording with session ${sessionId}`);
-    console.log(`[DOM Tracker] Initial state created with hash: ${currentHash}`);
+        console.log(`[DOM Tracker] Started recording with session ${sessionId}`);
+        console.log(`[DOM Tracker] Initial state created with hash: ${currentHash}`);
+    }, 100); // Wait for loading detection to complete
     
     isRecording = true;
 }
@@ -892,7 +942,11 @@ function initialize() {
     // Create initial state when page is fully loaded
     window.addEventListener('load', () => {
         console.log('[DOM Tracker] Page fully loaded');
-    if (isRecording) {
+        if (isRecording) {
+            // For an actual page load event, this should always be considered a loading state
+            // We're capturing the state at the end of loading, but it represents a loading process
+            isPageLoading = true;
+            
             // Calculate hash once and reuse it
             const currentHash = calculateDomHash();
             console.log(`[DOM Tracker] Page load state hash: ${currentHash}`);
@@ -911,6 +965,11 @@ function initialize() {
             } else {
                 state.isInitial = true;
                 console.log('[DOM Tracker] Setting isInitial flag for state');
+            }
+            
+            // Force loading info to be true for both initial and reload states
+            if (state.loadingInfo) {
+                state.loadingInfo.isPartOfLoading = true;
             }
             
             // IMPORTANT: Pass the flags at the top level of the message
@@ -935,10 +994,15 @@ function initialize() {
                     if (isReload) {
                         sessionStorage.setItem('isReload', 'false');
                     }
+                    
+                    // Reset loading state back to false after capturing
+                    isPageLoading = false;
                 }
             })
             .catch(error => {
                 console.error('[DOM Tracker] Error getting stateId for page load state:', error);
+                // Reset loading state back to false after capturing
+                isPageLoading = false;
             });
             
             const loadType = isReload ? "RELOAD" : "INITIAL LOAD";

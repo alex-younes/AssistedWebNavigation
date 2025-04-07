@@ -9,7 +9,7 @@ const domStateSchema = new mongoose.Schema({
   pathname: { type: String }, // Store just the path part of URL for easier matching
   timestamp: { type: Date, default: Date.now },
   isNewState: { type: Boolean, default: true },
-  stateNumber: { type: Number, default: 0 }, // Track sequential state number
+  stateNumber: { type: Number, default: 0 }, // Track sequential state number, can be decimal for loading states (1.1, 1.2)
   hash: { type: String, required: true }, // Using hash for more consistency with standard terms
   dom: { type: String }, // Add the DOM field
   metrics: {
@@ -38,6 +38,17 @@ const domStateSchema = new mongoose.Schema({
     timestamp: { type: Date, default: Date.now }
   }
 }, { timestamps: true });
+
+// Add a helper method to determine if this is a loading state
+domStateSchema.methods.isLoadingState = function() {
+  return this.loadingInfo?.isPartOfLoading === true || 
+         (this.stateId && this.stateId.includes('_loading_'));
+};
+
+// Add a helper method to get the base state number (removes decimal part)
+domStateSchema.methods.getBaseStateNumber = function() {
+  return Math.floor(this.stateNumber);
+};
 
 // Create and export the model - check if it already exists first
 const DOMState = mongoose.models.DOMState || mongoose.model('DOMState', domStateSchema);

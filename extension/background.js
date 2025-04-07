@@ -9,6 +9,7 @@ let userId = null;
 let sessionStateCounter = 0; // Track state numbers across navigation
 let sessionStateHashes = {}; // Track hashes we've already seen
 let stateProcessingLock = {}; // Lock to prevent duplicate processing of same hash
+let saveLoadingStates = true; // New setting to control whether loading states are saved
 
 // Initialize state from storage on startup
 const initializeState = async () => {
@@ -17,15 +18,18 @@ const initializeState = async () => {
       'recordingStatus', 
       'userId', 
       'currentSessionId', 
-      'apiBaseUrl'
+      'apiBaseUrl',
+      'saveLoadingStates' // Add new setting
     ]);
     
     if (result.recordingStatus) recordingStatus = result.recordingStatus;
     if (result.userId) userId = result.userId;
     if (result.currentSessionId) currentSessionId = result.currentSessionId;
     if (result.apiBaseUrl) API_BASE_URL = result.apiBaseUrl;
+    if (result.saveLoadingStates !== undefined) saveLoadingStates = result.saveLoadingStates;
     
     console.log('[Extension] Initialized state from storage');
+    console.log('[Extension] Save loading states setting:', saveLoadingStates);
     updateBadge();
   } catch (error) {
     console.error('[Extension] Error initializing state:', error);
@@ -42,7 +46,8 @@ const saveState = async () => {
       recordingStatus,
       userId,
       currentSessionId,
-      apiBaseUrl: API_BASE_URL
+      apiBaseUrl: API_BASE_URL,
+      saveLoadingStates // Save the new setting
     });
   } catch (error) {
     console.error('[Extension] Error saving state:', error);
@@ -181,6 +186,15 @@ const getStateLockKey = (state) => {
   return `${state.sessionId}_${state.hash}_${timestampKey}`;
 };
 
+// Set save loading states setting
+const setSaveLoadingStates = async (value) => {
+  console.log(`[Extension] Setting saveLoadingStates to: ${value}`);
+  saveLoadingStates = value;
+  await saveState();
+  console.log(`[Extension] saveLoadingStates saved as: ${saveLoadingStates}`);
+  return { success: true, saveLoadingStates };
+};
+
 // Save DOM state to backend
 const saveDOMState = async (state) => {
   try {
@@ -206,6 +220,20 @@ const saveDOMState = async (state) => {
       try {
         console.log(`[Extension] Processing state with hash: ${state.hash}`);
         
+        // Check if this is a loading state
+        const isLoading = state.loadingInfo?.isPartOfLoading === true;
+        
+        // Check if we should skip saving this loading state
+        if (isLoading && !saveLoadingStates) {
+          console.log(`[Extension] Skipping saving loading state (saveLoadingStates is disabled)`);
+          return { 
+            success: true, 
+            stateId: `state_temp_${Date.now()}`,
+            skipped: true
+          };
+        }
+        
+        // Continue with normal processing...
         // Check if this is a special event
         const isSpecialEvent = 
           state.isNavigation === true || 
@@ -228,7 +256,16 @@ const saveDOMState = async (state) => {
           console.log(`[Extension] Special event (${eventType}) with EXISTING hash: ${state.hash}`);
           
           state.stateId = existingStateId;
-          state.stateNumber = parseInt(existingStateId.split('_')[1]);
+          
+          // Extract state number from the existing ID
+          if (existingStateId.includes('_loading_')) {
+            const baseNum = parseInt(existingStateId.split('_')[1]);
+            const loadingNum = parseInt(existingStateId.split('_loading_')[1]);
+            state.stateNumber = baseNum + loadingNum/10; // For example: 1.1, 1.2, etc.
+          } else {
+            state.stateNumber = parseInt(existingStateId.split('_')[1]);
+          }
+          
           state.isNewState = false;
           
           if (state.loadingInfo) {
@@ -252,8 +289,30 @@ const saveDOMState = async (state) => {
           // Increment the state counter for this session
           sessionStateCounter++;
           
-          state.stateNumber = sessionStateCounter;
-          state.stateId = `state_${Date.now()}`;
+          // NEW: Check if this is a loading state
+          const isLoading = state.loadingInfo?.isPartOfLoading === true;
+          
+          // NEW: Generate stateId with loading indicator if needed
+          const timestamp = Date.now();
+          const baseStateNumber = Math.floor(sessionStateCounter / 10) * 10 + 1; // Group in sets of 10 (e.g., 1, 11, 21)
+          
+          if (isLoading) {
+            // Format: state_1_loading_1, state_1_loading_2, etc.
+            const loadingNumber = sessionStateCounter % 10 || 1;
+            state.stateId = `state_${baseStateNumber}_loading_${loadingNumber}`;
+            
+            // Set stateNumber to match loading format
+            state.stateNumber = baseStateNumber + loadingNumber/10; // For example: 1.1, 1.2, etc.
+            
+            console.log(`[Extension] Created loading state ID: ${state.stateId}, stateNumber: ${state.stateNumber}`);
+          } else {
+            // Format: state_1, state_11, state_21, etc. for final states
+            state.stateId = `state_${baseStateNumber}_${timestamp}`;
+            state.stateNumber = baseStateNumber; // Whole number for final states
+            
+            console.log(`[Extension] Created final state ID: ${state.stateId}, stateNumber: ${state.stateNumber}`);
+          }
+          
           state.isNewState = true;
           
           if (state.loadingInfo) {
@@ -284,8 +343,30 @@ const saveDOMState = async (state) => {
           // Increment the state counter for this session
           sessionStateCounter++;
           
-          state.stateNumber = sessionStateCounter;
-          state.stateId = `state_${Date.now()}`;
+          // NEW: Check if this is a loading state
+          const isLoading = state.loadingInfo?.isPartOfLoading === true;
+          
+          // NEW: Generate stateId with loading indicator if needed
+          const timestamp = Date.now();
+          const baseStateNumber = Math.floor(sessionStateCounter / 10) * 10 + 1; // Group in sets of 10
+          
+          if (isLoading) {
+            // Format: state_1_loading_1, state_1_loading_2, etc.
+            const loadingNumber = sessionStateCounter % 10 || 1;
+            state.stateId = `state_${baseStateNumber}_loading_${loadingNumber}`;
+            
+            // Set stateNumber to match loading format
+            state.stateNumber = baseStateNumber + loadingNumber/10; // For example: 1.1, 1.2, etc.
+            
+            console.log(`[Extension] Created loading state ID: ${state.stateId}, stateNumber: ${state.stateNumber}`);
+          } else {
+            // Format: state_1, state_11, state_21, etc. for final states
+            state.stateId = `state_${baseStateNumber}_${timestamp}`;
+            state.stateNumber = baseStateNumber; // Whole number for final states
+            
+            console.log(`[Extension] Created final state ID: ${state.stateId}, stateNumber: ${state.stateNumber}`);
+          }
+          
           state.isNewState = true;
           
           if (state.hash) {
@@ -348,7 +429,7 @@ const saveDOMState = async (state) => {
         }
         
         const result = await response.json();
-        console.log(`[Extension] Saved DOM state: ${state.stateId} (isNewState: ${state.isNewState})`);
+        console.log(`[Extension] Saved DOM state: ${state.stateId} (isNewState: ${state.isNewState}, stateNumber: ${state.stateNumber})`);
         
         return { 
           success: true, 
@@ -447,6 +528,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             sendResponse(result);
           } catch (error) {
             console.error('[Extension] Error saving state:', error);
+            sendResponse({ success: false, error: error.message });
+          }
+        })();
+        return true;
+        
+      case 'setSaveLoadingStates':
+        (async () => {
+          try {
+            console.log(`[Extension] Received setSaveLoadingStates message with value: ${message.value}`);
+            const value = message.value === true || message.value === 'true';
+            const result = await setSaveLoadingStates(value);
+            console.log(`[Extension] setSaveLoadingStates result:`, result);
+            sendResponse(result);
+          } catch (error) {
+            console.error('[Extension] Error in setSaveLoadingStates:', error);
             sendResponse({ success: false, error: error.message });
           }
         })();

@@ -278,8 +278,8 @@ router.get('/extension/recorder/session/:sessionId/states', async (req, res) => 
             });
         }
         
-        // Get states for this session
-        const states = await db.getDOMStates({ sessionId });
+        // Get states for this session using the state number order
+        const states = await db.getStatesByStateNumber(sessionId);
         
         return res.json({
             success: true,
@@ -291,6 +291,66 @@ router.get('/extension/recorder/session/:sessionId/states', async (req, res) => 
         return res.status(500).json({
             success: false,
             error: 'Error getting session states: ' + error.message
+        });
+    }
+});
+
+// New endpoint to get states grouped by page and loading status
+router.get('/extension/recorder/session/:sessionId/statesByPage', async (req, res) => {
+    try {
+        const { sessionId } = req.params;
+        
+        if (!sessionId) {
+            return res.status(400).json({
+                success: false,
+                error: 'Missing session ID'
+            });
+        }
+        
+        // Get states grouped by their base state number
+        const stateGroups = await db.getStateGroups(sessionId);
+        
+        // Format the response for easier consumption
+        const pages = [];
+        
+        for (const [baseStateNumber, states] of Object.entries(stateGroups)) {
+            // Find loading states (those with decimal stateNumbers) and final state (whole stateNumber)
+            const loadingStates = states.filter(s => s.stateNumber !== Math.floor(s.stateNumber));
+            const finalStates = states.filter(s => s.stateNumber === Math.floor(s.stateNumber));
+            const finalState = finalStates.length > 0 ? finalStates[0] : null;
+            
+            pages.push({
+                baseStateNumber: parseInt(baseStateNumber),
+                url: states[0].url,
+                title: states[0].title,
+                loadingStates: loadingStates.map(s => ({
+                    stateId: s.stateId,
+                    stateNumber: s.stateNumber,
+                    timestamp: s.timestamp,
+                    metrics: s.metrics,
+                    hash: s.hash
+                })),
+                finalState: finalState ? {
+                    stateId: finalState.stateId,
+                    stateNumber: finalState.stateNumber,
+                    timestamp: finalState.timestamp,
+                    metrics: finalState.metrics,
+                    hash: finalState.hash
+                } : null,
+                totalStates: states.length
+            });
+        }
+        
+        return res.json({
+            success: true,
+            pages,
+            count: pages.length
+        });
+    } catch (error) {
+        console.error('[Backend] Error getting states by page:', error);
+        return res.status(500).json({
+            success: false,
+            error: 'Error getting states by page: ' + error.message
         });
     }
 });
@@ -365,6 +425,9 @@ router.post('/states', async (req, res) => {
       .sort({ stateNumber: -1 });
     const nextStateNumber = lastState ? lastState.stateNumber + 1 : 0;
     
+    // Determine if this is a loading state from the stateId format
+    const isLoadingState = stateId && stateId.includes('_loading_');
+    
     // Create new state
     const state = new DOMState({
       stateId: stateId || `state_${Date.now()}`,
@@ -389,7 +452,7 @@ router.post('/states', async (req, res) => {
         isInitial: loadingInfo?.isInitial || false,
         isReload: loadingInfo?.isReload || false,
         isFinalState: loadingInfo?.isFinalState || false,
-        isPartOfLoading: loadingInfo?.isPartOfLoading || false,
+        isPartOfLoading: isLoadingState || loadingInfo?.isPartOfLoading || false, // Set based on stateId format too
         loadTime: loadingInfo?.loadTime || 0,
         resourceCount: loadingInfo?.resourceCount || 0,
         resourceTypes: loadingInfo?.resourceTypes || {},
@@ -405,7 +468,7 @@ router.post('/states', async (req, res) => {
     });
     
     await state.save();
-    console.log(`[Backend] Saved new state: ${state.stateId} (hash: ${hash}, stateNumber: ${state.stateNumber})`);
+    console.log(`[Backend] Saved new state: ${state.stateId} (hash: ${hash}, stateNumber: ${state.stateNumber}, isLoading: ${isLoadingState})`);
     
     res.status(201).json({ 
       stateId: state.stateId,

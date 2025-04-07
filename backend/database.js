@@ -132,6 +132,86 @@ const db = {
     return await DOMState.find({ sessionId })
       .sort({ timestamp: 1 })
       .select('stateId url timestamp');
+  },
+  
+  // New methods for working with loading states
+  async getLoadingStates(sessionId) {
+    return await DOMState.find({ 
+      sessionId, 
+      $or: [
+        { stateId: { $regex: /_loading_/ } },
+        { 'loadingInfo.isPartOfLoading': true }
+      ]
+    })
+    .sort({ stateNumber: 1 });
+  },
+  
+  async getFinalStates(sessionId) {
+    return await DOMState.find({ 
+      sessionId, 
+      $and: [
+        { stateId: { $not: { $regex: /_loading_/ } } },
+        { 'loadingInfo.isPartOfLoading': { $ne: true } }
+      ]
+    })
+    .sort({ stateNumber: 1 });
+  },
+
+  // Get states sorted by their decimal state number
+  async getStatesByStateNumber(sessionId) {
+    return await DOMState.find({ sessionId })
+      .sort({ stateNumber: 1 });
+  },
+
+  // Group states by base state number (e.g., state 1.1 and 1.2 are grouped with state 1)
+  async getStateGroups(sessionId) {
+    const states = await DOMState.find({ sessionId }).sort({ stateNumber: 1 });
+    
+    // Group by the floor of state number (1.1 -> 1, 1.2 -> 1, etc)
+    const stateGroups = {};
+    
+    states.forEach(state => {
+      const baseStateNumber = Math.floor(state.stateNumber);
+      
+      if (!stateGroups[baseStateNumber]) {
+        stateGroups[baseStateNumber] = [];
+      }
+      
+      stateGroups[baseStateNumber].push(state);
+    });
+    
+    return stateGroups;
+  },
+  
+  async getStatesByPage(sessionId) {
+    // Group states by their base state number to keep loading states with their final state
+    const states = await DOMState.find({ sessionId }).sort({ stateNumber: 1 });
+    
+    // Group states by their base state ID
+    const stateGroups = {};
+    
+    states.forEach(state => {
+      let baseId = state.stateId;
+      
+      // Extract base state number from loading states (state_1_loading_2 -> state_1)
+      if (state.stateId.includes('_loading_')) {
+        baseId = state.stateId.split('_loading_')[0];
+      } else if (state.stateId.includes('_')) {
+        // For state_1_1234567890, extract state_1 as the base
+        const parts = state.stateId.split('_');
+        if (parts.length >= 3) {
+          baseId = `${parts[0]}_${parts[1]}`;
+        }
+      }
+      
+      if (!stateGroups[baseId]) {
+        stateGroups[baseId] = [];
+      }
+      
+      stateGroups[baseId].push(state);
+    });
+    
+    return stateGroups;
   }
 };
 

@@ -158,6 +158,42 @@ document.addEventListener('DOMContentLoaded', async () => {
     startRecordingBtn.addEventListener('click', startRecording);
     stopRecordingBtn.addEventListener('click', stopRecording);
     
+    // Set up save loading states toggle
+    const saveLoadingStatesToggle = document.getElementById('saveLoadingStatesToggle');
+    const toggleContainer = document.querySelector('.toggle-switch');
+    
+    if (saveLoadingStatesToggle && toggleContainer) {
+        // Load current setting
+        const result = await chrome.storage.local.get(['saveLoadingStates']);
+        if (result.saveLoadingStates !== undefined) {
+            saveLoadingStatesToggle.checked = result.saveLoadingStates;
+        }
+        
+        // Replace change event with click event on the container
+        toggleContainer.addEventListener('click', async (e) => {
+            // Toggle the checkbox
+            saveLoadingStatesToggle.checked = !saveLoadingStatesToggle.checked;
+            const value = saveLoadingStatesToggle.checked;
+            
+            console.log('Toggle clicked, new value:', value);
+            
+            // Send message to background script to update setting
+            chrome.runtime.sendMessage({
+                action: 'setSaveLoadingStates',
+                value: value
+            }, (response) => {
+                if (response && response.success) {
+                    showStatus(`Loading states will ${value ? 'be saved' : 'not be saved'} to database`, 'success');
+                } else {
+                    showStatus('Error updating settings', 'error');
+                }
+            });
+            
+            // Prevent the event from propagating further
+            e.stopPropagation();
+        });
+    }
+    
     // Set up server config form
     const serverForm = document.getElementById('serverConfigForm');
     if (serverForm) {

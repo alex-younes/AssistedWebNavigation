@@ -7,6 +7,7 @@ let recordingTabId = null;
 let recordingStatus = 'idle'; // 'idle', 'recording', 'paused'
 let userId = null;
 let sessionStateCounter = 0; // Track state numbers across navigation
+let finalStateCounter = 0;  // NEW: Track final states separately
 let sessionStateHashes = {}; // Track hashes we've already seen
 let stateProcessingLock = {}; // Lock to prevent duplicate processing of same hash
 let saveLoadingStates = true; // New setting to control whether loading states are saved
@@ -89,6 +90,7 @@ const startRecordingSession = async (sessionId, tabInfo = null) => {
     
     // Reset state counter and hash tracking when starting a new session
     sessionStateCounter = 0;
+    finalStateCounter = 0; // Reset final state counter too
     sessionStateHashes = {}; // Clear hash tracking
     stateProcessingLock = {}; // Reset processing locks
     console.log('[Extension] Reset state counter and hash tracking for new session');
@@ -259,11 +261,20 @@ const saveDOMState = async (state) => {
           
           // Extract state number from the existing ID
           if (existingStateId.includes('_loading_')) {
+            // For loading states like "state_2_loading_1"
             const baseNum = parseInt(existingStateId.split('_')[1]);
             const loadingNum = parseInt(existingStateId.split('_loading_')[1]);
-            state.stateNumber = baseNum + loadingNum/10; // For example: 1.1, 1.2, etc.
+            state.stateNumber = baseNum + loadingNum/10; // For example: 2.1
+            
+            // Update finalStateCounter if this base number is higher
+            finalStateCounter = Math.max(finalStateCounter, baseNum);
           } else {
-            state.stateNumber = parseInt(existingStateId.split('_')[1]);
+            // For final states like "state_2_1234567890"
+            const stateNum = parseInt(existingStateId.split('_')[1]);
+            state.stateNumber = stateNum;
+            
+            // Update finalStateCounter if this state number is higher
+            finalStateCounter = Math.max(finalStateCounter, stateNum);
           }
           
           state.isNewState = false;
@@ -294,11 +305,11 @@ const saveDOMState = async (state) => {
           
           // NEW: Generate stateId with loading indicator if needed
           const timestamp = Date.now();
-          const baseStateNumber = Math.floor(sessionStateCounter / 10) * 10 + 1; // Group in sets of 10 (e.g., 1, 11, 21)
           
           if (isLoading) {
             // Format: state_1_loading_1, state_1_loading_2, etc.
             const loadingNumber = sessionStateCounter % 10 || 1;
+            const baseStateNumber = finalStateCounter + 1; // Associate with the next final state
             state.stateId = `state_${baseStateNumber}_loading_${loadingNumber}`;
             
             // Set stateNumber to match loading format
@@ -306,9 +317,12 @@ const saveDOMState = async (state) => {
             
             console.log(`[Extension] Created loading state ID: ${state.stateId}, stateNumber: ${state.stateNumber}`);
           } else {
-            // Format: state_1, state_11, state_21, etc. for final states
-            state.stateId = `state_${baseStateNumber}_${timestamp}`;
-            state.stateNumber = baseStateNumber; // Whole number for final states
+            // Increment final state counter for new final states
+            finalStateCounter++;
+            
+            // Format: state_1, state_2, state_3, etc. for final states
+            state.stateId = `state_${finalStateCounter}_${timestamp}`;
+            state.stateNumber = finalStateCounter; // Whole number for final states
             
             console.log(`[Extension] Created final state ID: ${state.stateId}, stateNumber: ${state.stateNumber}`);
           }
@@ -348,11 +362,11 @@ const saveDOMState = async (state) => {
           
           // NEW: Generate stateId with loading indicator if needed
           const timestamp = Date.now();
-          const baseStateNumber = Math.floor(sessionStateCounter / 10) * 10 + 1; // Group in sets of 10
           
           if (isLoading) {
             // Format: state_1_loading_1, state_1_loading_2, etc.
             const loadingNumber = sessionStateCounter % 10 || 1;
+            const baseStateNumber = finalStateCounter + 1; // Associate with the next final state
             state.stateId = `state_${baseStateNumber}_loading_${loadingNumber}`;
             
             // Set stateNumber to match loading format
@@ -360,9 +374,12 @@ const saveDOMState = async (state) => {
             
             console.log(`[Extension] Created loading state ID: ${state.stateId}, stateNumber: ${state.stateNumber}`);
           } else {
-            // Format: state_1, state_11, state_21, etc. for final states
-            state.stateId = `state_${baseStateNumber}_${timestamp}`;
-            state.stateNumber = baseStateNumber; // Whole number for final states
+            // Increment final state counter for new final states
+            finalStateCounter++;
+            
+            // Format: state_1, state_2, state_3, etc. for final states
+            state.stateId = `state_${finalStateCounter}_${timestamp}`;
+            state.stateNumber = finalStateCounter; // Whole number for final states
             
             console.log(`[Extension] Created final state ID: ${state.stateId}, stateNumber: ${state.stateNumber}`);
           }

@@ -222,6 +222,11 @@ const saveDOMState = async (state) => {
       try {
         console.log(`[Extension] Processing state with hash: ${state.hash}`);
         
+        // Log when we receive an initial state (now only from window load event)
+        if (state.isInitial === true) {
+          console.log(`[Extension] Processing initial state from window load event`);
+        }
+        
         // Check if this is a loading state
         const isLoading = state.loadingInfo?.isPartOfLoading === true;
         
@@ -493,6 +498,12 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   try {
     console.log('[Extension] Received message:', message.action);
+    
+    // Log source if available to help identify where duplicates are coming from
+    if (message._source) {
+      console.log('[Extension] Source:', message._source);
+    }
+    
     console.log('[Extension] Message details:', message); // Log full message for debugging
     
     // If message is from a content script in a tab, update the recordingTabId

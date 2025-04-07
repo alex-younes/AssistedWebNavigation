@@ -20,11 +20,15 @@ let lastDomSnapshot = ''; // Last DOM snapshot for comparison
 
 // Send a message to the background script
 function sendToBackground(action, data) {
-    console.log(`[DOM Tracker] Sending to background: ${action}`);
+    // Add call stack info to identify where the call is coming from
+    const stackTrace = new Error().stack;
+    const callerInfo = stackTrace.split('\n')[2]?.trim() || 'unknown';
     
-    // Simple message passing
+    console.log(`[DOM Tracker] Sending to background: ${action} from: ${callerInfo}`);
+    
+    // Simple message passing with unchanged functionality
     return new Promise((resolve, reject) => {
-        chrome.runtime.sendMessage({ action, ...data }, response => {
+        chrome.runtime.sendMessage({ action, ...data, _source: callerInfo }, response => {
             if (chrome.runtime.lastError) {
                 console.error('[DOM Tracker] Error sending message:', chrome.runtime.lastError);
                 reject(chrome.runtime.lastError);
@@ -863,44 +867,9 @@ function startRecording(newSessionId, newUserId) {
     // Start loading detection
     startLoadingDetection();
     
-    // Create initial state after a short delay to allow loading detection to complete
-    setTimeout(() => {
-        const currentHash = calculateDomHash();
-        const { state, isNewState } = createDomState();
-        state.hash = currentHash; // Ensure consistent hash
-        state.isNewState = true; // Always mark as new state
-        
-        // Send initial state and get the real stateId back
-        sendToBackground('recordState', {
-            state: state,
-            isInitial: true
-        })
-        .then(response => {
-            console.log(`[DOM Tracker] Background response for initial state:`, response);
-            
-            if (response && response.isDuplicate) {
-                console.log(`[DOM Tracker] *** DUPLICATE INITIAL STATE DETECTED *** Hash ${currentHash} already exists as ${response.stateId}`);
-                previousStates[currentHash] = response.stateId;
-            }
-            else if (response && response.stateId) {
-                // Update our map with the real stateId from the server
-                previousStates[currentHash] = response.stateId;
-                currentStateId = response.stateId;
-                console.log(`[DOM Tracker] Updated initial state tracking with server-assigned ID: ${response.stateId}`);
-            } else {
-                console.warn('[DOM Tracker] Did not receive valid stateId from background script');
-            }
-            
-            // Always update lastDomHash to the current hash
-            lastDomHash = currentHash;
-        })
-        .catch(error => {
-            console.error('[DOM Tracker] Error capturing initial state ID:', error);
-        });
-        
-        console.log(`[DOM Tracker] Started recording with session ${sessionId}`);
-        console.log(`[DOM Tracker] Initial state created with hash: ${currentHash}`);
-    }, 100); // Wait for loading detection to complete
+    // No longer creating initial state here - it will be handled by the window load event
+    console.log(`[DOM Tracker] Started recording with session ${sessionId}`);
+    console.log(`[DOM Tracker] Initial state will be created by window load event handler`);
     
     isRecording = true;
 }
@@ -960,6 +929,7 @@ function initialize() {
                 state.isReload = true;
                 console.log('[DOM Tracker] Setting isReload flag for state');
             } else {
+                // This is the only place we now set isInitial
                 state.isInitial = true;
                 console.log('[DOM Tracker] Setting isInitial flag for state');
             }

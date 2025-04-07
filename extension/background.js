@@ -249,8 +249,11 @@ const saveDOMState = async (state) => {
           
           console.log(`[Extension] Special event (${eventType}) with NEW hash: ${state.hash}`);
           
+          // Increment the state counter for this session
+          sessionStateCounter++;
+          
           state.stateNumber = sessionStateCounter;
-          state.stateId = `state_${sessionStateCounter}`;
+          state.stateId = `state_${Date.now()}`;
           state.isNewState = true;
           
           if (state.loadingInfo) {
@@ -264,8 +267,6 @@ const saveDOMState = async (state) => {
             sessionStateHashes[state.hash] = state.stateId;
             console.log(`[Extension] Added new hash to tracking: ${state.hash} -> ${state.stateId}`);
           }
-          
-          sessionStateCounter++;
         }
         // Handle duplicate regular states
         else if (existingStateId) {
@@ -280,43 +281,56 @@ const saveDOMState = async (state) => {
         else {
           console.log(`[Extension] New regular state with hash: ${state.hash}`);
           
+          // Increment the state counter for this session
+          sessionStateCounter++;
+          
           state.stateNumber = sessionStateCounter;
-          state.stateId = `state_${sessionStateCounter}`;
+          state.stateId = `state_${Date.now()}`;
           state.isNewState = true;
           
           if (state.hash) {
             sessionStateHashes[state.hash] = state.stateId;
             console.log(`[Extension] Added hash to tracking: ${state.hash} -> ${state.stateId}`);
           }
-          
-          sessionStateCounter++;
         }
         
         // Format the state data to match the backend model
         const formattedState = {
+          stateId: state.stateId,
+          sessionId: state.sessionId,
+          userId: state.userId,
+          url: state.url,
+          pathname: state.pathname,
+          timestamp: state.timestamp,
+          isNewState: state.isNewState,
+          stateNumber: state.stateNumber,
           hash: state.hash,
           dom: state.dom,
+          metrics: state.metrics || {
+            domSize: 0,
+            elementCount: 0,
+            formElements: 0,
+            visibleElements: 0
+          },
+          title: state.title,
           loadingInfo: {
             isNavigation: state.isNavigation || false,
             isInitial: state.isInitial || false,
             isReload: state.isReload || false,
             isFinalState: state.loadingInfo?.isFinalState || false,
-            isPartOfLoading: state.loadingInfo?.isPartOfLoading || false, // Include loading state info
+            isPartOfLoading: state.loadingInfo?.isPartOfLoading || false,
             loadTime: state.loadingInfo?.loadTime || 0,
             resourceCount: state.loadingInfo?.resourceCount || 0,
             resourceTypes: state.loadingInfo?.resourceTypes || {},
             errorCount: state.loadingInfo?.errorCount || 0,
             networkInfo: state.loadingInfo?.networkInfo || {},
-            timestamp: state.loadingInfo?.timestamp || Date.now()
+            timestamp: state.loadingInfo?.timestamp || new Date().toISOString()
           },
           mutationInfo: {
             count: state.mutationInfo?.count || 0,
             types: state.mutationInfo?.types || [],
-            timestamp: state.mutationInfo?.timestamp || Date.now()
-          },
-          tabId: state.tabId || null,
-          sessionId: state.sessionId || currentSessionId || null,
-          userId: state.userId || userId || null
+            timestamp: state.mutationInfo?.timestamp || new Date().toISOString()
+          }
         };
         
         console.log(`[Extension] Sending formatted state to backend:`, formattedState);

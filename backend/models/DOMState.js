@@ -11,6 +11,7 @@ const domStateSchema = new mongoose.Schema({
   isNewState: { type: Boolean, default: true },
   stateNumber: { type: Number, default: 0 }, // Track sequential state number
   hash: { type: String, required: true }, // Using hash for more consistency with standard terms
+  dom: { type: String }, // Add the DOM field
   metrics: {
     domSize: { type: Number },
     elementCount: { type: Number },

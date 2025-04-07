@@ -233,7 +233,18 @@ function createDomState() {
     const stateId = 'state_temp';
     console.log(`[DOM Tracker] Creating state with hash: ${hash}`);
     
+    // Capture the current DOM immediately
+    const currentDom = document.documentElement.outerHTML;
+    
+    // Create the state object with the captured DOM
     const state = createStateObject(stateId, url, hash, isNewState);
+    
+    // Ensure the DOM is included in the state
+    state.dom = currentDom;
+    
+    // Log the state for debugging
+    console.log(`[DOM Tracker] Created state with DOM size: ${state.dom.length} bytes`);
+    
     currentStateId = stateId; // This will be replaced by background script's ID
     
     return { state, isNewState };
@@ -282,76 +293,98 @@ function startLoadingDetection() {
     }, 5000);
 }
 
-// Create a state object with all necessary properties
-function createStateObject(stateId, url, hash, isNewState) {
-    // Collect meaningful metrics about the DOM
+// Create state object with all required fields
+const createStateObject = (stateId, url, hash, isNewState) => {
+    // Get current DOM metrics
     const domSize = document.documentElement.outerHTML.length;
-    const elementCount = document.querySelectorAll('*').length;
-    const formElements = document.querySelectorAll('input, select, textarea').length;
-    const visibleElements = document.querySelectorAll('button, a[href], input, select, textarea, [role="button"]').length;
-    
-    // Get the current DOM
-    const dom = document.documentElement.outerHTML;
-    
-    // State number will be assigned by background script
-    const stateNumber = 0; 
-    
-    // Collect loading information
+    const elementCount = document.getElementsByTagName('*').length;
+    const formElements = document.getElementsByTagName('form').length;
+    const visibleElements = Array.from(document.getElementsByTagName('*')).filter(el => {
+        const style = window.getComputedStyle(el);
+        return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
+    }).length;
+
+    // Get current URL and path
+    const currentUrl = url || window.location.href;
+    const urlPath = window.location.pathname;
+    const urlHash = window.location.hash;
+    const urlSearch = window.location.search;
+
+    // Get page title
+    const pageTitle = document.title;
+
+    // Get resource information
+    const performanceEntries = performance.getEntriesByType('resource');
+    const resourceCount = performanceEntries.length;
+    const resourceTypes = performanceEntries.reduce((acc, resource) => {
+        const type = resource.initiatorType || 'other';
+        acc[type] = (acc[type] || 0) + 1;
+        return acc;
+    }, {});
+
+    // Get network information
+    const networkInfo = {
+        effectiveType: navigator.connection ? navigator.connection.effectiveType : 'unknown',
+        downlink: navigator.connection ? navigator.connection.downlink : 0,
+        rtt: navigator.connection ? navigator.connection.rtt : 0
+    };
+
+    // Get current DOM
+    const currentDom = document.documentElement.outerHTML;
+
+    // Calculate load time
+    const loadTime = Math.max(0, performance.timing.loadEventEnd - performance.timing.navigationStart);
+
+    // Create loading info
     const loadingInfo = {
         isNavigation: false,
-        isReload: false,
         isInitial: false,
-        isInteraction: false,
-        isDuplicate: false,
+        isReload: false,
         isFinalState: false,
-        isPartOfLoading: isPageLoading, // Add loading state info
-        loadTime: performance.timing.loadEventEnd - performance.timing.navigationStart,
-        resourceCount: performance.getEntriesByType('resource').length,
-        resourceTypes: {},
+        isPartOfLoading: isPageLoading,
+        loadTime: loadTime,
+        resourceCount: resourceCount,
+        resourceTypes: resourceTypes,
         errorCount: 0,
-        networkInfo: {}
+        networkInfo: networkInfo,
+        timestamp: new Date().toISOString()
     };
-    
-    // Count resource types
-    const resources = performance.getEntriesByType('resource');
-    resources.forEach(resource => {
-        const type = resource.initiatorType || 'unknown';
-        loadingInfo.resourceTypes[type] = (loadingInfo.resourceTypes[type] || 0) + 1;
-    });
-    
-    // Count errors
-    const errorResources = resources.filter(resource => resource.transferSize === 0 && resource.duration > 0);
-    loadingInfo.errorCount = errorResources.length;
-    
-    // Get network information if available
-    if (navigator.connection) {
-        loadingInfo.networkInfo = {
-            effectiveType: navigator.connection.effectiveType,
-            downlink: navigator.connection.downlink,
-            rtt: navigator.connection.rtt
-        };
-    }
-    
+
+    // Create mutation info
+    const mutationInfo = {
+        count: 0,
+        types: [],
+        timestamp: new Date().toISOString()
+    };
+
+    // Create metrics
+    const metrics = {
+        domSize: domSize,
+        elementCount: elementCount,
+        formElements: formElements,
+        visibleElements: visibleElements
+    };
+
+    // Create the complete state object
     return {
-        stateId,
-        sessionId,
-        userId,
-        url,
+        stateId: stateId || `state_${Date.now()}`,
+        sessionId: sessionId,
+        userId: userId,
+        url: currentUrl,
+        pathname: urlPath,
+        urlHash: urlHash,
+        urlSearch: urlSearch,
+        title: pageTitle,
         timestamp: new Date().toISOString(),
-        isNewState,
-        stateNumber,
-        metrics: {
-            domSize,
-            elementCount,
-            formElements,
-            visibleElements
-        },
-        hash: hash,
-        dom: dom, // Include the DOM data
-        title: document.title,
-        loadingInfo
+        isNewState: isNewState !== undefined ? isNewState : true,
+        stateNumber: 0, // Will be assigned by background script
+        hash: hash || generateHash(currentDom),
+        dom: currentDom,
+        metrics: metrics,
+        loadingInfo: loadingInfo,
+        mutationInfo: mutationInfo
     };
-}
+};
 
 // Process mutations and create a new state with debouncing
 function processMutations(mutations) {

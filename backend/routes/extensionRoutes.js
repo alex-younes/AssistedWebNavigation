@@ -327,7 +327,24 @@ router.get('/extension/recorder/state/:stateId/interactions', async (req, res) =
 // POST /states - Record a new state
 router.post('/states', async (req, res) => {
   try {
-    const { hash, dom, loadingInfo, mutationInfo, tabId, sessionId, userId } = req.body;
+    const { 
+      stateId, 
+      sessionId, 
+      userId, 
+      url, 
+      pathname, 
+      timestamp, 
+      isNewState, 
+      stateNumber, 
+      hash, 
+      dom, 
+      metrics, 
+      title, 
+      loadingInfo, 
+      mutationInfo 
+    } = req.body;
+    
+    console.log(`[Backend] Received state: ${stateId}, hash: ${hash}, dom size: ${dom ? dom.length : 0} bytes`);
     
     // Validate required fields
     if (!hash || !dom) {
@@ -346,19 +363,27 @@ router.post('/states', async (req, res) => {
     // Get the current state number for this session
     const lastState = await DOMState.findOne({ sessionId })
       .sort({ stateNumber: -1 });
-    const stateNumber = lastState ? lastState.stateNumber + 1 : 0;
+    const nextStateNumber = lastState ? lastState.stateNumber + 1 : 0;
     
     // Create new state
     const state = new DOMState({
-      stateId: `state_${stateNumber}`,
+      stateId: stateId || `state_${Date.now()}`,
       sessionId,
       userId,
-      url: req.headers.origin || 'unknown',
-      pathname: new URL(req.headers.origin || 'http://unknown').pathname,
+      url: url || req.headers.origin || 'unknown',
+      pathname: pathname || new URL(url || req.headers.origin || 'http://unknown').pathname,
+      timestamp: timestamp || new Date(),
+      isNewState: isNewState !== undefined ? isNewState : true,
+      stateNumber: stateNumber !== undefined ? stateNumber : nextStateNumber,
       hash,
       dom,
-      stateNumber,
-      isNewState: true,
+      metrics: metrics || {
+        domSize: 0,
+        elementCount: 0,
+        formElements: 0,
+        visibleElements: 0
+      },
+      title: title || '',
       loadingInfo: {
         isNavigation: loadingInfo?.isNavigation || false,
         isInitial: loadingInfo?.isInitial || false,
@@ -370,17 +395,17 @@ router.post('/states', async (req, res) => {
         resourceTypes: loadingInfo?.resourceTypes || {},
         errorCount: loadingInfo?.errorCount || 0,
         networkInfo: loadingInfo?.networkInfo || {},
-        timestamp: loadingInfo?.timestamp || Date.now()
+        timestamp: loadingInfo?.timestamp || new Date()
       },
       mutationInfo: {
         count: mutationInfo?.count || 0,
         types: mutationInfo?.types || [],
-        timestamp: mutationInfo?.timestamp || Date.now()
+        timestamp: mutationInfo?.timestamp || new Date()
       }
     });
     
     await state.save();
-    console.log(`[Backend] Saved new state: ${state.stateId} (hash: ${hash})`);
+    console.log(`[Backend] Saved new state: ${state.stateId} (hash: ${hash}, stateNumber: ${state.stateNumber})`);
     
     res.status(201).json({ 
       stateId: state.stateId,

@@ -411,13 +411,14 @@ router.post('/states', async (req, res) => {
       return res.status(400).json({ error: 'Missing required fields: hash and dom are required' });
     }
     
-    // Check for duplicate state
-    const existingState = await DOMState.findOne({ hash, sessionId });
+    // Check for duplicate state - but don't return early, just set isDuplicate flag
+    let isDuplicate = false;
+    let existingState = null;
+    
+    existingState = await DOMState.findOne({ hash, sessionId });
     if (existingState) {
-      return res.status(200).json({ 
-        stateId: existingState.stateId,
-        isDuplicate: true 
-      });
+      console.log(`[Backend] Duplicate state detected with hash: ${hash}, will save with isNewState=false`);
+      isDuplicate = true;
     }
     
     // Get the current state number for this session
@@ -428,7 +429,7 @@ router.post('/states', async (req, res) => {
     // Determine if this is a loading state from the stateId format
     const isLoadingState = stateId && stateId.includes('_loading_');
     
-    // Create new state
+    // Create new state, even if it's a duplicate
     const state = new DOMState({
       stateId: stateId || `state_${Date.now()}`,
       sessionId,
@@ -436,7 +437,7 @@ router.post('/states', async (req, res) => {
       url: url || req.headers.origin || 'unknown',
       pathname: pathname || new URL(url || req.headers.origin || 'http://unknown').pathname,
       timestamp: timestamp || new Date(),
-      isNewState: isNewState !== undefined ? isNewState : true,
+      isNewState: isDuplicate ? false : (isNewState !== undefined ? isNewState : true), // Set to false for duplicates
       stateNumber: stateNumber !== undefined ? stateNumber : nextStateNumber,
       hash,
       dom,
@@ -468,11 +469,11 @@ router.post('/states', async (req, res) => {
     });
     
     await state.save();
-    console.log(`[Backend] Saved new state: ${state.stateId} (hash: ${hash}, stateNumber: ${state.stateNumber}, isLoading: ${isLoadingState})`);
+    console.log(`[Backend] Saved ${isDuplicate ? 'duplicate' : 'new'} state: ${state.stateId} (hash: ${hash}, stateNumber: ${state.stateNumber}, isLoading: ${isLoadingState})`);
     
     res.status(201).json({ 
       stateId: state.stateId,
-      isDuplicate: false
+      isDuplicate: isDuplicate
     });
   } catch (error) {
     console.error('[Backend] Error saving state:', error);

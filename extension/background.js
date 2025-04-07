@@ -277,6 +277,7 @@ const saveDOMState = async (state) => {
             finalStateCounter = Math.max(finalStateCounter, stateNum);
           }
           
+          // Mark as duplicate, but don't skip saving
           state.isNewState = false;
           
           if (state.loadingInfo) {
@@ -344,11 +345,24 @@ const saveDOMState = async (state) => {
         // Handle duplicate regular states
         else if (existingStateId) {
           console.log(`[Extension] Duplicate regular state with hash: ${state.hash}`);
-          return { 
-            success: true, 
-            stateId: existingStateId,
-            isDuplicate: true
-          };
+          
+          // Create a new state based on the duplicate, but with isNewState=false
+          state.stateId = existingStateId + '_dup_' + Date.now();
+          
+          // Extract state number from the existing ID
+          if (existingStateId.includes('_loading_')) {
+            // For loading states like "state_2_loading_1"
+            const baseNum = parseInt(existingStateId.split('_')[1]);
+            const loadingNum = parseInt(existingStateId.split('_loading_')[1]);
+            state.stateNumber = baseNum + loadingNum/10; // For example: 2.1
+          } else {
+            // For final states like "state_2_1234567890"
+            const stateNum = parseInt(existingStateId.split('_')[1]);
+            state.stateNumber = stateNum;
+          }
+          
+          // Mark as duplicate, but don't skip saving
+          state.isNewState = false;
         }
         // Handle new regular states
         else {

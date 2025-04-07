@@ -479,81 +479,78 @@ function processMutations(mutations) {
         console.log(`[DOM Tracker] Current hash: ${currentHash}, Last hash: ${lastDomHash}`);
         console.log(`[DOM Tracker] Known states:`, Object.keys(previousStates));
         
-        // Only create a new state if the hash is different from the last one
-        if (currentHash !== lastDomHash) {
-            console.log(`[DOM Tracker] DOM hash changed due to mutation: ${lastDomHash} -> ${currentHash}`);
-            
-            // CRITICAL: Check if we've already seen this hash during this session
-            if (previousStates[currentHash]) {
-                console.log(`[DOM Tracker] *** DUPLICATE STATE DETECTED *** DOM returned to previously seen state with hash: ${currentHash}, reusing stateId: ${previousStates[currentHash]}`);
-                
-                // Just update the last hash but don't create a new state
-                lastDomHash = currentHash;
-                currentStateId = previousStates[currentHash];
-                processingMutations = false;
-                return;
-            }
-            
-            // Check for pending state sends with the same hash to prevent duplicates
-            if (pendingStateSends[currentHash]) {
-                console.log(`[DOM Tracker] *** DUPLICATE SEND PREVENTED *** Already sending state with hash: ${currentHash}`);
-                processingMutations = false;
-                return;
-            }
-            
-            // This is a genuinely new state we haven't seen before
-            const { state, isNewState } = createDomState();
-            state.hash = currentHash; // Ensure hash is consistent
-            
-            // Add information about what changed
-            state.mutationInfo = {
-                count: significantMutations.length,
-                types: [...new Set(significantMutations.map(m => m.type))],
-                timestamp: now
-            };
-            
-            // Mark this hash as pending to prevent duplicate sends
-            pendingStateSends[currentHash] = true;
-            
-            // Wait for the lock to be released if there's a pending state creation
-            // This helps prevent race conditions where multiple states are created at once
-            sendToBackground('recordState', {
-                state: state
-            })
-            .then(response => {
-                console.log(`[DOM Tracker] Background response for recordState:`, response);
-                
-                if (response && response.isDuplicate) {
-                    console.log(`[DOM Tracker] *** DUPLICATE DETECTED BY BACKGROUND *** Hash ${currentHash} already exists as ${response.stateId}`);
-                    previousStates[currentHash] = response.stateId;
-                    currentStateId = response.stateId;
-                } 
-                else if (response && response.stateId) {
-                    // Update our map with the real stateId from the server
-                    previousStates[currentHash] = response.stateId;
-                    currentStateId = response.stateId;
-                    console.log(`[DOM Tracker] Added to previousStates: ${currentHash} -> ${response.stateId}`);
-                } else {
-                    console.warn('[DOM Tracker] Did not receive valid stateId from background script');
-                }
-                
-                // Only update lastDomHash to the current hash after we've processed the state
-                lastDomHash = currentHash;
-            })
-            .catch(error => {
-                console.error('[DOM Tracker] Error getting stateId from background:', error);
-            })
-            .finally(() => {
-                // Clear the pending flag with a minimum possible delay
-                setTimeout(() => {
-                    delete pendingStateSends[currentHash];
-                }, 1); // minimum practical value (browsers treat <1ms as 1ms minimum)
-            });
-            
-            console.log(`[DOM Tracker] Created state due to DOM change with hash: ${currentHash}`);
+        // Still create a state even if the hash is the same (for duplicate capturing)
+        // Just add additional information if it's a duplicate
+        const isDuplicate = currentHash === lastDomHash;
+        const isPreviouslySeen = previousStates[currentHash] !== undefined;
+        
+        if (isDuplicate) {
+            console.log(`[DOM Tracker] DOM hash is the same as last state, will create duplicate record with isNewState=false`);
+        } else if (isPreviouslySeen) {
+            console.log(`[DOM Tracker] *** PREVIOUSLY SEEN STATE DETECTED *** hash: ${currentHash}, previous stateId: ${previousStates[currentHash]}`);
         } else {
-            console.log('[DOM Tracker] DOM changed but hash remains the same, no new state needed');
+            console.log(`[DOM Tracker] New unseen state with hash: ${currentHash}`);
         }
+        
+        // Check for pending state sends with the same hash to prevent duplicates
+        if (pendingStateSends[currentHash]) {
+            console.log(`[DOM Tracker] *** DUPLICATE SEND PREVENTED *** Already sending state with hash: ${currentHash}`);
+            processingMutations = false;
+            return;
+        }
+        
+        // Create a state regardless of whether it's a duplicate
+        const { state, isNewState } = createDomState();
+        state.hash = currentHash; // Ensure hash is consistent
+        
+        // If it's a duplicate or previously seen state, mark it appropriately
+        if (isDuplicate || isPreviouslySeen) {
+            state.isNewState = false;
+            state.originalStateId = isPreviouslySeen ? previousStates[currentHash] : currentStateId;
+        }
+        
+        // Add information about what changed
+        state.mutationInfo = {
+            count: significantMutations.length,
+            types: [...new Set(significantMutations.map(m => m.type))],
+            timestamp: now
+        };
+        
+        // Mark this hash as pending to prevent duplicate sends
+        pendingStateSends[currentHash] = true;
+        
+        // Send to background with appropriate flags
+        sendToBackground('recordState', {
+            state: state,
+            isDuplicate: isDuplicate || isPreviouslySeen,
+            reusedStateId: isPreviouslySeen ? previousStates[currentHash] : null
+        })
+        .then(response => {
+            console.log(`[DOM Tracker] Background response for recordState:`, response);
+            
+            if (response && response.stateId) {
+                // Update our map with the real stateId from the server
+                previousStates[currentHash] = response.stateId;
+                currentStateId = response.stateId;
+                console.log(`[DOM Tracker] Added/updated state in previousStates: ${currentHash} -> ${response.stateId}`);
+            } else {
+                console.warn('[DOM Tracker] Did not receive valid stateId from background script');
+            }
+            
+            // Always update lastDomHash to the current hash
+            lastDomHash = currentHash;
+        })
+        .catch(error => {
+            console.error('[DOM Tracker] Error getting stateId from background:', error);
+        })
+        .finally(() => {
+            // Clear the pending flag with a minimum possible delay
+            setTimeout(() => {
+                delete pendingStateSends[currentHash];
+            }, 1); // minimum practical value (browsers treat <1ms as 1ms minimum)
+        });
+        
+        console.log(`[DOM Tracker] Created state for DOM change with hash: ${currentHash}`);
     } catch (error) {
         console.error('[DOM Tracker] Error processing mutations:', error);
     } finally {

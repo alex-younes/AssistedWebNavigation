@@ -6,6 +6,7 @@ const os = require('os');
 const debug = require('../utils/debug');
 const db = require('../database');
 const serviceManager = require('../services/ServiceManager');
+const DOMState = require('../models/DOMState');
 
 // Helper function to get user status - now uses serviceManager
 const getUserStatus = async (userId) => {
@@ -321,6 +322,106 @@ router.get('/extension/recorder/state/:stateId/interactions', async (req, res) =
             error: 'Error getting state interactions: ' + error.message
         });
     }
+});
+
+// POST /states - Record a new state
+router.post('/states', async (req, res) => {
+  try {
+    const { hash, dom, loadingInfo, mutationInfo, tabId, sessionId, userId } = req.body;
+    
+    // Validate required fields
+    if (!hash || !dom) {
+      return res.status(400).json({ error: 'Missing required fields: hash and dom are required' });
+    }
+    
+    // Check for duplicate state
+    const existingState = await DOMState.findOne({ hash, sessionId });
+    if (existingState) {
+      return res.status(200).json({ 
+        stateId: existingState.stateId,
+        isDuplicate: true 
+      });
+    }
+    
+    // Get the current state number for this session
+    const lastState = await DOMState.findOne({ sessionId })
+      .sort({ stateNumber: -1 });
+    const stateNumber = lastState ? lastState.stateNumber + 1 : 0;
+    
+    // Create new state
+    const state = new DOMState({
+      stateId: `state_${stateNumber}`,
+      sessionId,
+      userId,
+      url: req.headers.origin || 'unknown',
+      pathname: new URL(req.headers.origin || 'http://unknown').pathname,
+      hash,
+      dom,
+      stateNumber,
+      isNewState: true,
+      loadingInfo: {
+        isNavigation: loadingInfo?.isNavigation || false,
+        isInitial: loadingInfo?.isInitial || false,
+        isReload: loadingInfo?.isReload || false,
+        isFinalState: loadingInfo?.isFinalState || false,
+        isPartOfLoading: loadingInfo?.isPartOfLoading || false,
+        loadTime: loadingInfo?.loadTime || 0,
+        resourceCount: loadingInfo?.resourceCount || 0,
+        resourceTypes: loadingInfo?.resourceTypes || {},
+        errorCount: loadingInfo?.errorCount || 0,
+        networkInfo: loadingInfo?.networkInfo || {},
+        timestamp: loadingInfo?.timestamp || Date.now()
+      },
+      mutationInfo: {
+        count: mutationInfo?.count || 0,
+        types: mutationInfo?.types || [],
+        timestamp: mutationInfo?.timestamp || Date.now()
+      }
+    });
+    
+    await state.save();
+    console.log(`[Backend] Saved new state: ${state.stateId} (hash: ${hash})`);
+    
+    res.status(201).json({ 
+      stateId: state.stateId,
+      isDuplicate: false
+    });
+  } catch (error) {
+    console.error('[Backend] Error saving state:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// PATCH /states/:id - Update a state
+router.patch('/states/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { loadingInfo } = req.body;
+    
+    if (!loadingInfo) {
+      return res.status(400).json({ error: 'Missing required field: loadingInfo' });
+    }
+    
+    const state = await DOMState.findOne({ stateId: id });
+    if (!state) {
+      return res.status(404).json({ error: 'State not found' });
+    }
+    
+    // Update loading info
+    state.loadingInfo = {
+      ...state.loadingInfo,
+      ...loadingInfo,
+      timestamp: Date.now()
+    };
+    
+    await state.save();
+    console.log(`[Backend] Updated state: ${id} with loading info`);
+    
+    res.json({ success: true });
+  } catch (error) {
+    console.error('[Backend] Error updating state:', error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
 module.exports = router; 

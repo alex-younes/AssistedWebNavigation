@@ -2,6 +2,7 @@
 const mongoose = require('mongoose');
 require('dotenv').config();
 const debug = require('./utils/debug');
+const DOMState = require('./models/DOMState');
 
 // MongoDB connection
 const connectToDatabase = async () => {
@@ -36,30 +37,9 @@ const sessionSchema = new mongoose.Schema({
   metadata: mongoose.Schema.Types.Mixed
 }, { timestamps: true });
 
-// Define DOM State schema
-const domStateSchema = new mongoose.Schema({
-  stateId: { type: String, required: true },
-  sessionId: { type: String, required: true },
-  userId: { type: String, required: true },
-  url: { type: String, required: true },
-  pathname: { type: String }, // Store just the path part of URL for easier matching
-  timestamp: { type: Date, default: Date.now },
-  isNewState: { type: Boolean, default: true },
-  stateNumber: { type: Number, default: 0 }, // Track sequential state number
-  hash: { type: String, required: true }, // Using hash for more consistency with standard terms
-  metrics: {
-    domSize: { type: Number },
-    elementCount: { type: Number },
-    formElements: { type: Number },
-    visibleElements: { type: Number }
-  },
-  title: { type: String }
-}, { timestamps: true });
-
 // Create models
 const Interaction = mongoose.model('Interaction', interactionSchema);
 const Session = mongoose.model('Session', sessionSchema);
-const DOMState = mongoose.model('DOMState', domStateSchema);
 
 // Database operations
 const db = {

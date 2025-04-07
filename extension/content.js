@@ -13,6 +13,10 @@ let previousStates = {}; // StateHash -> StateId mapping
 let processingMutations = false; // Debounce flag
 let lastMutationTime = 0; // Track time of last mutation processing
 let pendingStateSends = {}; // Track pending state sends to prevent duplicates
+let isPageLoading = false; // Track if page is in loading state
+let loadingStartTime = 0; // When loading started
+let loadingCheckInterval = null; // Interval for checking loading state
+let lastDomSnapshot = ''; // Last DOM snapshot for comparison
 
 // Send a message to the background script
 function sendToBackground(action, data) {
@@ -235,6 +239,49 @@ function createDomState() {
     return { state, isNewState };
 }
 
+// Check if page is still loading by comparing DOM snapshots
+function checkLoadingState() {
+    if (!isRecording) return;
+    
+    const currentDom = document.documentElement.outerHTML;
+    
+    // If DOM has changed since last check, page is still loading
+    if (currentDom !== lastDomSnapshot) {
+        isPageLoading = true;
+        lastDomSnapshot = currentDom;
+    } else {
+        // If no changes for a while, page is done loading
+        isPageLoading = false;
+        if (loadingCheckInterval) {
+            clearInterval(loadingCheckInterval);
+            loadingCheckInterval = null;
+        }
+    }
+}
+
+// Start loading state detection
+function startLoadingDetection() {
+    isPageLoading = true;
+    loadingStartTime = Date.now();
+    lastDomSnapshot = document.documentElement.outerHTML;
+    
+    // Check every 10ms for DOM changes
+    if (loadingCheckInterval) {
+        clearInterval(loadingCheckInterval);
+    }
+    
+    loadingCheckInterval = setInterval(checkLoadingState, 10);
+    
+    // Stop checking after 5 seconds (5000ms) to prevent infinite checking
+    setTimeout(() => {
+        if (loadingCheckInterval) {
+            clearInterval(loadingCheckInterval);
+            loadingCheckInterval = null;
+            isPageLoading = false;
+        }
+    }, 5000);
+}
+
 // Create a state object with all necessary properties
 function createStateObject(stateId, url, hash, isNewState) {
     // Collect meaningful metrics about the DOM
@@ -243,8 +290,47 @@ function createStateObject(stateId, url, hash, isNewState) {
     const formElements = document.querySelectorAll('input, select, textarea').length;
     const visibleElements = document.querySelectorAll('button, a[href], input, select, textarea, [role="button"]').length;
     
+    // Get the current DOM
+    const dom = document.documentElement.outerHTML;
+    
     // State number will be assigned by background script
     const stateNumber = 0; 
+    
+    // Collect loading information
+    const loadingInfo = {
+        isNavigation: false,
+        isReload: false,
+        isInitial: false,
+        isInteraction: false,
+        isDuplicate: false,
+        isFinalState: false,
+        isPartOfLoading: isPageLoading, // Add loading state info
+        loadTime: performance.timing.loadEventEnd - performance.timing.navigationStart,
+        resourceCount: performance.getEntriesByType('resource').length,
+        resourceTypes: {},
+        errorCount: 0,
+        networkInfo: {}
+    };
+    
+    // Count resource types
+    const resources = performance.getEntriesByType('resource');
+    resources.forEach(resource => {
+        const type = resource.initiatorType || 'unknown';
+        loadingInfo.resourceTypes[type] = (loadingInfo.resourceTypes[type] || 0) + 1;
+    });
+    
+    // Count errors
+    const errorResources = resources.filter(resource => resource.transferSize === 0 && resource.duration > 0);
+    loadingInfo.errorCount = errorResources.length;
+    
+    // Get network information if available
+    if (navigator.connection) {
+        loadingInfo.networkInfo = {
+            effectiveType: navigator.connection.effectiveType,
+            downlink: navigator.connection.downlink,
+            rtt: navigator.connection.rtt
+        };
+    }
     
     return {
         stateId,
@@ -261,7 +347,9 @@ function createStateObject(stateId, url, hash, isNewState) {
             visibleElements
         },
         hash: hash,
-        title: document.title
+        dom: dom, // Include the DOM data
+        title: document.title,
+        loadingInfo
     };
 }
 
@@ -492,7 +580,16 @@ function handleNavigation() {
     // Reset hash for this new page load
     lastDomHash = null;
     
-    // Create a new state for the new page
+    // Start loading detection
+    startLoadingDetection();
+    
+    // Set loading state
+    isPageLoading = true;
+    loadingStartTime = Date.now();
+    
+    console.log('[DOM Tracker] Page is now in loading state');
+    
+    // Create a new state for the new page after a delay to allow loading to complete
     setTimeout(() => {
         try {
             // Calculate hash once and reuse it
@@ -684,6 +781,9 @@ function startRecording(newSessionId, newUserId) {
     setupMutationObserver();
     setupNavigationTracking();
     setupFormChangeDetection(); // Add form change detection
+    
+    // Start loading detection
+    startLoadingDetection();
     
     // Create initial state
     const currentHash = calculateDomHash();

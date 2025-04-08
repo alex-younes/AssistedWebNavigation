@@ -647,23 +647,35 @@ function setupMutationObserver() {
 
 // Set up reload detection
 function setupReloadDetection() {
-    // Add a session storage flag to detect reloads
-    if (sessionStorage.getItem('pageLoadCount')) {
-        // If pageLoadCount exists, this is a reload or back/forward navigation
-        const count = parseInt(sessionStorage.getItem('pageLoadCount') || '0');
-        sessionStorage.setItem('pageLoadCount', (count + 1).toString());
-        sessionStorage.setItem('isReload', 'true');
-        console.log('[DOM Tracker] Page reload detected (load count: ' + (count + 1) + ')');
-            } else {
-        // First time loading this page
-        sessionStorage.setItem('pageLoadCount', '1');
-        sessionStorage.setItem('isReload', 'false');
-        console.log('[DOM Tracker] First page load detected');
-    }
+    // Check if this is a reload by looking at performance navigation type
+    const perfEntry = performance.getEntriesByType('navigation')[0];
+    const isReload = perfEntry ? perfEntry.type === 'reload' : (
+        // Fallback for browsers that don't support PerformanceNavigationTiming
+        window.performance.navigation.type === window.performance.navigation.TYPE_RELOAD
+    );
     
-    // Clear reload flag on unload to help detect back/forward navigation
+    console.log('[DOM Tracker] Navigation type detected:', perfEntry ? perfEntry.type : 'using fallback');
+    
+    // Store reload status in session storage
+    sessionStorage.setItem('isReload', isReload.toString());
+    console.log(`[DOM Tracker] Page reload status: ${isReload}`);
+    
+    // Track page load count for additional context
+    const count = parseInt(sessionStorage.getItem('pageLoadCount') || '0') + 1;
+    sessionStorage.setItem('pageLoadCount', count.toString());
+    console.log(`[DOM Tracker] Page load count: ${count}`);
+    
+    // Store current URL before unload
     window.addEventListener('beforeunload', () => {
-        sessionStorage.setItem('lastPageUrl', window.location.href);
+        const currentUrl = window.location.href;
+        console.log('[DOM Tracker] Storing URL before unload:', currentUrl);
+        sessionStorage.setItem('lastPageUrl', currentUrl);
+        
+        // If this is a reload (e.g., F5 or refresh button), set the reload flag
+        if (document.visibilityState === 'visible') {
+            sessionStorage.setItem('isReload', 'true');
+            console.log('[DOM Tracker] Setting reload flag before refresh');
+        }
     });
 }
 
@@ -1087,8 +1099,9 @@ function initialize() {
             const currentHash = calculateDomHash();
             console.log(`[DOM Tracker][DUPLICATION DEBUG] Page load state hash: ${currentHash}`);
             
-            // Check various load scenarios
-            const isReload = sessionStorage.getItem('isReload') === 'true';
+            // Check various load scenarios with enhanced reload detection
+            const isReload = sessionStorage.getItem('isReload') === 'true' || 
+                            performance.getEntriesByType('navigation')[0]?.type === 'reload';
             const previousUrl = sessionStorage.getItem('lastPageUrl');
             const navigationPending = sessionStorage.getItem('navigationPending') === 'true';
             const currentUrl = window.location.href;
@@ -1099,7 +1112,8 @@ function initialize() {
                 previousUrl,
                 currentUrl,
                 navigationPending,
-                isNavigation
+                isNavigation,
+                navigationType: performance.getEntriesByType('navigation')[0]?.type || 'unknown'
             });
             
             // Clear navigation pending flag

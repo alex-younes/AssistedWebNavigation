@@ -613,17 +613,25 @@ chrome.webNavigation.onCommitted.addListener(async (details) => {
     console.log('[Extension] Navigation detected in recording tab:', details.url);
     console.log('[Extension] Navigation type:', details.transitionType, details.transitionQualifiers);
     
-    // Set a flag in storage to indicate this is a navigation
+    // Check if this is a reload
+    const isReload = details.transitionType === 'reload' || 
+                     details.transitionQualifiers.includes('reload');
+    
+    console.log(`[Extension] Navigation is reload: ${isReload}`);
+    
+    // Set appropriate flags in storage based on navigation type
     await chrome.storage.session.set({ 
-      isNavigationPending: true,
+      isNavigationPending: !isReload, // Only set navigation pending if not a reload
+      isReloadPending: isReload,
       navigationDetails: {
         from: details.url,
         timestamp: Date.now(),
-        type: details.transitionType
+        type: details.transitionType,
+        qualifiers: details.transitionQualifiers
       }
     });
     
-    console.log('[Extension] Set navigation pending flag');
+    console.log(`[Extension] Set pending flags - navigation: ${!isReload}, reload: ${isReload}`);
     console.log('[Extension] Preserving state tracking:', { lastStateId, lastStateHash });
     
     // Immediately save state to ensure persistence through navigation
@@ -696,21 +704,41 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             const state = message.state;
             console.log(`[Extension][DUPLICATION DEBUG] Received recordState: hash=${state.hash}, timestamp=${state.timestamp}`);
             
-            // Check for pending navigation
-            const navigationInfo = await chrome.storage.session.get(['isNavigationPending', 'navigationDetails']);
-            const isNavigationPending = navigationInfo.isNavigationPending === true;
+            // Check for pending navigation or reload
+            const navigationInfo = await chrome.storage.session.get([
+              'isNavigationPending', 
+              'isReloadPending', 
+              'navigationDetails'
+            ]);
             
-            // If this is a window load event and there's a pending navigation, this is a navigation state
-            if (message.isInitial && isNavigationPending) {
-              console.log(`[Extension][DUPLICATION DEBUG] Converting initial state to navigation state due to pending navigation`);
-              message.isInitial = false;
-              message.isNavigation = true;
-              state.isInitial = false;
-              state.isNavigation = true;
+            const isNavigationPending = navigationInfo.isNavigationPending === true;
+            const isReloadPending = navigationInfo.isReloadPending === true;
+            
+            console.log(`[Extension][DUPLICATION DEBUG] Pending flags - navigation: ${isNavigationPending}, reload: ${isReloadPending}`);
+            
+            // If this is a window load event and there's a pending action
+            if (message.isInitial && (isNavigationPending || isReloadPending)) {
+              if (isReloadPending) {
+                console.log(`[Extension][DUPLICATION DEBUG] Converting initial state to reload state due to pending reload`);
+                message.isInitial = false;
+                message.isReload = true;
+                state.isInitial = false;
+                state.isReload = true;
+              } else if (isNavigationPending) {
+                console.log(`[Extension][DUPLICATION DEBUG] Converting initial state to navigation state due to pending navigation`);
+                message.isInitial = false;
+                message.isNavigation = true;
+                state.isInitial = false;
+                state.isNavigation = true;
+              }
               
-              // Clear the navigation pending flag
-              await chrome.storage.session.remove(['isNavigationPending', 'navigationDetails']);
-              console.log(`[Extension][DUPLICATION DEBUG] Cleared navigation pending flag`);
+              // Clear the pending flags
+              await chrome.storage.session.remove([
+                'isNavigationPending', 
+                'isReloadPending', 
+                'navigationDetails'
+              ]);
+              console.log(`[Extension][DUPLICATION DEBUG] Cleared pending flags`);
             }
             
             // Transfer special event flags from message to state if they exist

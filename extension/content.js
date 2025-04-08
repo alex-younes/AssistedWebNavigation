@@ -436,14 +436,16 @@ function processMutations(mutations) {
     if (!isRecording) return;
     
     const now = Date.now();
+    console.log(`[DOM Tracker][DUPLICATION DEBUG] processMutations called at ${now}, with ${mutations.length} mutations`);
     
-    // Keep a short debounce time for responsiveness
-    if (processingMutations || (now - lastMutationTime < 100)) {
-        console.log('[DOM Tracker] Queuing mutation processing - fast debounce');
+    // Increase debounce time to prevent duplicate captures from single actions
+    // This prevents multiple states being created for a single page load/navigation
+    if (processingMutations || (now - lastMutationTime < 250)) {
+        console.log(`[DOM Tracker][DUPLICATION DEBUG] Queuing mutation processing due to debounce - processingMutations=${processingMutations}, timeSinceLastMutation=${now - lastMutationTime}ms`);
         
         // Queue another check if we're not already processing
         if (!processingMutations) {
-            setTimeout(() => processMutations(mutations), 50);
+            setTimeout(() => processMutations(mutations), 100);
         }
         return;
     }
@@ -454,7 +456,7 @@ function processMutations(mutations) {
     
     // Process immediately for responsive detection
     try {
-        console.log(`[DOM Tracker] Processing mutations - ${mutations.length} changes`);
+        console.log(`[DOM Tracker][DUPLICATION DEBUG] Processing mutations - ${mutations.length} changes`);
         
         // Filter meaningful mutations
         const significantMutations = mutations.filter(mutation => {
@@ -472,7 +474,7 @@ function processMutations(mutations) {
         });
         
         if (significantMutations.length === 0) {
-            console.log('[DOM Tracker] No significant mutations found, skipping state creation');
+            console.log('[DOM Tracker][DUPLICATION DEBUG] No significant mutations found, skipping state creation');
             processingMutations = false;
             return;
         }
@@ -480,25 +482,32 @@ function processMutations(mutations) {
         // Calculate current hash
         const currentHash = calculateDomHash();
         
-        console.log(`[DOM Tracker] Current hash: ${currentHash}, Last hash: ${lastDomHash}`);
-        console.log(`[DOM Tracker] Known states:`, Object.keys(previousStates));
+        console.log(`[DOM Tracker][DUPLICATION DEBUG] Current hash: ${currentHash}, Last hash: ${lastDomHash}`);
+        console.log(`[DOM Tracker][DUPLICATION DEBUG] Known states: ${Object.keys(previousStates).join(', ')}`);
         
-        // Still create a state even if the hash is the same (for duplicate capturing)
-        // Just add additional information if it's a duplicate
+        // Enhanced check for rapid duplicate captures
+        // If this is the same hash as last one and it came very quickly, skip it
         const isDuplicate = currentHash === lastDomHash;
         const isPreviouslySeen = previousStates[currentHash] !== undefined;
+        const isVeryRecentDuplicate = isDuplicate && (now - lastMutationTime < 350);
+        
+        if (isVeryRecentDuplicate) {
+            console.log(`[DOM Tracker][DUPLICATION DEBUG] *** RAPID DUPLICATE PREVENTED *** Same hash detected within 350ms: ${currentHash}`);
+            processingMutations = false;
+            return;
+        }
         
         if (isDuplicate) {
-            console.log(`[DOM Tracker] DOM hash is the same as last state, will create duplicate record with isNewState=false`);
+            console.log(`[DOM Tracker][DUPLICATION DEBUG] DOM hash is the same as last state, will create duplicate record with isNewState=false`);
         } else if (isPreviouslySeen) {
-            console.log(`[DOM Tracker] *** PREVIOUSLY SEEN STATE DETECTED *** hash: ${currentHash}, previous stateId: ${previousStates[currentHash]}`);
+            console.log(`[DOM Tracker][DUPLICATION DEBUG] *** PREVIOUSLY SEEN STATE DETECTED *** hash: ${currentHash}, previous stateId: ${previousStates[currentHash]}`);
         } else {
-            console.log(`[DOM Tracker] New unseen state with hash: ${currentHash}`);
+            console.log(`[DOM Tracker][DUPLICATION DEBUG] New unseen state with hash: ${currentHash}`);
         }
         
         // Check for pending state sends with the same hash to prevent duplicates
         if (pendingStateSends[currentHash]) {
-            console.log(`[DOM Tracker] *** DUPLICATE SEND PREVENTED *** Already sending state with hash: ${currentHash}`);
+            console.log(`[DOM Tracker][DUPLICATION DEBUG] *** DUPLICATE SEND PREVENTED *** Already sending state with hash: ${currentHash}`);
             processingMutations = false;
             return;
         }
@@ -507,10 +516,13 @@ function processMutations(mutations) {
         const { state, isNewState } = createDomState();
         state.hash = currentHash; // Ensure hash is consistent
         
+        console.log(`[DOM Tracker][DUPLICATION DEBUG] Created state object with stateId=${state.stateId}, hash=${state.hash}, isNewState=${state.isNewState}`);
+        
         // If it's a duplicate or previously seen state, mark it appropriately
         if (isDuplicate || isPreviouslySeen) {
             state.isNewState = false;
             state.originalStateId = isPreviouslySeen ? previousStates[currentHash] : currentStateId;
+            console.log(`[DOM Tracker][DUPLICATION DEBUG] Marked state as duplicate, originalStateId=${state.originalStateId}`);
         }
         
         // Add information about what changed
@@ -522,41 +534,45 @@ function processMutations(mutations) {
         
         // Mark this hash as pending to prevent duplicate sends
         pendingStateSends[currentHash] = true;
+        console.log(`[DOM Tracker][DUPLICATION DEBUG] Added hash ${currentHash} to pendingStateSends to prevent duplicates`);
         
         // Send to background with appropriate flags
+        console.log(`[DOM Tracker][DUPLICATION DEBUG] Sending state to background with hash=${currentHash}, isDuplicate=${isDuplicate || isPreviouslySeen}`);
         sendToBackground('recordState', {
             state: state,
             isDuplicate: isDuplicate || isPreviouslySeen,
             reusedStateId: isPreviouslySeen ? previousStates[currentHash] : null
         })
         .then(response => {
-            console.log(`[DOM Tracker] Background response for recordState:`, response);
+            console.log(`[DOM Tracker][DUPLICATION DEBUG] Background response for recordState:`, response);
             
             if (response && response.stateId) {
                 // Update our map with the real stateId from the server
                 previousStates[currentHash] = response.stateId;
                 currentStateId = response.stateId;
-                console.log(`[DOM Tracker] Added/updated state in previousStates: ${currentHash} -> ${response.stateId}`);
+                console.log(`[DOM Tracker][DUPLICATION DEBUG] Added/updated state in previousStates: ${currentHash} -> ${response.stateId}`);
             } else {
-                console.warn('[DOM Tracker] Did not receive valid stateId from background script');
+                console.warn('[DOM Tracker][DUPLICATION DEBUG] Did not receive valid stateId from background script');
             }
             
             // Always update lastDomHash to the current hash
             lastDomHash = currentHash;
         })
         .catch(error => {
-            console.error('[DOM Tracker] Error getting stateId from background:', error);
+            console.error('[DOM Tracker][DUPLICATION DEBUG] Error getting stateId from background:', error);
         })
         .finally(() => {
-            // Clear the pending flag with a minimum possible delay
+            // Increase the delay before clearing pending sends to prevent rapid duplicates
+            console.log(`[DOM Tracker][DUPLICATION DEBUG] Setting timeout to clear pendingStateSends for hash ${currentHash}`);
             setTimeout(() => {
                 delete pendingStateSends[currentHash];
-            }, 1); // minimum practical value (browsers treat <1ms as 1ms minimum)
+                console.log(`[DOM Tracker][DUPLICATION DEBUG] Removed hash ${currentHash} from pendingStateSends`);
+            }, 350); // Adjusted from 500ms to 350ms to better balance responsiveness
         });
         
-        console.log(`[DOM Tracker] Created state for DOM change with hash: ${currentHash}`);
+        console.log(`[DOM Tracker][DUPLICATION DEBUG] Created state for DOM change with hash: ${currentHash}`);
     } catch (error) {
-        console.error('[DOM Tracker] Error processing mutations:', error);
+        console.error('[DOM Tracker][DUPLICATION DEBUG] Error processing mutations:', error);
     } finally {
         // Clear debounce flag
         processingMutations = false;
@@ -766,22 +782,24 @@ function setupFormChangeDetection() {
 // Force a state capture for user interactions
 function forceCaptureState(trigger, element) {
     try {
-        console.log(`[DOM Tracker] Force capturing state for: ${trigger} on element:`, element);
+        console.log(`[DOM Tracker][DUPLICATION DEBUG] forceCaptureState called for: ${trigger} on element:`, element);
         
         // Calculate current hash
         const currentHash = calculateDomHash();
         
-        console.log(`[DOM Tracker] Interaction hash: ${currentHash}, Last hash: ${lastDomHash}`);
+        console.log(`[DOM Tracker][DUPLICATION DEBUG] Interaction hash: ${currentHash}, Last hash: ${lastDomHash}`);
         
         // Check for pending state sends with the same hash to prevent duplicates
         if (pendingStateSends[currentHash]) {
-            console.log(`[DOM Tracker] *** DUPLICATE INTERACTION SEND PREVENTED *** Already sending state with hash: ${currentHash}`);
+            console.log(`[DOM Tracker][DUPLICATION DEBUG] *** DUPLICATE INTERACTION SEND PREVENTED *** Already sending state with hash: ${currentHash}`);
             return;
         }
         
         // Create a state object regardless of whether it's a duplicate or not
         const { state, isNewState } = createDomState();
         state.hash = currentHash;
+        
+        console.log(`[DOM Tracker][DUPLICATION DEBUG] Created interaction state with hash=${currentHash}, isNewState=${isNewState}`);
         
         // Add information about the interaction
         state.interactionInfo = {
@@ -795,7 +813,7 @@ function forceCaptureState(trigger, element) {
         
         // If we've seen this hash before, mark it appropriately
         if (previousStates[currentHash]) {
-            console.log(`[DOM Tracker] *** DUPLICATE STATE DETECTED *** for interaction, reusing stateId: ${previousStates[currentHash]}`);
+            console.log(`[DOM Tracker][DUPLICATION DEBUG] *** DUPLICATE INTERACTION STATE DETECTED *** reusing stateId: ${previousStates[currentHash]}`);
             
             // Mark this as a duplicate so the background script knows to reuse the ID
             state.isDuplicate = true;
@@ -804,8 +822,10 @@ function forceCaptureState(trigger, element) {
         
         // Mark this hash as pending to prevent duplicate sends
         pendingStateSends[currentHash] = true;
+        console.log(`[DOM Tracker][DUPLICATION DEBUG] Added hash ${currentHash} to pendingStateSends for interaction`);
         
         // Always send to background - let it handle whether to create a new record with isNewState=false
+        console.log(`[DOM Tracker][DUPLICATION DEBUG] Sending interaction state to background with hash=${currentHash}, isDuplicate=${previousStates[currentHash] ? true : false}`);
         sendToBackground('recordState', {
             state: state,
             isInteraction: true,  // Mark this as coming from a user interaction
@@ -813,7 +833,7 @@ function forceCaptureState(trigger, element) {
             reusedStateId: previousStates[currentHash] || null
         })
         .then(response => {
-            console.log(`[DOM Tracker] Background response for interaction state:`, response);
+            console.log(`[DOM Tracker][DUPLICATION DEBUG] Background response for interaction state:`, response);
             
             if (response && response.stateId) {
                 // Always update the map and current state ID
@@ -821,30 +841,31 @@ function forceCaptureState(trigger, element) {
                 currentStateId = response.stateId;
                 
                 if (response.isDuplicate) {
-                    console.log(`[DOM Tracker] Recorded duplicate interaction with existing stateId: ${response.stateId}`);
+                    console.log(`[DOM Tracker][DUPLICATION DEBUG] Recorded duplicate interaction with existing stateId: ${response.stateId}`);
                 } else {
-                    console.log(`[DOM Tracker] Added new interaction state: ${currentHash} -> ${response.stateId}`);
+                    console.log(`[DOM Tracker][DUPLICATION DEBUG] Added new interaction state: ${currentHash} -> ${response.stateId}`);
                 }
             } else {
-                console.warn('[DOM Tracker] Did not receive valid stateId from background script');
+                console.warn('[DOM Tracker][DUPLICATION DEBUG] Did not receive valid stateId from background script');
             }
             
             // Always update the last hash
             lastDomHash = currentHash;
         })
         .catch(error => {
-            console.error('[DOM Tracker] Error getting stateId for interaction state:', error);
+            console.error('[DOM Tracker][DUPLICATION DEBUG] Error getting stateId for interaction state:', error);
         })
         .finally(() => {
             // Clear the pending flag with a minimum possible delay
             setTimeout(() => {
                 delete pendingStateSends[currentHash];
+                console.log(`[DOM Tracker][DUPLICATION DEBUG] Removed hash ${currentHash} from pendingStateSends for interaction`);
             }, 1); // minimum practical value (browsers treat <1ms as 1ms minimum)
         });
         
-        console.log(`[DOM Tracker] Processed interaction state with hash: ${currentHash}`);
+        console.log(`[DOM Tracker][DUPLICATION DEBUG] Processed interaction state with hash: ${currentHash}`);
     } catch (error) {
-        console.error('[DOM Tracker] Error forcing state capture:', error);
+        console.error('[DOM Tracker][DUPLICATION DEBUG] Error forcing state capture:', error);
     }
 }
 
@@ -907,7 +928,7 @@ function initialize() {
     
     // Create initial state when page is fully loaded
     window.addEventListener('load', () => {
-        console.log('[DOM Tracker] Page fully loaded');
+        console.log('[DOM Tracker][DUPLICATION DEBUG] Page fully loaded event triggered');
         if (isRecording) {
             // For an actual page load event, this should always be considered a loading state
             // We're capturing the state at the end of loading, but it represents a loading process
@@ -915,44 +936,59 @@ function initialize() {
             
             // Calculate hash once and reuse it
             const currentHash = calculateDomHash();
-            console.log(`[DOM Tracker] Page load state hash: ${currentHash}`);
+            console.log(`[DOM Tracker][DUPLICATION DEBUG] Page load state hash: ${currentHash}`);
             
             // Check if this is a reload
             const isReload = sessionStorage.getItem('isReload') === 'true';
+            console.log(`[DOM Tracker][DUPLICATION DEBUG] Is page reload: ${isReload}`);
+            
+            // Check if we've already sent this hash to prevent duplicates
+            if (pendingStateSends[currentHash]) {
+                console.log(`[DOM Tracker][DUPLICATION DEBUG] *** WINDOW LOAD DUPLICATE PREVENTED *** Already sending state with hash: ${currentHash}`);
+                return;
+            }
             
             // Capture initial page state
             const { state, isNewState } = createDomState();
             state.hash = currentHash; // Ensure hash is consistent
             
+            console.log(`[DOM Tracker][DUPLICATION DEBUG] Created DOM state for window.load with hash=${currentHash}, isNewState=${isNewState}`);
+            
             // Mark the state based on the load type
             if (isReload) {
                 state.isReload = true;
-                console.log('[DOM Tracker] Setting isReload flag for state');
+                console.log('[DOM Tracker][DUPLICATION DEBUG] Setting isReload flag for state');
             } else {
                 // This is the only place we now set isInitial
                 state.isInitial = true;
-                console.log('[DOM Tracker] Setting isInitial flag for state');
+                console.log('[DOM Tracker][DUPLICATION DEBUG] Setting isInitial flag for state');
             }
             
             // Force loading info to be true for both initial and reload states
             if (state.loadingInfo) {
                 state.loadingInfo.isPartOfLoading = true;
+                console.log('[DOM Tracker][DUPLICATION DEBUG] Setting loadingInfo.isPartOfLoading=true for window.load state');
             }
             
+            // Add to pendingStateSends to prevent duplicates
+            pendingStateSends[currentHash] = true;
+            console.log(`[DOM Tracker][DUPLICATION DEBUG] Added hash ${currentHash} to pendingStateSends for window.load event`);
+            
             // IMPORTANT: Pass the flags at the top level of the message
+            console.log(`[DOM Tracker][DUPLICATION DEBUG] Sending window.load state to background with hash=${currentHash}, isInitial=${!isReload}, isReload=${isReload}`);
             sendToBackground('recordState', {
                 state: state,
                 isInitial: !isReload,
                 isReload: isReload
             })
             .then(response => {
-                console.log(`[DOM Tracker] Background response for page load state:`, response);
+                console.log(`[DOM Tracker][DUPLICATION DEBUG] Background response for page load state:`, response);
                 
                 if (response && response.stateId) {
                     // Update our map with the real stateId from the server
                     previousStates[currentHash] = response.stateId;
                     currentStateId = response.stateId;
-                    console.log(`[DOM Tracker] Updated page load state tracking with server-assigned ID: ${response.stateId}`);
+                    console.log(`[DOM Tracker][DUPLICATION DEBUG] Updated page load state tracking with server-assigned ID: ${response.stateId}`);
                     
                     // Always update lastDomHash to the current hash
                     lastDomHash = currentHash;
@@ -967,13 +1003,20 @@ function initialize() {
                 }
             })
             .catch(error => {
-                console.error('[DOM Tracker] Error getting stateId for page load state:', error);
+                console.error('[DOM Tracker][DUPLICATION DEBUG] Error getting stateId for page load state:', error);
                 // Reset loading state back to false after capturing
                 isPageLoading = false;
+            })
+            .finally(() => {
+                // Clear the pending flag with a minimum possible delay
+                setTimeout(() => {
+                    delete pendingStateSends[currentHash];
+                    console.log(`[DOM Tracker][DUPLICATION DEBUG] Removed hash ${currentHash} from pendingStateSends for window.load event`);
+                }, 1);
             });
             
             const loadType = isReload ? "RELOAD" : "INITIAL LOAD";
-            console.log(`[DOM Tracker] Page ${loadType} state created with hash: ${currentHash}`);
+            console.log(`[DOM Tracker][DUPLICATION DEBUG] Page ${loadType} state created with hash: ${currentHash}`);
         }
     });
 }

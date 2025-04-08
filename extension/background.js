@@ -183,9 +183,22 @@ const stopRecordingSession = async () => {
 
 // Generate a unique key for state processing lock
 const getStateLockKey = (state) => {
+  console.log(`[Extension][DUPLICATION DEBUG] Generating lock key for state: sessionId=${state.sessionId}, hash=${state.hash}, timestamp=${state.timestamp}`);
+  
+  // Log raw timestamp before processing
+  console.log(`[Extension][DUPLICATION DEBUG] Raw timestamp: ${state.timestamp}, type: ${typeof state.timestamp}`);
+  
   // Create a composite key that includes session, hash and timestamp
-  const timestampKey = new Date(state.timestamp).getTime().toString().substring(0, 10);
-  return `${state.sessionId}_${state.hash}_${timestampKey}`;
+  const timestampDate = new Date(state.timestamp);
+  console.log(`[Extension][DUPLICATION DEBUG] Parsed timestamp date: ${timestampDate}, time: ${timestampDate.getTime()}`);
+  
+  const timestampKey = timestampDate.getTime().toString().substring(0, 10);
+  console.log(`[Extension][DUPLICATION DEBUG] Generated timestamp key part: ${timestampKey}`);
+  
+  const lockKey = `${state.sessionId}_${state.hash}_${timestampKey}`;
+  console.log(`[Extension][DUPLICATION DEBUG] Final lock key: ${lockKey}`);
+  
+  return lockKey;
 };
 
 // Set save loading states setting
@@ -211,28 +224,38 @@ const saveDOMState = async (state) => {
     // Generate a unique processing key for this state
     const lockKey = getStateLockKey(state);
     
+    console.log(`[Extension][DUPLICATION DEBUG] Processing state in saveDOMState: hash=${state.hash}, stateId=${state.stateId}, timestamp=${state.timestamp}`);
+    console.log(`[Extension][DUPLICATION DEBUG] Generated lock key: ${lockKey}`);
+    
     // RACE CONDITION PREVENTION
     if (stateProcessingLock[lockKey]) {
-      console.log(`[Extension] DUPLICATE CALL PREVENTED - Already processing state with key: ${lockKey}`);
+      console.log(`[Extension][DUPLICATION DEBUG] DUPLICATE CALL DETECTED - Already processing state with key: ${lockKey}, waiting for promise to resolve`);
       return await stateProcessingLock[lockKey];
     }
+    
+    // Log in-progress locks
+    console.log(`[Extension][DUPLICATION DEBUG] Current processing locks: ${Object.keys(stateProcessingLock).join(', ')}`);
+    
+    // Log known state hashes
+    console.log(`[Extension][DUPLICATION DEBUG] Known state hashes: ${Object.keys(sessionStateHashes).join(', ')}`);
     
     // Create a promise for this processing task
     stateProcessingLock[lockKey] = (async () => {
       try {
-        console.log(`[Extension] Processing state with hash: ${state.hash}`);
+        console.log(`[Extension][DUPLICATION DEBUG] Starting new state processing with hash: ${state.hash}, lockKey: ${lockKey}`);
         
         // Log when we receive an initial state (now only from window load event)
         if (state.isInitial === true) {
-          console.log(`[Extension] Processing initial state from window load event`);
+          console.log(`[Extension][DUPLICATION DEBUG] Processing initial state from window load event`);
         }
         
         // Check if this is a loading state
         const isLoading = state.loadingInfo?.isPartOfLoading === true;
+        console.log(`[Extension][DUPLICATION DEBUG] State isLoading=${isLoading}, saveLoadingStates=${saveLoadingStates}`);
         
         // Check if we should skip saving this loading state
         if (isLoading && !saveLoadingStates) {
-          console.log(`[Extension] Skipping saving loading state (saveLoadingStates is disabled)`);
+          console.log(`[Extension][DUPLICATION DEBUG] Skipping saving loading state (saveLoadingStates is disabled)`);
           return { 
             success: true, 
             stateId: `state_temp_${Date.now()}`,
@@ -248,8 +271,11 @@ const saveDOMState = async (state) => {
           state.isInitial === true ||
           state.interactionInfo !== undefined;
         
+        console.log(`[Extension][DUPLICATION DEBUG] Is special event: ${isSpecialEvent}, isNavigation=${state.isNavigation}, isReload=${state.isReload}, isInitial=${state.isInitial}, hasInteractionInfo=${state.interactionInfo !== undefined}`);
+        
         // Check if we've seen this hash before
         const existingStateId = state.hash && sessionStateHashes[state.hash];
+        console.log(`[Extension][DUPLICATION DEBUG] Existing state for hash ${state.hash}: ${existingStateId || 'none'}`);
         
         // Handle special events and duplicates
         if ((isSpecialEvent || state.isDuplicate) && existingStateId) {
@@ -260,7 +286,7 @@ const saveDOMState = async (state) => {
           else if (state.interactionInfo) eventType = `interaction: ${state.interactionInfo.trigger}`;
           else eventType = 'duplicate';
           
-          console.log(`[Extension] Special event (${eventType}) with EXISTING hash: ${state.hash}`);
+          console.log(`[Extension][DUPLICATION DEBUG] Special event (${eventType}) with EXISTING hash: ${state.hash}, using existing stateId: ${existingStateId}`);
           
           state.stateId = existingStateId;
           
@@ -273,6 +299,7 @@ const saveDOMState = async (state) => {
             
             // Update finalStateCounter if this base number is higher
             finalStateCounter = Math.max(finalStateCounter, baseNum);
+            console.log(`[Extension][DUPLICATION DEBUG] Extracted loading state number: ${state.stateNumber}, updated finalStateCounter: ${finalStateCounter}`);
           } else {
             // For final states like "state_2_1234567890"
             const stateNum = parseInt(existingStateId.split('_')[1]);
@@ -280,6 +307,7 @@ const saveDOMState = async (state) => {
             
             // Update finalStateCounter if this state number is higher
             finalStateCounter = Math.max(finalStateCounter, stateNum);
+            console.log(`[Extension][DUPLICATION DEBUG] Extracted final state number: ${state.stateNumber}, updated finalStateCounter: ${finalStateCounter}`);
           }
           
           // Mark as duplicate, but don't skip saving
@@ -301,10 +329,11 @@ const saveDOMState = async (state) => {
           else if (state.isInitial) eventType = 'initial load';
           else if (state.interactionInfo) eventType = `interaction: ${state.interactionInfo.trigger}`;
           
-          console.log(`[Extension] Special event (${eventType}) with NEW hash: ${state.hash}`);
+          console.log(`[Extension][DUPLICATION DEBUG] Special event (${eventType}) with NEW hash: ${state.hash}`);
           
           // Increment the state counter for this session
           sessionStateCounter++;
+          console.log(`[Extension][DUPLICATION DEBUG] Incremented sessionStateCounter to: ${sessionStateCounter}`);
           
           // NEW: Check if this is a loading state
           const isLoading = state.loadingInfo?.isPartOfLoading === true;
@@ -321,7 +350,7 @@ const saveDOMState = async (state) => {
             // Set stateNumber to match loading format
             state.stateNumber = baseStateNumber + loadingNumber/10; // For example: 1.1, 1.2, etc.
             
-            console.log(`[Extension] Created loading state ID: ${state.stateId}, stateNumber: ${state.stateNumber}`);
+            console.log(`[Extension][DUPLICATION DEBUG] Created loading state ID: ${state.stateId}, stateNumber: ${state.stateNumber}, baseStateNumber: ${baseStateNumber}, loadingNumber: ${loadingNumber}`);
           } else {
             // Increment final state counter for new final states
             finalStateCounter++;
@@ -330,7 +359,7 @@ const saveDOMState = async (state) => {
             state.stateId = `state_${finalStateCounter}_${timestamp}`;
             state.stateNumber = finalStateCounter; // Whole number for final states
             
-            console.log(`[Extension] Created final state ID: ${state.stateId}, stateNumber: ${state.stateNumber}`);
+            console.log(`[Extension][DUPLICATION DEBUG] Created final state ID: ${state.stateId}, stateNumber: ${state.stateNumber}, finalStateCounter: ${finalStateCounter}`);
           }
           
           state.isNewState = true;
@@ -344,15 +373,16 @@ const saveDOMState = async (state) => {
           
           if (state.hash) {
             sessionStateHashes[state.hash] = state.stateId;
-            console.log(`[Extension] Added new hash to tracking: ${state.hash} -> ${state.stateId}`);
+            console.log(`[Extension][DUPLICATION DEBUG] Added new hash to tracking: ${state.hash} -> ${state.stateId}`);
           }
         }
         // Handle duplicate regular states
         else if (existingStateId) {
-          console.log(`[Extension] Duplicate regular state with hash: ${state.hash}`);
+          console.log(`[Extension][DUPLICATION DEBUG] Duplicate regular state with hash: ${state.hash}, existing stateId: ${existingStateId}`);
           
           // Create a new state based on the duplicate, but with isNewState=false
           state.stateId = existingStateId + '_dup_' + Date.now();
+          console.log(`[Extension][DUPLICATION DEBUG] Generated duplicate stateId: ${state.stateId}`);
           
           // Extract state number from the existing ID
           if (existingStateId.includes('_loading_')) {
@@ -360,10 +390,12 @@ const saveDOMState = async (state) => {
             const baseNum = parseInt(existingStateId.split('_')[1]);
             const loadingNum = parseInt(existingStateId.split('_loading_')[1]);
             state.stateNumber = baseNum + loadingNum/10; // For example: 2.1
+            console.log(`[Extension][DUPLICATION DEBUG] Using loading state number for duplicate: ${state.stateNumber} from ${existingStateId}`);
           } else {
             // For final states like "state_2_1234567890"
             const stateNum = parseInt(existingStateId.split('_')[1]);
             state.stateNumber = stateNum;
+            console.log(`[Extension][DUPLICATION DEBUG] Using final state number for duplicate: ${state.stateNumber} from ${existingStateId}`);
           }
           
           // Mark as duplicate, but don't skip saving
@@ -371,10 +403,11 @@ const saveDOMState = async (state) => {
         }
         // Handle new regular states
         else {
-          console.log(`[Extension] New regular state with hash: ${state.hash}`);
+          console.log(`[Extension][DUPLICATION DEBUG] New regular state with hash: ${state.hash}`);
           
           // Increment the state counter for this session
           sessionStateCounter++;
+          console.log(`[Extension][DUPLICATION DEBUG] Incremented sessionStateCounter to: ${sessionStateCounter}`);
           
           // NEW: Check if this is a loading state
           const isLoading = state.loadingInfo?.isPartOfLoading === true;
@@ -391,7 +424,7 @@ const saveDOMState = async (state) => {
             // Set stateNumber to match loading format
             state.stateNumber = baseStateNumber + loadingNumber/10; // For example: 1.1, 1.2, etc.
             
-            console.log(`[Extension] Created loading state ID: ${state.stateId}, stateNumber: ${state.stateNumber}`);
+            console.log(`[Extension][DUPLICATION DEBUG] Created loading state ID: ${state.stateId}, stateNumber: ${state.stateNumber}, baseStateNumber: ${baseStateNumber}, loadingNumber: ${loadingNumber}`);
           } else {
             // Increment final state counter for new final states
             finalStateCounter++;
@@ -400,14 +433,14 @@ const saveDOMState = async (state) => {
             state.stateId = `state_${finalStateCounter}_${timestamp}`;
             state.stateNumber = finalStateCounter; // Whole number for final states
             
-            console.log(`[Extension] Created final state ID: ${state.stateId}, stateNumber: ${state.stateNumber}`);
+            console.log(`[Extension][DUPLICATION DEBUG] Created final state ID: ${state.stateId}, stateNumber: ${state.stateNumber}, finalStateCounter: ${finalStateCounter}`);
           }
           
           state.isNewState = true;
           
           if (state.hash) {
             sessionStateHashes[state.hash] = state.stateId;
-            console.log(`[Extension] Added hash to tracking: ${state.hash} -> ${state.stateId}`);
+            console.log(`[Extension][DUPLICATION DEBUG] Added hash to tracking: ${state.hash} -> ${state.stateId}`);
           }
         }
         
@@ -450,7 +483,7 @@ const saveDOMState = async (state) => {
           }
         };
         
-        console.log(`[Extension] Sending formatted state to backend:`, formattedState);
+        console.log(`[Extension][DUPLICATION DEBUG] Sending state to backend: stateId=${formattedState.stateId}, isNewState=${formattedState.isNewState}, stateNumber=${formattedState.stateNumber}, hash=${formattedState.hash}`);
         
         // Send state to backend
         const response = await fetch(`${API_BASE_URL}/states`, {
@@ -461,11 +494,13 @@ const saveDOMState = async (state) => {
         
         if (!response.ok) {
           const errorText = await response.text();
+          console.error(`[Extension][DUPLICATION DEBUG] Backend error: ${response.status}. Details: ${errorText}`);
           throw new Error(`Failed to save DOM state: ${response.status}. Details: ${errorText}`);
         }
         
         const result = await response.json();
-        console.log(`[Extension] Saved DOM state: ${state.stateId} (isNewState: ${state.isNewState}, stateNumber: ${state.stateNumber})`);
+        console.log(`[Extension][DUPLICATION DEBUG] Backend response: ${JSON.stringify(result)}`);
+        console.log(`[Extension][DUPLICATION DEBUG] Saved DOM state: ${state.stateId} (isNewState: ${state.isNewState}, stateNumber: ${state.stateNumber})`);
         
         return { 
           success: true, 
@@ -473,15 +508,17 @@ const saveDOMState = async (state) => {
           isDuplicate: !state.isNewState 
         };
       } finally {
+        console.log(`[Extension][DUPLICATION DEBUG] Finished processing state with lockKey: ${lockKey}, will clear lock after short delay`);
         setTimeout(() => {
           delete stateProcessingLock[lockKey];
+          console.log(`[Extension][DUPLICATION DEBUG] Removed lock for key: ${lockKey}`);
         }, 1);
       }
     })();
     
     return await stateProcessingLock[lockKey];
   } catch (error) {
-    console.error('[Extension] Error saving DOM state:', error);
+    console.error('[Extension][DUPLICATION DEBUG] Error saving DOM state:', error);
     throw error;
   }
 };
@@ -501,10 +538,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     
     // Log source if available to help identify where duplicates are coming from
     if (message._source) {
-      console.log('[Extension] Source:', message._source);
+      console.log(`[Extension][DUPLICATION DEBUG] Message source: ${message._source}`);
     }
     
-    console.log('[Extension] Message details:', message); // Log full message for debugging
+    console.log('[Extension][DUPLICATION DEBUG] Message details:', message); // Log full message for debugging
     
     // If message is from a content script in a tab, update the recordingTabId
     if (sender.tab && recordingStatus === 'recording') {
@@ -557,19 +594,39 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         (async () => {
           try {
             const state = message.state;
+            console.log(`[Extension][DUPLICATION DEBUG] Received recordState: hash=${state.hash}, timestamp=${state.timestamp}`);
             
             // Transfer special event flags from message to state if they exist
-            if (message.isNavigation === true) state.isNavigation = true;
-            if (message.isReload === true) state.isReload = true;
-            if (message.isInitial === true) state.isInitial = true;
-            if (message.isInteraction === true) state.isInteraction = true;
-            if (message.isDuplicate === true) state.isDuplicate = true;
-            if (message.reusedStateId) state.reusedStateId = message.reusedStateId;
+            if (message.isNavigation === true) {
+              state.isNavigation = true;
+              console.log(`[Extension][DUPLICATION DEBUG] Setting isNavigation flag`);
+            }
+            if (message.isReload === true) {
+              state.isReload = true;
+              console.log(`[Extension][DUPLICATION DEBUG] Setting isReload flag`);
+            }
+            if (message.isInitial === true) {
+              state.isInitial = true;
+              console.log(`[Extension][DUPLICATION DEBUG] Setting isInitial flag`);
+            }
+            if (message.isInteraction === true) {
+              state.isInteraction = true;
+              console.log(`[Extension][DUPLICATION DEBUG] Setting isInteraction flag`);
+            }
+            if (message.isDuplicate === true) {
+              state.isDuplicate = true;
+              console.log(`[Extension][DUPLICATION DEBUG] Setting isDuplicate flag`);
+            }
+            if (message.reusedStateId) {
+              state.reusedStateId = message.reusedStateId;
+              console.log(`[Extension][DUPLICATION DEBUG] Setting reusedStateId: ${message.reusedStateId}`);
+            }
             
             const result = await saveDOMState(state);
+            console.log(`[Extension][DUPLICATION DEBUG] saveDOMState result: ${JSON.stringify(result)}`);
             sendResponse(result);
           } catch (error) {
-            console.error('[Extension] Error saving state:', error);
+            console.error('[Extension][DUPLICATION DEBUG] Error saving state:', error);
             sendResponse({ success: false, error: error.message });
           }
         })();

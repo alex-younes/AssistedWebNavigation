@@ -969,8 +969,17 @@ function setupFormChangeDetection() {
                         // For checkboxes, previous value is opposite of current state
                         previousValue = element.checked ? 'unchecked' : 'checked';
                     } else if (isRadio) {
-                        // For radio buttons, if it's checked, it was already checked
-                        previousValue = element.checked ? 'checked' : 'unchecked';
+                        // For radio buttons, get the stored previous value or default to unchecked
+                        previousValue = element.dataset.previousValue || 'unchecked';
+                        
+                        // Update previous values for all radio buttons in the same group
+                        const name = element.name;
+                        if (name) {
+                            document.querySelectorAll(`input[type="radio"][name="${name}"]`).forEach(radio => {
+                                // Store the current state as previous value for next interaction
+                                radio.dataset.previousValue = radio.checked ? 'checked' : 'unchecked';
+                            });
+                        }
                     }
                 }
                 

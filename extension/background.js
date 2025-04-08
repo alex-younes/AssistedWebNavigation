@@ -704,10 +704,28 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             const state = message.state;
             console.log(`[Extension][DUPLICATION DEBUG] Received recordState: hash=${state.hash}, timestamp=${state.timestamp}`);
             
+            // Check if this is a navigation button click
+            const isNavigationButton = 
+              message.isInteraction && 
+              state.interactionInfo && 
+              (state.interactionInfo.element === 'a' || 
+               state.interactionInfo.element === 'button[type=button]' ||
+               (state.interactionInfo.text && 
+                (state.interactionInfo.text.includes('Continue') || 
+                 state.interactionInfo.text.includes('Next') || 
+                 state.interactionInfo.text.includes('Go'))));
+            
             // Store interaction info when it's a click
             if (state.interactionInfo && message.isInteraction) {
               lastInteractionInfo = state.interactionInfo;
               console.log('[DEBUG] Stored interaction:', lastInteractionInfo);
+              
+              // Skip recording the interaction state if it's a navigation button
+              if (isNavigationButton) {
+                console.log('[DEBUG] Skipping recording of navigation button click, will be included in navigation state');
+                sendResponse({ success: true, skipped: true, reason: 'navigation_button' });
+                return true;
+              }
             }
             
             // Check for pending navigation or reload

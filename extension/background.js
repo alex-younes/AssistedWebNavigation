@@ -13,6 +13,7 @@ let stateProcessingLock = {}; // Lock to prevent duplicate processing of same ha
 let saveLoadingStates = true; // New setting to control whether loading states are saved
 let lastStateId = null; // Track the last state ID
 let lastStateHash = null; // Track the last state hash
+let lastInteractionInfo = null; // Store the last interaction info
 
 // Initialize state from storage on startup
 const initializeState = async () => {
@@ -703,6 +704,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             const state = message.state;
             console.log(`[Extension][DUPLICATION DEBUG] Received recordState: hash=${state.hash}, timestamp=${state.timestamp}`);
             
+            // Store interaction info when it's a click
+            if (state.interactionInfo && message.isInteraction) {
+              lastInteractionInfo = state.interactionInfo;
+              console.log('[DEBUG] Stored interaction:', lastInteractionInfo);
+            }
+            
             // Check for pending navigation or reload
             const navigationInfo = await chrome.storage.session.get([
               'isNavigationPending', 
@@ -729,6 +736,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 message.isNavigation = true;
                 state.isInitial = false;
                 state.isNavigation = true;
+                
+                // Add interaction info to navigation state if available
+                if (lastInteractionInfo) {
+                  console.log('[DEBUG] Adding stored interaction to navigation state');
+                  state.interactionInfo = lastInteractionInfo;
+                  lastInteractionInfo = null; // Clear after use
+                }
               }
               
               // Clear the pending flags

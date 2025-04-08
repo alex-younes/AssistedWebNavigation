@@ -832,4 +832,4 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse({ success: false, error: error.message });
     return true;
   }
-});
+}); 

@@ -519,7 +519,6 @@ const saveDOMState = async (state) => {
             isNavigation: state.isNavigation || false,
             isInitial: state.isInitial || false,
             isReload: state.isReload || false,
-            isFinalState: state.loadingInfo?.isFinalState || false,
             isPartOfLoading: state.loadingInfo?.isPartOfLoading || false,
             loadTime: state.loadingInfo?.loadTime || 0,
             resourceCount: state.loadingInfo?.resourceCount || 0,

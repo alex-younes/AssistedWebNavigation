@@ -400,7 +400,6 @@ const createStateObject = (stateId, url, hash, isNewState) => {
         isNavigation: false,
         isInitial: false,
         isReload: false,
-        isFinalState: false,
         isPartOfLoading: isPageLoading, // Use the current loading state
         loadTime: loadTime,
         resourceCount: resourceCount,

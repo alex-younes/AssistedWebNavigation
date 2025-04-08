@@ -139,7 +139,7 @@ const db = {
     return await DOMState.find({ 
       sessionId, 
       $or: [
-        { stateId: { $regex: /_loading_/ } },
+        { stateId: { $regex: /^loading_/ } },
         { 'loadingInfo.isPartOfLoading': true }
       ]
     })
@@ -150,7 +150,7 @@ const db = {
     return await DOMState.find({ 
       sessionId, 
       $and: [
-        { stateId: { $not: { $regex: /_loading_/ } } },
+        { stateId: { $not: { $regex: /^loading_/ } } },
         { 'loadingInfo.isPartOfLoading': { $ne: true } }
       ]
     })

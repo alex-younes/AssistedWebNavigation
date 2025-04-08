@@ -291,14 +291,14 @@ const saveDOMState = async (state) => {
           state.stateId = existingStateId;
           
           // Extract state number from the existing ID
-          if (existingStateId.includes('_loading_')) {
-            // For loading states like "state_2_loading_1"
-            const baseNum = parseInt(existingStateId.split('_')[1]);
-            const loadingNum = parseInt(existingStateId.split('_loading_')[1]);
-            state.stateNumber = baseNum + loadingNum/10; // For example: 2.1
+          if (existingStateId.includes('loading_')) {
+            // For loading states like "loading_index.html_1"
+            const parts = existingStateId.split('_');
+            const loadingNum = parseInt(parts[parts.length - 1]);
+            state.stateNumber = finalStateCounter + loadingNum/10; // For example: 1.1
             
             // Update finalStateCounter if this base number is higher
-            finalStateCounter = Math.max(finalStateCounter, baseNum);
+            finalStateCounter = Math.max(finalStateCounter, Math.floor(state.stateNumber));
             console.log(`[Extension][DUPLICATION DEBUG] Extracted loading state number: ${state.stateNumber}, updated finalStateCounter: ${finalStateCounter}`);
           } else {
             // For final states like "state_2_1234567890"
@@ -342,15 +342,16 @@ const saveDOMState = async (state) => {
           const timestamp = Date.now();
           
           if (isLoading) {
-            // Format: state_1_loading_1, state_1_loading_2, etc.
+            // Format: loading_index.html_1, loading_register.html_1, etc.
             const loadingNumber = sessionStateCounter % 10 || 1;
-            const baseStateNumber = finalStateCounter + 1; // Associate with the next final state
-            state.stateId = `state_${baseStateNumber}_loading_${loadingNumber}`;
+            const url = new URL(state.url);
+            const pageName = url.pathname.split('/').pop() || 'index.html';
+            state.stateId = `loading_${pageName}_${loadingNumber}`;
             
             // Set stateNumber to match loading format
-            state.stateNumber = baseStateNumber + loadingNumber/10; // For example: 1.1, 1.2, etc.
+            state.stateNumber = finalStateCounter + loadingNumber/10; // For example: 1.1, 1.2, etc.
             
-            console.log(`[Extension][DUPLICATION DEBUG] Created loading state ID: ${state.stateId}, stateNumber: ${state.stateNumber}, baseStateNumber: ${baseStateNumber}, loadingNumber: ${loadingNumber}`);
+            console.log(`[Extension][DUPLICATION DEBUG] Created loading state ID: ${state.stateId}, stateNumber: ${state.stateNumber}, pageName: ${pageName}, loadingNumber: ${loadingNumber}`);
           } else {
             // Increment final state counter for new final states
             finalStateCounter++;
@@ -385,11 +386,11 @@ const saveDOMState = async (state) => {
           console.log(`[Extension][DUPLICATION DEBUG] Generated duplicate stateId: ${state.stateId}`);
           
           // Extract state number from the existing ID
-          if (existingStateId.includes('_loading_')) {
-            // For loading states like "state_2_loading_1"
-            const baseNum = parseInt(existingStateId.split('_')[1]);
-            const loadingNum = parseInt(existingStateId.split('_loading_')[1]);
-            state.stateNumber = baseNum + loadingNum/10; // For example: 2.1
+          if (existingStateId.includes('loading_')) {
+            // For loading states like "loading_index.html_1"
+            const parts = existingStateId.split('_');
+            const loadingNum = parseInt(parts[parts.length - 1]);
+            state.stateNumber = finalStateCounter + loadingNum/10; // For example: 1.1
             console.log(`[Extension][DUPLICATION DEBUG] Using loading state number for duplicate: ${state.stateNumber} from ${existingStateId}`);
           } else {
             // For final states like "state_2_1234567890"
@@ -416,15 +417,16 @@ const saveDOMState = async (state) => {
           const timestamp = Date.now();
           
           if (isLoading) {
-            // Format: state_1_loading_1, state_1_loading_2, etc.
+            // Format: loading_index.html_1, loading_register.html_1, etc.
             const loadingNumber = sessionStateCounter % 10 || 1;
-            const baseStateNumber = finalStateCounter + 1; // Associate with the next final state
-            state.stateId = `state_${baseStateNumber}_loading_${loadingNumber}`;
+            const url = new URL(state.url);
+            const pageName = url.pathname.split('/').pop() || 'index.html';
+            state.stateId = `loading_${pageName}_${loadingNumber}`;
             
             // Set stateNumber to match loading format
-            state.stateNumber = baseStateNumber + loadingNumber/10; // For example: 1.1, 1.2, etc.
+            state.stateNumber = finalStateCounter + loadingNumber/10; // For example: 1.1, 1.2, etc.
             
-            console.log(`[Extension][DUPLICATION DEBUG] Created loading state ID: ${state.stateId}, stateNumber: ${state.stateNumber}, baseStateNumber: ${baseStateNumber}, loadingNumber: ${loadingNumber}`);
+            console.log(`[Extension][DUPLICATION DEBUG] Created loading state ID: ${state.stateId}, stateNumber: ${state.stateNumber}, pageName: ${pageName}, loadingNumber: ${loadingNumber}`);
           } else {
             // Increment final state counter for new final states
             finalStateCounter++;

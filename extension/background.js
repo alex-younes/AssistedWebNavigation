@@ -709,7 +709,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return true;
         
       case 'getStatus':
-        sendResponse({
+        sendResponse({ 
           recordingStatus,
           currentSessionId,
           userId

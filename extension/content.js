@@ -669,10 +669,17 @@ function setupReloadDetection() {
 
 // Track URL/page changes
 function setupNavigationTracking() {
-    // Listen for URL changes
+    // Store initial URL
+    sessionStorage.setItem('lastPageUrl', window.location.href);
+    console.log('[DOM Tracker] Initial URL stored:', window.location.href);
+
+    // Listen for URL changes via popstate
     window.addEventListener('popstate', () => {
         console.log('[DOM Tracker] Navigation detected (popstate)');
-        handleNavigation();
+        const currentUrl = window.location.href;
+        const previousUrl = sessionStorage.getItem('lastPageUrl');
+        console.log(`[DOM Tracker] Navigation: from ${previousUrl} to ${currentUrl}`);
+        handleNavigation(true);
     });
     
     // For single-page apps and other navigation methods
@@ -680,23 +687,42 @@ function setupNavigationTracking() {
     history.pushState = function() {
         originalPushState.apply(this, arguments);
         console.log('[DOM Tracker] Navigation detected (pushState)');
-        handleNavigation();
+        const currentUrl = window.location.href;
+        const previousUrl = sessionStorage.getItem('lastPageUrl');
+        console.log(`[DOM Tracker] Navigation: from ${previousUrl} to ${currentUrl}`);
+        handleNavigation(true);
     };
     
     const originalReplaceState = history.replaceState;
     history.replaceState = function() {
         originalReplaceState.apply(this, arguments);
         console.log('[DOM Tracker] Navigation detected (replaceState)');
-        handleNavigation();
+        const currentUrl = window.location.href;
+        const previousUrl = sessionStorage.getItem('lastPageUrl');
+        console.log(`[DOM Tracker] Navigation: from ${previousUrl} to ${currentUrl}`);
+        handleNavigation(true);
     };
+
+    // Also track unload to catch regular navigation
+    window.addEventListener('beforeunload', () => {
+        console.log('[DOM Tracker] Page unload, storing current URL:', window.location.href);
+        sessionStorage.setItem('lastPageUrl', window.location.href);
+        sessionStorage.setItem('navigationPending', 'true');
+    });
 }
 
 // Handle navigation events
-function handleNavigation() {
+function handleNavigation(isHistoryNavigation = false) {
     if (!isRecording) return;
     
     const url = window.location.href;
-    console.log(`[DOM Tracker] Page changed to: ${url}`);
+    const previousUrl = sessionStorage.getItem('lastPageUrl');
+    
+    console.log(`[DOM Tracker] Navigation handler - from ${previousUrl} to ${url}`);
+    console.log(`[DOM Tracker] Is history navigation: ${isHistoryNavigation}`);
+    
+    // Update last URL
+    sessionStorage.setItem('lastPageUrl', url);
     
     // Reset hash for this new page load
     lastDomHash = null;
@@ -709,54 +735,10 @@ function handleNavigation() {
     
     loadingStartTime = Date.now();
     
-    console.log('[DOM Tracker] Page is now in loading state');
+    // Set navigation pending flag
+    sessionStorage.setItem('navigationPending', 'true');
     
-    // Create a new state for the new page after a delay to allow loading to complete
-    setTimeout(() => {
-        try {
-            // Calculate hash once and reuse it
-            const currentHash = calculateDomHash();
-            console.log(`[DOM Tracker] Navigation state hash: ${currentHash}`);
-            
-            const { state, isNewState } = createDomState();
-            state.hash = currentHash; // Ensure hash is consistent
-            state.isNavigation = true; // Mark this as a navigation event
-            
-            // Force loading info to be true for navigation events
-            if (state.loadingInfo) {
-                state.loadingInfo.isPartOfLoading = true;
-                state.loadingInfo.isNavigation = true;
-            }
-            
-            // This is critical - send the isNavigation flag at the top level of the message
-            sendToBackground('recordState', {
-                state: state,
-                isNavigation: true
-            })
-            .then(response => {
-                console.log(`[DOM Tracker] Background response for navigation state:`, response);
-                
-                if (response && response.stateId) {
-                    // Update our map with the real stateId from the server
-                    previousStates[currentHash] = response.stateId;
-                    currentStateId = response.stateId;
-                    console.log(`[DOM Tracker] Added navigation state to previousStates: ${currentHash} -> ${response.stateId}`);
-                    
-                    // Always update lastDomHash to the current hash
-                    lastDomHash = currentHash;
-                } else {
-                    console.warn('[DOM Tracker] Did not receive valid stateId from background script for navigation');
-                }
-            })
-            .catch(error => {
-                console.error('[DOM Tracker] Error getting stateId for navigation state:', error);
-            });
-            
-            console.log(`[DOM Tracker] Created state after navigation with hash: ${currentHash}`);
-        } catch (error) {
-            console.error('[DOM Tracker] Error handling navigation state:', error);
-        }
-    }, 500); // Short delay to allow page to settle
+    console.log('[DOM Tracker] Page is now in loading state, navigation pending');
 }
 
 // Capture interaction details for clicked elements
@@ -1099,16 +1081,29 @@ function initialize() {
         console.log('[DOM Tracker][DUPLICATION DEBUG] Page fully loaded event triggered');
         if (isRecording) {
             // For an actual page load event, this should always be considered a loading state
-            // We're capturing the state at the end of loading, but it represents a loading process
             isPageLoading = true;
             
             // Calculate hash once and reuse it
             const currentHash = calculateDomHash();
             console.log(`[DOM Tracker][DUPLICATION DEBUG] Page load state hash: ${currentHash}`);
             
-            // Check if this is a reload
+            // Check various load scenarios
             const isReload = sessionStorage.getItem('isReload') === 'true';
-            console.log(`[DOM Tracker][DUPLICATION DEBUG] Is page reload: ${isReload}`);
+            const previousUrl = sessionStorage.getItem('lastPageUrl');
+            const navigationPending = sessionStorage.getItem('navigationPending') === 'true';
+            const currentUrl = window.location.href;
+            const isNavigation = navigationPending && previousUrl && previousUrl !== currentUrl;
+            
+            console.log(`[DOM Tracker][DUPLICATION DEBUG] Load type detection:`, {
+                isReload,
+                previousUrl,
+                currentUrl,
+                navigationPending,
+                isNavigation
+            });
+            
+            // Clear navigation pending flag
+            sessionStorage.setItem('navigationPending', 'false');
             
             // Check if we've already sent this hash to prevent duplicates
             if (pendingStateSends[currentHash]) {
@@ -1116,38 +1111,53 @@ function initialize() {
                 return;
             }
             
-            // Capture initial page state
+            // Capture page state
             const { state, isNewState } = createDomState();
-            state.hash = currentHash; // Ensure hash is consistent
+            state.hash = currentHash;
             
-            console.log(`[DOM Tracker][DUPLICATION DEBUG] Created DOM state for window.load with hash=${currentHash}, isNewState=${isNewState}`);
-            
-            // Mark the state based on the load type
+            // Set appropriate flags based on the type of page load
             if (isReload) {
                 state.isReload = true;
+                state.isInitial = false;
+                state.isNavigation = false;
                 console.log('[DOM Tracker][DUPLICATION DEBUG] Setting isReload flag for state');
+            } else if (isNavigation) {
+                state.isNavigation = true;
+                state.isInitial = false;
+                state.isReload = false;
+                console.log('[DOM Tracker][DUPLICATION DEBUG] Setting isNavigation flag for state');
             } else {
-                // This is the only place we now set isInitial
-                state.isInitial = true;
-                console.log('[DOM Tracker][DUPLICATION DEBUG] Setting isInitial flag for state');
+                // Only set isInitial if this is truly the first load (no previous URL or navigation)
+                state.isInitial = !previousUrl && !navigationPending;
+                state.isNavigation = false;
+                state.isReload = false;
+                console.log(`[DOM Tracker][DUPLICATION DEBUG] Setting isInitial=${!previousUrl && !navigationPending} for state`);
             }
             
-            // Force loading info to be true for both initial and reload states
+            // Update loadingInfo flags
             if (state.loadingInfo) {
                 state.loadingInfo.isPartOfLoading = true;
-                console.log('[DOM Tracker][DUPLICATION DEBUG] Setting loadingInfo.isPartOfLoading=true for window.load state');
+                state.loadingInfo.isNavigation = state.isNavigation;
+                state.loadingInfo.isInitial = state.isInitial;
+                state.loadingInfo.isReload = state.isReload;
             }
             
             // Add to pendingStateSends to prevent duplicates
             pendingStateSends[currentHash] = true;
-            console.log(`[DOM Tracker][DUPLICATION DEBUG] Added hash ${currentHash} to pendingStateSends for window.load event`);
             
-            // IMPORTANT: Pass the flags at the top level of the message
-            console.log(`[DOM Tracker][DUPLICATION DEBUG] Sending window.load state to background with hash=${currentHash}, isInitial=${!isReload}, isReload=${isReload}`);
+            // Send state to background
+            console.log(`[DOM Tracker][DUPLICATION DEBUG] Sending state with flags:`, {
+                hash: currentHash,
+                isInitial: state.isInitial,
+                isReload: state.isReload,
+                isNavigation: state.isNavigation
+            });
+            
             sendToBackground('recordState', {
                 state: state,
-                isInitial: !isReload,
-                isReload: isReload
+                isInitial: state.isInitial,
+                isReload: state.isReload,
+                isNavigation: state.isNavigation
             })
             .then(response => {
                 console.log(`[DOM Tracker][DUPLICATION DEBUG] Background response for page load state:`, response);

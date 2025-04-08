@@ -611,6 +611,19 @@ chrome.webNavigation.onCommitted.addListener(async (details) => {
   // Only handle navigation in the recording tab
   if (recordingStatus === 'recording' && details.tabId === recordingTabId) {
     console.log('[Extension] Navigation detected in recording tab:', details.url);
+    console.log('[Extension] Navigation type:', details.transitionType, details.transitionQualifiers);
+    
+    // Set a flag in storage to indicate this is a navigation
+    await chrome.storage.session.set({ 
+      isNavigationPending: true,
+      navigationDetails: {
+        from: details.url,
+        timestamp: Date.now(),
+        type: details.transitionType
+      }
+    });
+    
+    console.log('[Extension] Set navigation pending flag');
     console.log('[Extension] Preserving state tracking:', { lastStateId, lastStateHash });
     
     // Immediately save state to ensure persistence through navigation
@@ -682,6 +695,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           try {
             const state = message.state;
             console.log(`[Extension][DUPLICATION DEBUG] Received recordState: hash=${state.hash}, timestamp=${state.timestamp}`);
+            
+            // Check for pending navigation
+            const navigationInfo = await chrome.storage.session.get(['isNavigationPending', 'navigationDetails']);
+            const isNavigationPending = navigationInfo.isNavigationPending === true;
+            
+            // If this is a window load event and there's a pending navigation, this is a navigation state
+            if (message.isInitial && isNavigationPending) {
+              console.log(`[Extension][DUPLICATION DEBUG] Converting initial state to navigation state due to pending navigation`);
+              message.isInitial = false;
+              message.isNavigation = true;
+              state.isInitial = false;
+              state.isNavigation = true;
+              
+              // Clear the navigation pending flag
+              await chrome.storage.session.remove(['isNavigationPending', 'navigationDetails']);
+              console.log(`[Extension][DUPLICATION DEBUG] Cleared navigation pending flag`);
+            }
             
             // Transfer special event flags from message to state if they exist
             if (message.isNavigation === true) {

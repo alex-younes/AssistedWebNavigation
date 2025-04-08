@@ -13,7 +13,8 @@ let stateProcessingLock = {}; // Lock to prevent duplicate processing of same ha
 let saveLoadingStates = true; // New setting to control whether loading states are saved
 let lastStateId = null; // Track the last state ID
 let lastStateHash = null; // Track the last state hash
-let lastInteractionInfo = null; // Store the last interaction info
+let interactionQueue = []; // Queue of recent interactions with timestamps
+let lastInteractionInfo = null; // Store the last interaction info for navigation
 
 // Initialize state from storage on startup
 const initializeState = async () => {
@@ -263,6 +264,31 @@ const saveDOMState = async (state) => {
     state.previousHash = lastStateHash;
     
     console.log(`[Extension] Saving state with previous info - previousStateId: ${lastStateId}, previousHash: ${lastStateHash}`);
+    
+    // Add interaction info to mutation states that occur shortly after a button click
+    if (!state.interactionInfo && 
+        interactionQueue.length > 0 && 
+        state.mutationInfo && 
+        state.mutationInfo.count > 0) {
+      
+      // Find the most recent interaction within the threshold time (500ms)
+      const now = Date.now();
+      const matchingInteraction = interactionQueue.find(interaction => {
+        const interactionTime = new Date(interaction.timestamp).getTime();
+        return now - interactionTime < 500; // 500ms threshold
+      });
+      
+      if (matchingInteraction) {
+        console.log('[Extension] Adding matching interaction to DOM mutation state:', matchingInteraction.type, 'on', matchingInteraction.element);
+        state.interactionInfo = matchingInteraction;
+        
+        // Remove any older interactions from the queue
+        const oldestValidTimestamp = now - 500;
+        interactionQueue = interactionQueue.filter(interaction => {
+          return new Date(interaction.timestamp).getTime() >= oldestValidTimestamp;
+        });
+      }
+    }
     
     // Check for interaction information
     if (state.interactionInfo) {
@@ -717,12 +743,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             
             // Store interaction info when it's a click
             if (state.interactionInfo && message.isInteraction) {
-              lastInteractionInfo = state.interactionInfo;
-              console.log('[DEBUG] Stored interaction:', lastInteractionInfo);
+              interactionQueue.push(state.interactionInfo);
+              console.log('[DEBUG] Stored interaction:', state.interactionInfo);
+              
+              // Schedule clearing of lastInteractionInfo after 3 seconds
+              setTimeout(() => {
+                // Only clear if it's still the same interaction
+                if (interactionQueue.length > 0 && interactionQueue[0].timestamp === state.interactionInfo.timestamp) {
+                  console.log('[DEBUG] Clearing stored interaction after timeout');
+                  interactionQueue.shift();
+                }
+              }, 3000);
               
               // Skip recording the interaction state if it's a navigation button
               if (isNavigationButton) {
                 console.log('[DEBUG] Skipping recording of navigation button click, will be included in navigation state');
+                // Store separately for navigation
+                lastInteractionInfo = state.interactionInfo;
                 sendResponse({ success: true, skipped: true, reason: 'navigation_button' });
                 return true;
               }
@@ -757,7 +794,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 
                 // Add interaction info to navigation state if available
                 if (lastInteractionInfo) {
-                  console.log('[DEBUG] Adding stored interaction to navigation state');
+                  console.log('[DEBUG] Adding stored navigation interaction to state');
                   state.interactionInfo = lastInteractionInfo;
                   lastInteractionInfo = null; // Clear after use
                 }

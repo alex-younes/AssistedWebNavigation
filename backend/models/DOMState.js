@@ -21,6 +21,17 @@ const domStateSchema = new mongoose.Schema({
     visibleElements: { type: Number }
   },
   title: { type: String },
+  // Add interaction details that caused this state
+  interactionInfo: {
+    type: { type: String }, // click, change, input, etc.
+    element: { type: String }, // button, checkbox, dropdown, etc.
+    selector: { type: String }, // CSS selector of the element
+    text: { type: String }, // Element text or label
+    value: { type: String }, // New value (for inputs, checkboxes)
+    previousValue: { type: String }, // Previous value (for changes)
+    timestamp: { type: Date, default: Date.now },
+    details: { type: Map, of: mongoose.Schema.Types.Mixed, default: {} } // Any additional details
+  },
   loadingInfo: {
     isNavigation: { type: Boolean, default: false },
     isInitial: { type: Boolean, default: false },

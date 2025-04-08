@@ -263,6 +263,11 @@ const saveDOMState = async (state) => {
     
     console.log(`[Extension] Saving state with previous info - previousStateId: ${lastStateId}, previousHash: ${lastStateHash}`);
     
+    // Check for interaction information
+    if (state.interactionInfo) {
+      console.log(`[Extension] State includes interaction: ${state.interactionInfo.type} on ${state.interactionInfo.element || 'element'}`);
+    }
+    
     // Generate a unique processing key for this state
     const lockKey = getStateLockKey(state);
     
@@ -509,6 +514,7 @@ const saveDOMState = async (state) => {
             visibleElements: 0
           },
           title: state.title,
+          interactionInfo: state.interactionInfo || null,
           loadingInfo: {
             isNavigation: state.isNavigation || false,
             isInitial: state.isInitial || false,

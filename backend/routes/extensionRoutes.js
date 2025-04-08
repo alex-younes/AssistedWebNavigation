@@ -401,10 +401,16 @@ router.post('/states', async (req, res) => {
       metrics, 
       title, 
       loadingInfo, 
-      mutationInfo 
+      mutationInfo,
+      interactionInfo  // Add this new field
     } = req.body;
     
     console.log(`[Backend] Received state: ${stateId}, hash: ${hash}, dom size: ${dom ? dom.length : 0} bytes`);
+    
+    // If interaction info is present, log it
+    if (interactionInfo && interactionInfo.type) {
+      console.log(`[Backend] Interaction: ${interactionInfo.type} on ${interactionInfo.element || 'element'} - ${interactionInfo.text || ''}`);
+    }
     
     // Validate required fields
     if (!hash || !dom) {
@@ -450,6 +456,8 @@ router.post('/states', async (req, res) => {
         visibleElements: 0
       },
       title: title || '',
+      // Add interaction info if present
+      interactionInfo: interactionInfo || null,
       loadingInfo: {
         isNavigation: loadingInfo?.isNavigation || false,
         isInitial: loadingInfo?.isInitial || false,

@@ -17,6 +17,10 @@ let isPageLoading = false; // Track if page is in loading state
 let loadingStartTime = 0; // When loading started
 let loadingCheckInterval = null; // Interval for checking loading state
 let lastDomSnapshot = ''; // Last DOM snapshot for comparison
+let lastStateId = null; // Track the last state ID
+let lastStateHash = null; // Track the last state hash
+let stateSequenceNumber = 0; // Track the sequence of state captures
+let pendingStateSaves = {}; // Track in-progress state saves
 
 // Send a message to the background script
 function sendToBackground(action, data) {
@@ -36,6 +40,17 @@ function sendToBackground(action, data) {
             }
             
             console.log(`[DOM Tracker] Response from ${action}:`, response);
+            
+            // Update local state tracking when we receive state save confirmation
+            if (action === 'recordState' && response && response.stateId) {
+                console.log(`[DOM Tracker] Updating local state tracking:`, {
+                    lastStateId: response.stateId,
+                    lastStateHash: data.state.hash
+                });
+                lastStateId = response.stateId;
+                lastStateHash = data.state.hash;
+            }
+            
             resolve(response);
         });
     });
@@ -411,7 +426,7 @@ const createStateObject = (stateId, url, hash, isNewState) => {
     };
 
     // Create the complete state object
-    return {
+    const state = {
         stateId: stateId || `state_${Date.now()}`,
         sessionId: sessionId,
         userId: userId,
@@ -424,11 +439,26 @@ const createStateObject = (stateId, url, hash, isNewState) => {
         isNewState: isNewState !== undefined ? isNewState : true,
         stateNumber: 0, // Will be assigned by background script
         hash: hash || generateHash(currentDom),
+        previousStateId: lastStateId, // Add previous state ID
+        previousHash: lastStateHash, // Add previous state hash
         dom: currentDom,
         metrics: metrics,
         loadingInfo: loadingInfo,
         mutationInfo: mutationInfo
     };
+
+    console.log(`[DOM Tracker] Created state with previous state info - previousStateId: ${lastStateId}, previousHash: ${lastStateHash}`);
+    return state;
+};
+
+// Update the state tracking after successful state creation
+const updateStateTracking = (state) => {
+    if (state && state.stateId && state.hash) {
+        lastStateId = state.stateId;
+        lastStateHash = state.hash;
+        lastDomHash = state.hash;
+        console.log(`[DOM Tracker] Updated state tracking - lastStateId: ${lastStateId}, lastStateHash: ${lastStateHash}`);
+    }
 };
 
 // Process mutations and create a new state with debouncing
@@ -1100,6 +1130,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             });
             return true;
         }
+
+        if (message.action === 'stateSaved') {
+            // Update our tracking when we get confirmation the state was saved
+            updateStateTracking(message.state);
+            sendResponse({ success: true });
+            return true;
+        }
         
         // Default response
         sendResponse({ success: false, error: 'Unknown action' });
@@ -1109,4 +1146,72 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     
     return true;
-}); 
+});
+
+// Sequential state capture function to ensure states are sent in order
+async function captureAndSendState(stateData, flags = {}) {
+    // Increment sequence number to track order
+    const sequenceNumber = ++stateSequenceNumber;
+    
+    console.log(`[DOM Tracker] Capturing state #${sequenceNumber} with flags:`, flags);
+    
+    try {
+        // Prepare state data
+        const state = stateData.state || createDomState().state;
+        
+        // Add local tracking info
+        state.previousStateId = lastStateId;
+        state.previousHash = lastStateHash;
+        state.captureSequence = sequenceNumber;
+        
+        console.log(`[DOM Tracker] State #${sequenceNumber} with previous state info:`, {
+            previousStateId: lastStateId,
+            previousHash: lastStateHash
+        });
+        
+        // Create a promise to track this specific state capture
+        pendingStateSaves[sequenceNumber] = new Promise(async (resolve) => {
+            try {
+                // Wait for any previous state captures to complete
+                if (sequenceNumber > 1) {
+                    const previousSequence = sequenceNumber - 1;
+                    if (pendingStateSaves[previousSequence]) {
+                        console.log(`[DOM Tracker] Waiting for previous state #${previousSequence} to complete before sending #${sequenceNumber}`);
+                        await pendingStateSaves[previousSequence];
+                    }
+                }
+                
+                // Send state to background script
+                console.log(`[DOM Tracker] Sending state #${sequenceNumber} to background`);
+                const response = await sendToBackground('recordState', {
+                    state,
+                    ...flags
+                });
+                
+                // Update local tracking after successful save
+                if (response && response.stateId) {
+                    console.log(`[DOM Tracker] State #${sequenceNumber} saved with ID: ${response.stateId}`);
+                    lastStateId = response.stateId;
+                    lastStateHash = state.hash;
+                }
+                
+                resolve(response);
+                return response;
+            } catch (error) {
+                console.error(`[DOM Tracker] Error sending state #${sequenceNumber}:`, error);
+                resolve(null); // Resolve with null to unblock the queue
+                return null;
+            } finally {
+                // Clean up after a delay to ensure any chained promises have resolved
+                setTimeout(() => {
+                    delete pendingStateSaves[sequenceNumber];
+                }, 100);
+            }
+        });
+        
+        return await pendingStateSaves[sequenceNumber];
+    } catch (error) {
+        console.error(`[DOM Tracker] Error in captureAndSendState #${sequenceNumber}:`, error);
+        return null;
+    }
+} 

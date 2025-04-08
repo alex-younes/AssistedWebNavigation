@@ -440,6 +440,8 @@ router.post('/states', async (req, res) => {
       isNewState: isDuplicate ? false : (isNewState !== undefined ? isNewState : true), // Set to false for duplicates
       stateNumber: stateNumber !== undefined ? stateNumber : nextStateNumber,
       hash,
+      previousStateId: req.body.previousStateId,
+      previousHash: req.body.previousHash,
       dom,
       metrics: metrics || {
         domSize: 0,

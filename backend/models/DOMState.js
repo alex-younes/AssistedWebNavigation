@@ -11,6 +11,8 @@ const domStateSchema = new mongoose.Schema({
   isNewState: { type: Boolean, default: true },
   stateNumber: { type: Number, default: 0 }, // Track sequential state number, can be decimal for loading states (1.1, 1.2)
   hash: { type: String, required: true }, // Using hash for more consistency with standard terms
+  previousStateId: { type: String }, // ID of the previous state
+  previousHash: { type: String }, // Hash of the previous state
   dom: { type: String }, // Add the DOM field
   metrics: {
     domSize: { type: Number },

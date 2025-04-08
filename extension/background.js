@@ -11,6 +11,8 @@ let finalStateCounter = 0;  // NEW: Track final states separately
 let sessionStateHashes = {}; // Track hashes we've already seen
 let stateProcessingLock = {}; // Lock to prevent duplicate processing of same hash
 let saveLoadingStates = true; // New setting to control whether loading states are saved
+let lastStateId = null; // Track the last state ID
+let lastStateHash = null; // Track the last state hash
 
 // Initialize state from storage on startup
 const initializeState = async () => {
@@ -20,7 +22,9 @@ const initializeState = async () => {
       'userId', 
       'currentSessionId', 
       'apiBaseUrl',
-      'saveLoadingStates' // Add new setting
+      'saveLoadingStates',
+      'lastStateId', 
+      'lastStateHash' 
     ]);
     
     if (result.recordingStatus) recordingStatus = result.recordingStatus;
@@ -29,8 +33,29 @@ const initializeState = async () => {
     if (result.apiBaseUrl) API_BASE_URL = result.apiBaseUrl;
     if (result.saveLoadingStates !== undefined) saveLoadingStates = result.saveLoadingStates;
     
+    // For better logging of what's happening with state persistence
+    console.log('[Extension] Retrieved from storage:', { 
+      lastStateId: result.lastStateId, 
+      lastStateHash: result.lastStateHash,
+      currentSessionId: result.currentSessionId
+    });
+    
+    // Only set last state variables if they belong to the current session
+    // This prevents cross-session state references
+    if (result.lastStateId && result.currentSessionId === currentSessionId) {
+      lastStateId = result.lastStateId;
+      lastStateHash = result.lastStateHash;
+      console.log('[Extension] Restored previous state tracking for session:', currentSessionId);
+    } else {
+      // Reset state tracking for new session
+      lastStateId = null;
+      lastStateHash = null;
+      console.log('[Extension] Reset state tracking for new session');
+    }
+    
     console.log('[Extension] Initialized state from storage');
     console.log('[Extension] Save loading states setting:', saveLoadingStates);
+    console.log('[Extension] Last state tracking:', { lastStateId, lastStateHash });
     updateBadge();
   } catch (error) {
     console.error('[Extension] Error initializing state:', error);
@@ -40,16 +65,27 @@ const initializeState = async () => {
 // Call initialize on startup
 initializeState();
 
-// Save state to persistent storage
+// Save state to persistent storage with better error handling
 const saveState = async () => {
   try {
-    await chrome.storage.local.set({
+    const dataToSave = {
       recordingStatus,
       userId,
       currentSessionId,
       apiBaseUrl: API_BASE_URL,
-      saveLoadingStates // Save the new setting
+      saveLoadingStates,
+      lastStateId,
+      lastStateHash
+    };
+    
+    console.log('[Extension] Saving state to storage:', { 
+      lastStateId, 
+      lastStateHash,
+      currentSessionId 
     });
+    
+    await chrome.storage.local.set(dataToSave);
+    console.log('[Extension] State saved successfully');
   } catch (error) {
     console.error('[Extension] Error saving state:', error);
   }
@@ -220,6 +256,12 @@ const saveDOMState = async (state) => {
     // Ensure the state has required fields
     if (!state.sessionId) state.sessionId = currentSessionId;
     if (!state.userId) state.userId = userId;
+    
+    // Set previous state information based on the last saved state
+    state.previousStateId = lastStateId;
+    state.previousHash = lastStateHash;
+    
+    console.log(`[Extension] Saving state with previous info - previousStateId: ${lastStateId}, previousHash: ${lastStateHash}`);
     
     // Generate a unique processing key for this state
     const lockKey = getStateLockKey(state);
@@ -457,6 +499,8 @@ const saveDOMState = async (state) => {
           isNewState: state.isNewState,
           stateNumber: state.stateNumber,
           hash: state.hash,
+          previousStateId: state.previousStateId,
+          previousHash: state.previousHash,
           dom: state.dom,
           metrics: state.metrics || {
             domSize: 0,
@@ -504,6 +548,29 @@ const saveDOMState = async (state) => {
         console.log(`[Extension][DUPLICATION DEBUG] Backend response: ${JSON.stringify(result)}`);
         console.log(`[Extension][DUPLICATION DEBUG] Saved DOM state: ${state.stateId} (isNewState: ${state.isNewState}, stateNumber: ${state.stateNumber})`);
         
+        // Only update the lastStateId and lastStateHash AFTER successful save
+        // This ensures we don't reference states that haven't been saved yet
+        const currentStateId = state.stateId;
+        const currentStateHash = state.hash;
+        
+        // After successfully saving the state, update last state tracking
+        lastStateId = currentStateId;
+        lastStateHash = currentStateHash;
+        console.log(`[Extension] Updated last state tracking - lastStateId: ${lastStateId}, lastStateHash: ${lastStateHash}`);
+        await saveState(); // Save to persistent storage
+        
+        // Notify content script that state was saved
+        if (recordingTabId) {
+          try {
+            chrome.tabs.sendMessage(recordingTabId, {
+              action: 'stateSaved',
+              state: state
+            });
+          } catch (error) {
+            console.error('[Extension] Error notifying content script:', error);
+          }
+        }
+        
         return { 
           success: true, 
           stateId: result.stateId || state.stateId,
@@ -520,7 +587,7 @@ const saveDOMState = async (state) => {
     
     return await stateProcessingLock[lockKey];
   } catch (error) {
-    console.error('[Extension][DUPLICATION DEBUG] Error saving DOM state:', error);
+    console.error('[Extension] Error saving DOM state:', error);
     throw error;
   }
 };
@@ -530,6 +597,18 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   if (tabId === recordingTabId && recordingStatus === 'recording') {
     console.log('[Extension] Recording tab closed, stopping recording');
     stopRecordingSession();
+  }
+});
+
+// Listen for tab navigation events to preserve state tracking across page loads
+chrome.webNavigation.onCommitted.addListener(async (details) => {
+  // Only handle navigation in the recording tab
+  if (recordingStatus === 'recording' && details.tabId === recordingTabId) {
+    console.log('[Extension] Navigation detected in recording tab:', details.url);
+    console.log('[Extension] Preserving state tracking:', { lastStateId, lastStateHash });
+    
+    // Immediately save state to ensure persistence through navigation
+    await saveState();
   }
 });
 

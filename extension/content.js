@@ -888,11 +888,57 @@ function startRecording(newSessionId, newUserId) {
     // Start loading detection
     startLoadingDetection();
     
-    // No longer creating initial state here - it will be handled by the window load event
     console.log(`[DOM Tracker] Started recording with session ${sessionId}`);
-    console.log(`[DOM Tracker] Initial state will be created by window load event handler`);
     
+    // Set recording flag before capturing initial state
     isRecording = true;
+    
+    // Immediately capture the current page state when recording starts
+    // This ensures we capture already-loaded pages without waiting for an interaction
+    setTimeout(() => {
+        try {
+            console.log('[DOM Tracker][DUPLICATION DEBUG] Capturing initial state for already loaded page');
+            
+            // Calculate current hash
+            const currentHash = calculateDomHash();
+            console.log(`[DOM Tracker][DUPLICATION DEBUG] Initial page state hash: ${currentHash}`);
+            
+            // Create state for the already-loaded page
+            const { state, isNewState } = createDomState();
+            state.hash = currentHash;
+            
+            // Mark this as an initial state
+            state.isInitial = true;
+            if (state.loadingInfo) {
+                state.loadingInfo.isInitial = true;
+                state.loadingInfo.isPartOfLoading = false; // Page is already loaded
+            }
+            
+            console.log(`[DOM Tracker][DUPLICATION DEBUG] Created initial state for already loaded page with hash=${currentHash}`);
+            
+            // Send to background with initial flag
+            sendToBackground('recordState', {
+                state: state,
+                isInitial: true
+            })
+            .then(response => {
+                console.log(`[DOM Tracker][DUPLICATION DEBUG] Background response for initial state:`, response);
+                
+                if (response && response.stateId) {
+                    // Update tracking
+                    previousStates[currentHash] = response.stateId;
+                    currentStateId = response.stateId;
+                    lastDomHash = currentHash;
+                    console.log(`[DOM Tracker][DUPLICATION DEBUG] Set initial state: ${response.stateId}`);
+                }
+            })
+            .catch(error => {
+                console.error('[DOM Tracker][DUPLICATION DEBUG] Error capturing initial state:', error);
+            });
+        } catch (error) {
+            console.error('[DOM Tracker][DUPLICATION DEBUG] Error capturing initial state:', error);
+        }
+    }, 100); // Short delay to ensure everything is initialized
 }
 
 // Stop recording

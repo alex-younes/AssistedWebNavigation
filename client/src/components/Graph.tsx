@@ -424,7 +424,7 @@ const Graph = () => {
       const response = await axios.get(`${baseUrl}/extension/recorder/session/${sessionId}/states`);
       
       if (response.data.success) {
-        processStatesData(response.data.states);
+        processStatesData(response.data.states); 
       } else {
         setError('Failed to load session states');
         setLoading(false);

@@ -97,7 +97,7 @@ function generateEnhancedDOMFingerprint() {
     const mainElements = document.querySelectorAll('main, section, article, form, div[role="main"], .main-content, div.container');
     Array.from(mainElements).forEach(element => {
         const elementInfo = getElementInfo(element);
-        fingerprint.push(elementInfo);
+        fingerprint.push(elementInfo.signature); // Use signature property
     });
     
     // Get ALL images with their attributes for more sensitivity to image changes
@@ -212,7 +212,7 @@ function generateEnhancedDOMFingerprint() {
 
 // Get detailed info about a specific element
 function getElementInfo(element) {
-    if (!element) return '';
+    if (!element) return { signature: '', selector: '' };
     
     const tagName = element.tagName.toLowerCase();
     const id = element.id || '';
@@ -225,7 +225,82 @@ function getElementInfo(element) {
     }).join(',');
     
     // Create a signature that represents this element and its structure
-    return `${tagName}#${id}.${classes}[${childrenCount}]{${childrenInfo}}`;
+    const signature = `${tagName}#${id}.${classes}[${childrenCount}]{${childrenInfo}}`;
+    
+    // Generate a CSS selector for this element
+    const selector = generateCssSelector(element);
+    
+    return { signature, selector };
+}
+
+// Generate a CSS selector for an element
+function generateCssSelector(element) {
+    if (!element || element === document || element === document.documentElement) {
+        return '';
+    }
+    
+    // If the element has an ID, use that (it's the most specific selector)
+    if (element.id && element.id.length > 0) {
+        return `#${element.id}`;
+    }
+    
+    // Start with the element's tag name
+    let selector = element.tagName.toLowerCase();
+    
+    // Add classes if available
+    if (element.className && typeof element.className === 'string') {
+        const classes = element.className.trim().split(/\s+/);
+        if (classes.length > 0 && classes[0] !== '') {
+            selector += '.' + classes.join('.');
+        }
+    }
+    
+    // Check if we need to add a nth-child selector for more specificity
+    if (!element.id) {
+        // Find the element's position among its siblings
+        const parent = element.parentNode;
+        if (parent && parent.children.length > 1) {
+            const siblings = Array.from(parent.children);
+            const index = siblings.indexOf(element) + 1;
+            if (index > 0) {
+                selector += `:nth-child(${index})`;
+            }
+        }
+    }
+    
+    // Recursively add parent selectors for more specificity,
+    // but limit depth to avoid extremely long selectors
+    const maxDepth = 3;
+    let currentElement = element;
+    let depth = 0;
+    
+    while (currentElement.parentNode && 
+           currentElement.parentNode.nodeType === Node.ELEMENT_NODE && 
+           currentElement.parentNode !== document && 
+           depth < maxDepth) {
+        
+        currentElement = currentElement.parentNode;
+        depth++;
+        
+        // For parent, use simpler selector
+        let parentSelector = currentElement.tagName.toLowerCase();
+        
+        if (currentElement.id) {
+            parentSelector = `#${currentElement.id}`;
+            // If parent has ID, we can stop here as it's unique
+            selector = `${parentSelector} > ${selector}`;
+            break;
+        } else if (currentElement.className && typeof currentElement.className === 'string') {
+            const classes = currentElement.className.trim().split(/\s+/);
+            if (classes.length > 0 && classes[0] !== '') {
+                parentSelector += '.' + classes.join('.');
+            }
+        }
+        
+        selector = `${parentSelector} > ${selector}`;
+    }
+    
+    return selector;
 }
 
 // Check if an element is visible in the viewport
@@ -811,7 +886,7 @@ function captureInteractionDetails(element, type = 'click', additionalDetails = 
         const interactionInfo = {
             type: type, // click, change, input, etc.
             element: elementType, // button, checkbox, etc.
-            selector: elementInfo.selector || '',
+            selector: elementInfo.selector || '', // Use the new selector property
             text: text,
             value: value,
             previousValue: previousValue,
@@ -825,6 +900,7 @@ function captureInteractionDetails(element, type = 'click', additionalDetails = 
         };
         
         console.log(`[Content] Captured interaction: ${type} on ${elementType} - ${text || value} (previous: ${previousValue})`);
+        console.log(`[Content] Generated selector: ${elementInfo.selector}`);
         return interactionInfo;
     } catch (error) {
         console.error('[Content] Error capturing interaction details:', error);

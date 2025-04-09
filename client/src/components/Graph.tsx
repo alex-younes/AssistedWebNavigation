@@ -90,6 +90,7 @@ interface StateNodeData {
   history: StateData[];
   // Count of instances
   instanceCount: number;
+  isLatest?: boolean;
 }
 
 // State history panel component
@@ -200,10 +201,23 @@ const StateNode = ({ data }: NodeProps<StateNodeData>) => {
       />
       
       <div 
-        className="px-4 py-2 shadow-md rounded-md bg-white border-2 border-gray-300 min-w-[180px] hover:shadow-lg transition-shadow cursor-pointer"
+        className={`px-4 py-2 shadow-md rounded-md bg-white border-2 ${
+          data.isLatest 
+            ? 'border-green-500 shadow-green-200' 
+            : 'border-gray-300'
+        } min-w-[180px] hover:shadow-lg transition-shadow cursor-pointer ${
+          data.isLatest ? 'ring-4 ring-green-100' : ''
+        }`}
         onClick={() => setShowDetails(true)}
       >
-        <div className="font-bold text-sm">{data.title || 'Untitled State'}</div>
+        <div className="font-bold text-sm flex items-center justify-between">
+          <span>{data.title || 'Untitled State'}</span>
+          {data.isLatest && (
+            <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded-full">
+              Current
+            </span>
+          )}
+        </div>
         <div className="text-xs mt-1">State: {data.stateNumber}</div>
         <div className="text-xs text-gray-500">{formattedTime}</div>
         
@@ -305,7 +319,8 @@ const Graph = () => {
         isNavigation: state.loadingInfo?.isNavigation,
         isReload: state.loadingInfo?.isReload,
         history: stateInstances,
-        instanceCount: stateInstances.length
+        instanceCount: stateInstances.length,
+        isLatest: false // Default value, will be updated in processStatesData
       },
       type: 'stateNode',
     };
@@ -340,6 +355,37 @@ const Graph = () => {
       new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
     );
 
+    // Find the latest activity timestamp across all states
+    let latestActivityTime = 0;
+    let latestActivityStateId = '';
+
+    states.forEach(state => {
+      let activityTime = new Date(state.timestamp).getTime();
+      
+      // Check for interaction timestamp
+      if (state.interactionInfo?.timestamp) {
+        const interactionTime = new Date(state.interactionInfo.timestamp).getTime();
+        if (interactionTime > activityTime) {
+          activityTime = interactionTime;
+        }
+      }
+
+      // Check for navigation or reload events
+      if (state.loadingInfo?.isNavigation || state.loadingInfo?.isReload) {
+        // Use the state's timestamp for navigation/reload events
+        if (activityTime > latestActivityTime) {
+          latestActivityTime = activityTime;
+          latestActivityStateId = state.stateId;
+        }
+      }
+      
+      // Update if this is the latest activity
+      if (activityTime > latestActivityTime) {
+        latestActivityTime = activityTime;
+        latestActivityStateId = state.stateId;
+      }
+    });
+
     // Create a Map to track unique states and their order of appearance
     const uniqueStates = new Map<string, { state: StateData; index: number }>();
     
@@ -352,7 +398,10 @@ const Graph = () => {
     
     // Create nodes for unique states in order of appearance
     Array.from(uniqueStates.values()).forEach(({ state, index }) => {
-      newNodes.push(createNode(state, index, states));
+      const nodeData = createNode(state, index, states);
+      // Set isLatest based on latest activity
+      nodeData.data.isLatest = state.stateId === latestActivityStateId;
+      newNodes.push(nodeData);
     });
 
     // Create edges between consecutive unique states

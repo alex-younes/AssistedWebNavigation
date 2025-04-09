@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useLocation } from 'react-router-dom';
-import axios from 'axios';
+import axios, { AxiosError } from 'axios';
 import ReactFlow, { 
   Background, 
   Controls, 
@@ -10,12 +10,33 @@ import ReactFlow, {
   EdgeChange, 
   applyNodeChanges, 
   applyEdgeChanges,
-  MarkerType,
   NodeProps,
-  ReactFlowProvider
+  ReactFlowProvider,
+  BaseEdge,
+  BackgroundVariant,
+  Handle,
+  Position,
+  ConnectionMode
 } from 'reactflow';
 import 'reactflow/dist/style.css';
-import React from 'react';
+import styled from 'styled-components';
+
+// Define a styled component for the edges with more prominent styling
+const StyledEdge = styled(BaseEdge)`
+  stroke: #333;
+  stroke-width: 3;
+  pointer-events: all;
+
+  path.react-flow__edge-path {
+    stroke: #333;
+    stroke-width: 3;
+  }
+
+  &.selected {
+    stroke: #1a192b;
+    stroke-width: 4;
+  }
+`;
 
 // Define types for state data
 interface StateData {
@@ -44,9 +65,8 @@ interface StateData {
 }
 
 interface LocationState {
-  serverIp: string;
-  serverPort: string;
-  sessionId: string;
+  serverIp?: string;
+  serverPort?: string;
 }
 
 // Define state node data type with history
@@ -152,17 +172,13 @@ const StateHistoryPanel = ({
 // Custom node component for state nodes
 const StateNode = ({ data }: NodeProps<StateNodeData>) => {
   const [showDetails, setShowDetails] = useState(false);
-  // Format the timestamp for display
   const formattedTime = new Date(data.latestTimestamp).toLocaleTimeString();
   
-  // Find the latest interaction or event
   const getLatestEvent = () => {
-    // Sort history by timestamp (newest first)
     const sortedHistory = [...data.history].sort((a, b) => 
       new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
     );
     
-    // Return the first item with an interaction or special loading info
     for (const item of sortedHistory) {
       if (item.interactionInfo) return { type: 'interaction', data: item.interactionInfo };
       if (item.loadingInfo?.isNavigation) return { type: 'navigation' };
@@ -175,42 +191,58 @@ const StateNode = ({ data }: NodeProps<StateNodeData>) => {
   const latestEvent = getLatestEvent();
   
   return (
-    <div 
-      className="px-4 py-2 shadow-md rounded-md bg-white border-2 border-gray-300 min-w-[180px] hover:shadow-lg transition-shadow cursor-pointer"
-      onClick={() => setShowDetails(true)}
-    >
-      <div className="font-bold text-sm">{data.title || 'Untitled State'}</div>
-      <div className="text-xs mt-1">State: {data.stateNumber}</div>
-      <div className="text-xs text-gray-500">{formattedTime}</div>
+    <>
+      <Handle
+        type="target"
+        position={Position.Left}
+        style={{ background: '#333', width: '10px', height: '10px' }}
+        id={`target-${data.stateId}`}
+      />
       
-      {data.instanceCount > 1 && (
-        <div className="text-xs mt-1 bg-purple-100 text-purple-800 px-2 py-1 rounded">
-          {data.instanceCount} instances
+      <div 
+        className="px-4 py-2 shadow-md rounded-md bg-white border-2 border-gray-300 min-w-[180px] hover:shadow-lg transition-shadow cursor-pointer"
+        onClick={() => setShowDetails(true)}
+      >
+        <div className="font-bold text-sm">{data.title || 'Untitled State'}</div>
+        <div className="text-xs mt-1">State: {data.stateNumber}</div>
+        <div className="text-xs text-gray-500">{formattedTime}</div>
+        
+        {data.instanceCount > 1 && (
+          <div className="text-xs mt-1 bg-purple-100 text-purple-800 px-2 py-1 rounded">
+            {data.instanceCount} instances
+          </div>
+        )}
+        
+        {latestEvent?.type === 'interaction' && latestEvent.data && (
+          <div className="mt-2 text-xs p-1 bg-blue-50 rounded border border-blue-100">
+            <div className="font-semibold text-blue-700">{latestEvent.data.type}</div>
+            <div>{latestEvent.data.text || latestEvent.data.element}</div>
+          </div>
+        )}
+        
+        {latestEvent?.type === 'navigation' && (
+          <div className="mt-1 text-xs bg-green-50 p-1 rounded border border-green-100 text-green-700">
+            Navigation
+          </div>
+        )}
+        
+        {latestEvent?.type === 'reload' && (
+          <div className="mt-1 text-xs bg-yellow-50 p-1 rounded border border-yellow-100 text-yellow-700">
+            Page Reload
+          </div>
+        )}
+        
+        <div className="mt-2 text-xs text-center text-blue-600">
+          Click to view history
         </div>
-      )}
-      
-      {latestEvent?.type === 'interaction' && latestEvent.data && (
-        <div className="mt-2 text-xs p-1 bg-blue-50 rounded border border-blue-100">
-          <div className="font-semibold text-blue-700">{latestEvent.data.type}</div>
-          <div>{latestEvent.data.text || latestEvent.data.element}</div>
-        </div>
-      )}
-      
-      {latestEvent?.type === 'navigation' && (
-        <div className="mt-1 text-xs bg-green-50 p-1 rounded border border-green-100 text-green-700">
-          Navigation
-        </div>
-      )}
-      
-      {latestEvent?.type === 'reload' && (
-        <div className="mt-1 text-xs bg-yellow-50 p-1 rounded border border-yellow-100 text-yellow-700">
-          Page Reload
-        </div>
-      )}
-      
-      <div className="mt-2 text-xs text-center text-blue-600">
-        Click to view history
       </div>
+
+      <Handle
+        type="source"
+        position={Position.Right}
+        style={{ background: '#333', width: '10px', height: '10px' }}
+        id={`source-${data.stateId}`}
+      />
 
       {showDetails && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" onClick={(e) => {
@@ -222,13 +254,17 @@ const StateNode = ({ data }: NodeProps<StateNodeData>) => {
           </div>
         </div>
       )}
-    </div>
+    </>
   );
 };
 
-// Node types registration
+// Define node and edge types outside the component and memoize them
 const nodeTypes = {
   stateNode: StateNode,
+};
+
+const edgeTypes = {
+  default: StyledEdge,
 };
 
 const Graph = () => {
@@ -246,121 +282,91 @@ const Graph = () => {
   const serverPort = locationState?.serverPort || '3001';
   const baseUrl = `http://${serverIp}:${serverPort}/api`;
 
-  // Process the states data into consolidated nodes and edges
-  const processStatesData = (states: StateData[]) => {
+  const createNode = useCallback((state: StateData, index: number, allStates: StateData[]) => {
+    // Find all instances of this state by stateId
+    const stateInstances = allStates.filter(s => s.stateId === state.stateId);
+    
+    return {
+      id: state.stateId,
+      // Position nodes in a stair pattern - each node is offset both horizontally and vertically
+      position: { 
+        x: index * 300, 
+        y: index * 100 
+      },
+      data: { 
+        stateId: state.stateId,
+        stateNumber: state.stateNumber,
+        title: state.title,
+        url: state.url,
+        latestTimestamp: state.timestamp,
+        isNewState: state.isNewState,
+        hash: state.hash,
+        interaction: state.interactionInfo,
+        isNavigation: state.loadingInfo?.isNavigation,
+        isReload: state.loadingInfo?.isReload,
+        history: stateInstances,
+        instanceCount: stateInstances.length
+      },
+      type: 'stateNode',
+    };
+  }, []);
+
+  const createEdge = useCallback((sourceId: string, targetId: string) => {
+    return {
+      id: `e${sourceId}-${targetId}`,
+      source: sourceId,
+      target: targetId,
+      type: 'smoothstep',
+      animated: true,
+      style: { 
+        strokeWidth: 3,
+        stroke: '#333'
+      }
+    };
+  }, []);
+
+  const processStatesData = useCallback((states: StateData[]) => {
     if (!states || states.length === 0) {
       setError('No states found for this session');
       setLoading(false);
       return;
     }
 
-    // Sort states by timestamp
+    const newNodes: Node[] = [];
+    const newEdges: Edge[] = [];
+    
+    // Sort states by timestamp to ensure correct order
     const sortedStates = [...states].sort((a, b) => 
       new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
     );
 
-    // Group states by stateId to consolidate duplicates
-    const stateGroups: { [stateId: string]: StateData[] } = {};
-    sortedStates.forEach(state => {
-      if (!stateGroups[state.stateId]) {
-        stateGroups[state.stateId] = [];
-      }
-      stateGroups[state.stateId].push(state);
-    });
-
-    const newNodes: Node<StateNodeData>[] = [];
-    const newEdges: Edge[] = [];
-    const nodePositions: { [key: string]: { x: number, y: number } } = {};
+    // Create a Map to track unique states and their order of appearance
+    const uniqueStates = new Map<string, { state: StateData; index: number }>();
     
-    // Create nodes - one per logical state (stateId)
-    Object.entries(stateGroups).forEach(([stateId, stateInstances]) => {
-      // Sort instances by timestamp (newest first for getting latest data)
-      const sortedInstances = [...stateInstances].sort((a, b) => 
-        new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-      );
-      
-      const latestInstance = sortedInstances[0];
-      
-      // Calculate position - use stateNumber for vertical positioning
-      const urlKey = latestInstance.pathname || latestInstance.url;
-      
-      // Group states by URL horizontally
-      let xPos = 0;
-      const existingUrl = Object.keys(nodePositions).find(key => key.includes(urlKey));
-      
-      if (existingUrl) {
-        xPos = nodePositions[existingUrl].x;
-      } else {
-        // Find unique URLs to space them horizontally
-        const uniqueUrls = new Set();
-        for (const pos in nodePositions) {
-          uniqueUrls.add(pos.split('_')[0]);
-        }
-        xPos = uniqueUrls.size * 350;
+    // Keep track of state order while maintaining uniqueness
+    sortedStates.forEach((state) => {
+      if (!uniqueStates.has(state.stateId)) {
+        uniqueStates.set(state.stateId, { state, index: uniqueStates.size });
       }
-      
-      // Sort instances chronologically for history display
-      const historyInstances = [...stateInstances].sort((a, b) => 
-        new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-      );
-      
-      // Position vertically by stateNumber
-      const yPos = latestInstance.stateNumber * 150;
-      
-      // Store the position
-      nodePositions[`${urlKey}_${latestInstance.stateNumber}`] = { x: xPos, y: yPos };
-      
-      // Create the consolidated node
-      newNodes.push({
-        id: stateId,
-        type: 'stateNode',
-        position: { x: xPos, y: yPos },
-        data: {
-          stateId: latestInstance.stateId,
-          stateNumber: latestInstance.stateNumber,
-          title: latestInstance.title,
-          url: latestInstance.url,
-          latestTimestamp: latestInstance.timestamp,
-          isNewState: latestInstance.isNewState,
-          hash: latestInstance.hash,
-          interaction: latestInstance.interactionInfo,
-          isNavigation: latestInstance.loadingInfo?.isNavigation,
-          isReload: latestInstance.loadingInfo?.isReload,
-          history: historyInstances,
-          instanceCount: stateInstances.length
-        }
-      });
+    });
+    
+    // Create nodes for unique states in order of appearance
+    Array.from(uniqueStates.values()).forEach(({ state, index }) => {
+      newNodes.push(createNode(state, index, states));
     });
 
-    // Create edges between states
-    for (const state of sortedStates) {
-      if (state.previousStateId) {
-        // Only create one edge between each logical state pair
-        const edgeId = `e-${state.previousStateId}-${state.stateId}`;
-        const existingEdge = newEdges.find(e => e.id === edgeId);
-        
-        if (!existingEdge) {
-          newEdges.push({
-            id: edgeId,
-            source: state.previousStateId,
-            target: state.stateId,
-            markerEnd: {
-              type: MarkerType.ArrowClosed,
-              width: 20,
-              height: 20
-            },
-            style: {
-              strokeWidth: 2
-            }
-          });
-        }
-      }
+    // Create edges between consecutive unique states
+    const uniqueStateArray = Array.from(uniqueStates.values());
+    for (let i = 1; i < uniqueStateArray.length; i++) {
+      const currentState = uniqueStateArray[i].state;
+      const previousState = uniqueStateArray[i - 1].state;
+      newEdges.push(createEdge(previousState.stateId, currentState.stateId));
     }
 
     setNodes(newNodes);
     setEdges(newEdges);
     setLoading(false);
-  };
+  }, [createNode, createEdge]);
 
   // Fetch states for the session
   const fetchSessionStates = useCallback(async () => {
@@ -375,17 +381,25 @@ const Graph = () => {
         setLoading(false);
       }
     } catch (err) {
-      console.error('Error fetching session states:', err);
-      setError('Error connecting to server');
+      const error = err as AxiosError;
+      console.error('Error fetching session states:', error.message);
+      setError(`Error connecting to server: ${error.message}`);
       setLoading(false);
     }
-  }, [baseUrl, sessionId]);
+  }, [baseUrl, sessionId, processStatesData]);
 
   useEffect(() => {
     if (sessionId) {
       fetchSessionStates();
     }
   }, [sessionId, fetchSessionStates]);
+
+  useEffect(() => {
+    if (nodes.length > 0) {
+      console.log('Current nodes:', nodes);
+      console.log('Current edges:', edges);
+    }
+  }, [nodes, edges]);
 
   // Handle node changes (for dragging)
   const onNodesChange = useCallback(
@@ -430,9 +444,13 @@ const Graph = () => {
 
   return (
     <div className="w-full h-screen bg-gray-50 relative">
-      <div className="absolute top-4 left-4 z-10 bg-white p-3 rounded-md shadow-md">
-        <h2 className="font-bold text-gray-800">Session: {sessionId?.substring(0, 8)}...</h2>
-        <p className="text-sm text-gray-600">{nodes.length} states • {edges.length} transitions</p>
+      <div className="absolute top-4 left-4 z-10 bg-white p-4 rounded-md shadow-md max-w-md">
+        <h2 className="font-bold text-gray-800 break-all">
+          Session: {sessionId}
+        </h2>
+        <p className="text-sm text-gray-600 mt-1">
+          {nodes.length} states • {edges.length} transitions
+        </p>
       </div>
       
       <ReactFlowProvider>
@@ -442,9 +460,29 @@ const Graph = () => {
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           nodeTypes={nodeTypes}
+          edgeTypes={edgeTypes}
+          defaultEdgeOptions={{
+            type: 'default',
+            animated: true,
+            style: { 
+              stroke: '#333',
+              strokeWidth: 3,
+            }
+          }}
           fitView
+          fitViewOptions={{ padding: 0.8 }}
+          minZoom={0.3}
+          maxZoom={1.5}
+          attributionPosition="bottom-right"
+          connectionMode={ConnectionMode.Loose}
+          snapToGrid={true}
+          snapGrid={[20, 20]}
+          defaultViewport={{ x: 0, y: 0, zoom: 0.8 }}
+          nodesDraggable={false}
+          nodesConnectable={false}
+          elementsSelectable={true}
         >
-          <Background />
+          <Background variant={BackgroundVariant.Dots} gap={12} size={1} />
           <Controls />
         </ReactFlow>
       </ReactFlowProvider>

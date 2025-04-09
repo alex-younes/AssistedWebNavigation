@@ -131,7 +131,12 @@ const startRecordingSession = async (sessionId, tabInfo = null) => {
     finalStateCounter = 0; // Reset final state counter too
     sessionStateHashes = {}; // Clear hash tracking
     stateProcessingLock = {}; // Reset processing locks
-    console.log('[Extension] Reset state counter and hash tracking for new session');
+    // Reset last state tracking to prevent references to previous session states
+    lastStateId = null;
+    lastStateHash = null;
+    interactionQueue = []; // Clear any pending interactions
+    lastInteractionInfo = null; // Clear last interaction info
+    console.log('[Extension] Reset state counter, hash tracking, and last state references for new session');
     
     // Update recording tab and status
     recordingTabId = tabInfo.id;

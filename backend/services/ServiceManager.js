@@ -6,6 +6,9 @@
 
 const db = require('../database');
 const debug = require('../utils/debug');
+const User = require('../models/User');
+const bcrypt = require('bcryptjs');
+const { v4: uuidv4 } = require('uuid');
 
 // In-memory recording status tracking
 const activeRecordings = new Map();
@@ -247,11 +250,86 @@ class ServiceManager {
       // Save to database
       await db.saveDOMState(processedState);
       
-      console.log(`[ServiceManager] Saved DOM state ${processedState.stateId} for session ${sessionId}`);
+      debug(`[ServiceManager] Saved DOM state ${processedState.stateId} for session ${sessionId}`);
       return { success: true, stateId: processedState.stateId };
     } catch (error) {
       console.error(`[ServiceManager] Error saving DOM state for ${sessionId}:`, error);
       throw error;
+    }
+  }
+
+  // NEW: User Registration
+  async registerUser(username, password) {
+    debug('[ServiceManager] Attempting to register user:', username);
+    try {
+      // Check if user already exists
+      const existingUser = await User.findOne({ username });
+      if (existingUser) {
+        debug('[ServiceManager] Registration failed: Username already exists -', username);
+        return { success: false, message: 'Username already exists.' };
+      }
+
+      // Hash password
+      const salt = await bcrypt.genSalt(10);
+      const hashedPassword = await bcrypt.hash(password, salt);
+
+      // Generate a unique userId
+      const newUserId = `user_${uuidv4()}`;
+
+      // Create new user
+      const newUser = new User({
+        username,
+        password: hashedPassword,
+        userId: newUserId
+      });
+
+      await newUser.save();
+      debug('[ServiceManager] User registered successfully:', username, 'userId:', newUserId);
+      return { 
+        success: true, 
+        userId: newUserId, 
+        username: newUser.username // Return the stored username (might have been trimmed etc.)
+      };
+
+    } catch (error) {
+      console.error('[ServiceManager] Error during user registration for:', username, error);
+      // Log the specific error message if available
+      const errorMessage = error.message || 'Internal server error during registration.';
+      debug('[ServiceManager] Registration error details:', errorMessage);
+      return { success: false, message: errorMessage };
+    }
+  }
+
+  // NEW: User Login
+  async loginUser(username, password) {
+    debug('[ServiceManager] Attempting to login user:', username);
+    try {
+      // Find user by username
+      const user = await User.findOne({ username });
+      if (!user) {
+        debug('[ServiceManager] Login failed: User not found -', username);
+        return { success: false, message: 'Invalid credentials.' }; // Generic message for security
+      }
+
+      // Compare password
+      const isMatch = await bcrypt.compare(password, user.password);
+      if (!isMatch) {
+        debug('[ServiceManager] Login failed: Password mismatch for user -', username);
+        return { success: false, message: 'Invalid credentials.' }; // Generic message
+      }
+
+      debug('[ServiceManager] User logged in successfully:', username, 'userId:', user.userId);
+      return { 
+        success: true, 
+        userId: user.userId, 
+        username: user.username 
+      };
+
+    } catch (error) {
+      console.error('[ServiceManager] Error during user login for:', username, error);
+      const errorMessage = error.message || 'Internal server error during login.';
+      debug('[ServiceManager] Login error details:', errorMessage);
+      return { success: false, message: errorMessage };
     }
   }
 }

@@ -6,6 +6,7 @@ let currentSessionId = null;
 let recordingTabId = null;
 let recordingStatus = 'idle'; // 'idle', 'recording', 'paused'
 let userId = null;
+let username = null; // NEW: For authenticated user's name
 let sessionStateCounter = 0; // Track state numbers across navigation
 let finalStateCounter = 0;  // NEW: Track final states separately
 let sessionStateHashes = {}; // Track hashes we've already seen
@@ -26,13 +27,34 @@ const initializeState = async () => {
       'apiBaseUrl',
       'saveLoadingStates',
       'lastStateId', 
-      'lastStateHash' 
+      'lastStateHash',
+      'username' // NEW: Load username
     ]);
     
     if (result.recordingStatus) recordingStatus = result.recordingStatus;
     if (result.userId) userId = result.userId;
+    if (result.username) username = result.username; // NEW: Set username
     if (result.currentSessionId) currentSessionId = result.currentSessionId;
-    if (result.apiBaseUrl) API_BASE_URL = result.apiBaseUrl;
+    
+    // Handle API base URL with proper format checking
+    if (result.apiBaseUrl) {
+      // Normalize the API base URL
+      let baseUrl = result.apiBaseUrl;
+      
+      // Make sure it starts with http:// or https://
+      if (!baseUrl.startsWith('http://') && !baseUrl.startsWith('https://')) {
+        baseUrl = 'http://' + baseUrl;
+      }
+      
+      // Make sure it includes /api
+      if (!baseUrl.includes('/api')) {
+        baseUrl = baseUrl.endsWith('/') ? baseUrl + 'api' : baseUrl + '/api';
+      }
+      
+      API_BASE_URL = baseUrl;
+      console.log('[Extension] Normalized API_BASE_URL:', API_BASE_URL);
+    }
+    
     if (result.saveLoadingStates !== undefined) saveLoadingStates = result.saveLoadingStates;
     
     // For better logging of what's happening with state persistence
@@ -59,6 +81,9 @@ const initializeState = async () => {
     console.log('[Extension] Save loading states setting:', saveLoadingStates);
     console.log('[Extension] Last state tracking:', { lastStateId, lastStateHash });
     updateBadge();
+    
+    // Test the API connection after initialization
+    await refreshApiBaseUrl();
   } catch (error) {
     console.error('[Extension] Error initializing state:', error);
   }
@@ -73,6 +98,7 @@ const saveState = async () => {
     const dataToSave = {
       recordingStatus,
       userId,
+      username, // NEW: Save username
       currentSessionId,
       apiBaseUrl: API_BASE_URL,
       saveLoadingStates,
@@ -103,19 +129,53 @@ const updateBadge = () => {
   }
 };
 
-// Generate a user ID if none exists
+// Generate a user ID if none exists (or use authenticated one)
 const initializeUserId = async () => {
-  if (userId) return userId;
-  
-  userId = 'user_' + Date.now() + '_' + Math.random().toString(36).substring(2, 10);
-  await saveState();
-  return userId;
+  try {
+    console.log('[Extension] initializeUserId called, current userId:', userId);
+    
+    // If userId is already set (either from auth or previous anon session), use it.
+    if (userId) {
+      console.log('[Extension] Using existing userId:', userId, 'username:', username);
+      return userId;
+    }
+
+    // Attempt to load from storage again, in case initializeState hasn't run or was cleared
+    const storedData = await chrome.storage.local.get(['userId', 'username']);
+    console.log('[Extension] Retrieved from storage:', storedData);
+    
+    if (storedData.userId) {
+      userId = storedData.userId;
+      username = storedData.username || null; // Ensure username is also loaded
+      console.log('[Extension] Loaded authenticated userId from storage:', userId, 'username:', username);
+      return userId;
+    }
+    
+    // If no authenticated userId, generate an anonymous one as a fallback
+    console.log('[Extension] No authenticated userId found, generating anonymous ID.');
+    userId = 'anon_' + Date.now() + '_' + Math.random().toString(36).substring(2, 10);
+    username = null; // Explicitly null for anonymous users
+    
+    // Save the new anonymous userId (and null username)
+    await chrome.storage.local.set({ userId, username: null });
+    console.log('[Extension] Generated and saved anonymous userId:', userId);
+    
+    return userId;
+  } catch (error) {
+    console.error('[Extension] Error in initializeUserId:', error);
+    // Fallback to a basic anonymous ID in case of error
+    userId = 'anon_error_' + Date.now();
+    return userId;
+  }
 };
 
 // Start a recording session
 const startRecordingSession = async (sessionId, tabInfo = null) => {
   try {
       await initializeUserId();
+      
+      console.log('[Extension] startRecordingSession: Using userId to save session:', userId);
+      console.log('[Extension] startRecordingSession: Username associated with session:', username);
     
     // Get current tab if not provided
     if (!tabInfo) {
@@ -145,33 +205,67 @@ const startRecordingSession = async (sessionId, tabInfo = null) => {
     updateBadge();
     await saveState();
     
-    // Save session to backend
-    await fetch(`${API_BASE_URL}/extension/recorder/saveSession`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        sessionId,
-        userId,
-        url: tabInfo.url,
-        browser: 'chrome',
-        metadata: { title: tabInfo.title }
-      })
-    });
+    // Try a different approach - use the direct route we added
+    const apiBase = API_BASE_URL.split('/api')[0] || API_BASE_URL;
+    const saveSessionUrl = `${apiBase}/api/recorder/saveSession`;
+    console.log(`[Extension] DIRECT URL - Saving session to: ${saveSessionUrl}`);
     
-    console.log(`[Extension] Started recording session ${sessionId}`);
+    // Create request data
+    const requestData = {
+      sessionId,
+      userId,
+      url: tabInfo.url,
+      browser: 'chrome',
+      metadata: { title: tabInfo.title }
+    };
     
-    // Notify content script to start recording
+    console.log(`[Extension] Session request payload:`, requestData);
+    
+    // Save session to backend with improved error handling
     try {
-      chrome.tabs.sendMessage(recordingTabId, {
-        action: 'startRecording',
-        sessionId,
-        userId
-          });
-        } catch (error) {
-      console.error('[Extension] Error sending message to content script:', error);
-        }
-    
-    return { success: true, sessionId };
+      const response = await fetch(saveSessionUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestData)
+      });
+      
+      // Check for non-JSON responses
+      const contentType = response.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) {
+        console.error(`[Extension] Server returned non-JSON response: ${contentType}`);
+        const text = await response.text();
+        console.error(`[Extension] Response body (first 200 chars): ${text.substring(0, 200)}`);
+        throw new Error(`Server returned non-JSON response: ${response.status} ${response.statusText}`);
+      }
+      
+      const data = await response.json();
+      console.log(`[Extension] Session save response:`, data);
+      
+      if (!response.ok) {
+        throw new Error(`Server returned error: ${response.status} - ${data.error || response.statusText}`);
+      }
+      
+      console.log(`[Extension] Started recording session ${sessionId} for user ${userId}`);
+      
+      // Notify content script to start recording
+      try {
+        chrome.tabs.sendMessage(
+          recordingTabId, 
+          {
+            action: 'startRecording',
+            sessionId,
+            userId
+          }
+        );
+      } catch (error) {
+        console.error('[Extension] Error sending message to content script:', error);
+      }
+      
+      return { success: true, sessionId };
+    } catch (error) {
+      console.error('[Extension] Error saving session to backend:', error);
+      throw error;
+    }
   } catch (error) {
     console.error('[Extension] Error starting recording session:', error);
     recordingStatus = 'idle';
@@ -200,25 +294,52 @@ const stopRecordingSession = async () => {
         chrome.tabs.sendMessage(recordingTabId, {
           action: 'stopRecording'
         });
-  } catch (error) {
+      } catch (error) {
         console.log('[Extension] Error sending stop message to content script:', error);
       }
     }
     
-    // Notify server that recording has stopped
-    await fetch(`${API_BASE_URL}/extension/recorder/stopSession`, {
-            method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ 
-        sessionId,
-        userId,
-        reason: 'user_stopped'
-            })
-        });
-        
-    console.log(`[Extension] Stopped recording session ${sessionId}`);
-    return { success: true, sessionId };
+    // Notify server that recording has stopped using the correct API path
+    // Use the direct route we added in server.js
+    const apiBase = API_BASE_URL.split('/api')[0] || API_BASE_URL;
+    const stopSessionUrl = `${apiBase}/api/recorder/stopSession`;
+    console.log(`[Extension] DIRECT URL - Stopping session with: ${stopSessionUrl}`);
+    
+    try {
+      const response = await fetch(stopSessionUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          sessionId,
+          userId,
+          reason: 'user_stopped'
+        })
+      });
+      
+      // Check for non-JSON responses
+      const contentType = response.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) {
+        console.error(`[Extension] Server returned non-JSON response: ${contentType}`);
+        const text = await response.text();
+        console.error(`[Extension] Response body (first 200 chars): ${text.substring(0, 200)}`);
+        throw new Error(`Server returned non-JSON response when stopping: ${response.status} ${response.statusText}`);
+      }
+      
+      const data = await response.json();
+      console.log(`[Extension] Session stop response:`, data);
+      
+      if (!response.ok) {
+        throw new Error(`Server returned error: ${response.status} - ${data.error || response.statusText}`);
+      }
+      
+      console.log(`[Extension] Stopped recording session ${sessionId}`);
+      return { success: true, sessionId };
     } catch (error) {
+      console.error('[Extension] Error stopping session on server:', error);
+      // Return success anyway since we've already cleared local state
+      return { success: true, sessionId, serverError: error.message };
+    }
+  } catch (error) {
     console.error('[Extension] Error stopping recording session:', error);
     return { success: false, error: error.message };
   }
@@ -568,8 +689,12 @@ const saveDOMState = async (state) => {
         
         console.log(`[Extension][DUPLICATION DEBUG] Sending state to backend: stateId=${formattedState.stateId}, isNewState=${formattedState.isNewState}, stateNumber=${formattedState.stateNumber}, hash=${formattedState.hash}`);
         
+        // Build correct URL using getApiUrl
+        const statesUrl = getApiUrl('states');
+        console.log(`[Extension][DUPLICATION DEBUG] Saving state to URL: ${statesUrl}`);
+        
         // Send state to backend
-        const response = await fetch(`${API_BASE_URL}/states`, {
+        const response = await fetch(statesUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(formattedState)
@@ -672,206 +797,441 @@ chrome.webNavigation.onCommitted.addListener(async (details) => {
 
 // Listen for messages from popup or content script
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  try {
-    console.log('[Extension] Received message:', message.action);
-    
-    // Log source if available to help identify where duplicates are coming from
-    if (message._source) {
-      console.log(`[Extension][DUPLICATION DEBUG] Message source: ${message._source}`);
+  console.log('[Extension] Received message:', message);
+
+  // Ensure API_BASE_URL is current before any API calls
+  chrome.storage.local.get('apiBaseUrl', (result) => {
+    if (result.apiBaseUrl) {
+      API_BASE_URL = result.apiBaseUrl;
     }
-    
-    console.log('[Extension][DUPLICATION DEBUG] Message details:', message); // Log full message for debugging
-    
-    // If message is from a content script in a tab, update the recordingTabId
-    if (sender.tab && recordingStatus === 'recording') {
-      recordingTabId = sender.tab.id;
-    }
-    
-    switch (message.action) {
-      case 'startRecording':
-        (async () => {
-          try {
-            const sessionId = 'session_' + Date.now();
-            const result = await startRecordingSession(sessionId);
-            sendResponse(result);
-          } catch (error) {
-            console.error('[Extension] Error starting recording:', error);
-            sendResponse({ success: false, error: error.message });
+  });
+
+  switch (message.action) {
+    case 'startRecording':
+      (async () => {
+        try {
+          const sessionId = 'session_' + Date.now();
+          const result = await startRecordingSession(sessionId);
+          sendResponse(result);
+        } catch (error) {
+          console.error('[Extension] Error starting recording:', error);
+          sendResponse({ success: false, error: error.message });
+        }
+      })();
+      return true;
+      
+    case 'stopRecording':
+      (async () => {
+        try {
+          const result = await stopRecordingSession();
+          sendResponse(result);
+        } catch (error) {
+          console.error('[Extension] Error stopping recording:', error);
+          sendResponse({ success: false, error: error.message });
+        }
+      })();
+      return true;
+      
+    case 'getStatus':
+      sendResponse({
+        recordingStatus,
+        currentSessionId,
+        userId,
+        username // NEW: Send username in status
+      });
+      return true;
+      
+    case 'setApiUrl':
+      (async () => {
+        try {
+          console.log(`[Extension] Received setApiUrl message with value: ${message.url}`);
+          
+          let newApiBaseUrl = message.url;
+          
+          // Make sure it starts with http:// or https://
+          if (!newApiBaseUrl.startsWith('http://') && !newApiBaseUrl.startsWith('https://')) {
+            newApiBaseUrl = 'http://' + newApiBaseUrl;
           }
-        })();
-        return true;
-        
-      case 'stopRecording':
-        (async () => {
-          try {
-            const result = await stopRecordingSession();
-            sendResponse(result);
-          } catch (error) {
-            console.error('[Extension] Error stopping recording:', error);
-            sendResponse({ success: false, error: error.message });
+          
+          // Extract just the base URL and path up to /api
+          if (newApiBaseUrl.includes('/api')) {
+            // Extract everything up to and including /api
+            newApiBaseUrl = newApiBaseUrl.substring(0, newApiBaseUrl.indexOf('/api') + 4);
+          } else {
+            // No /api in the URL, add it
+            newApiBaseUrl = newApiBaseUrl.endsWith('/') ? newApiBaseUrl + 'api' : newApiBaseUrl + '/api';
           }
-        })();
-        return true;
-        
-      case 'getStatus':
-        sendResponse({ 
-          recordingStatus,
-          currentSessionId,
-          userId
-        });
-        return true;
-        
-      case 'setApiUrl':
-        (async () => {
-          API_BASE_URL = message.url;
-          await saveState();
-          sendResponse({ success: true });
-        })();
-        return true;
-        
-      case 'recordState':
-        (async () => {
+          
+          // Update the global variable
+          API_BASE_URL = newApiBaseUrl;
+          
+          // Save to storage
+          await chrome.storage.local.set({ apiBaseUrl: API_BASE_URL });
+          
+          console.log('[Extension] API_BASE_URL updated to:', API_BASE_URL);
+          
+          // Test the connection immediately
+          let connectionOk = false;
           try {
-            const state = message.state;
-            console.log(`[Extension][DUPLICATION DEBUG] Received recordState: hash=${state.hash}, timestamp=${state.timestamp}`);
+            const pingUrl = getApiUrl('extension/ping');
+            console.log('[Extension] Testing new API URL with ping:', pingUrl);
             
-            // Check if this is a navigation button click
-            const isNavigationButton = 
-              message.isInteraction && 
-              state.interactionInfo && 
-              (state.interactionInfo.element === 'a' || 
-               state.interactionInfo.element === 'button[type=button]' ||
-               (state.interactionInfo.text && 
-                (state.interactionInfo.text.includes('Continue') || 
-                 state.interactionInfo.text.includes('Next') || 
-                 state.interactionInfo.text.includes('Go'))));
+            const response = await fetch(pingUrl, {
+              method: 'GET',
+              headers: { 'Content-Type': 'application/json' }
+            });
             
-            // Store interaction info when it's a click
-            if (state.interactionInfo && message.isInteraction) {
-              interactionQueue.push(state.interactionInfo);
-              console.log('[DEBUG] Stored interaction:', state.interactionInfo);
+            if (response.ok) {
+              const data = await response.json();
+              console.log('[Extension] API ping successful:', data);
+              connectionOk = true;
+            } else {
+              console.error('[Extension] API ping failed:', response.status, response.statusText);
+              const errorText = await response.text();
+              console.error('[Extension] Error response:', errorText.substring(0, 200));
+            }
+          } catch (error) {
+            console.error('[Extension] Error testing API connection:', error);
+          }
+          
+          sendResponse({ 
+            success: true, 
+            newUrl: API_BASE_URL,
+            connectionTested: true,
+            connectionOk
+          });
+        } catch (error) {
+          console.error('[Extension] Error in setApiUrl:', error);
+          sendResponse({ success: false, error: error.message });
+        }
+      })();
+      return true;
+      
+    case 'recordState':
+      (async () => {
+        try {
+          const state = message.state;
+          console.log(`[Extension][DUPLICATION DEBUG] Received recordState: hash=${state.hash}, timestamp=${state.timestamp}`);
+          
+          // Check if this is a navigation button click
+          const isNavigationButton = 
+            message.isInteraction && 
+            state.interactionInfo && 
+            (state.interactionInfo.element === 'a' || 
+             state.interactionInfo.element === 'button[type=button]' ||
+             (state.interactionInfo.text && 
+              (state.interactionInfo.text.includes('Continue') || 
+               state.interactionInfo.text.includes('Next') || 
+               state.interactionInfo.text.includes('Go'))));
+          
+          // Store interaction info when it's a click
+          if (state.interactionInfo && message.isInteraction) {
+            interactionQueue.push(state.interactionInfo);
+            console.log('[DEBUG] Stored interaction:', state.interactionInfo);
+            
+            // Schedule clearing of lastInteractionInfo after 3 seconds
+            setTimeout(() => {
+              // Only clear if it's still the same interaction
+              if (interactionQueue.length > 0 && interactionQueue[0].timestamp === state.interactionInfo.timestamp) {
+                console.log('[DEBUG] Clearing stored interaction after timeout');
+                interactionQueue.shift();
+              }
+            }, 3000);
+            
+            // Skip recording the interaction state if it's a navigation button
+            if (isNavigationButton) {
+              console.log('[DEBUG] Skipping recording of navigation button click, will be included in navigation state');
+              // Store separately for navigation
+              lastInteractionInfo = state.interactionInfo;
+              sendResponse({ success: true, skipped: true, reason: 'navigation_button' });
+              return true;
+            }
+          }
+          
+          // Check for pending navigation or reload
+          const navigationInfo = await chrome.storage.session.get([
+            'isNavigationPending', 
+            'isReloadPending', 
+            'navigationDetails'
+          ]);
+          
+          const isNavigationPending = navigationInfo.isNavigationPending === true;
+          const isReloadPending = navigationInfo.isReloadPending === true;
+          
+          console.log(`[Extension][DUPLICATION DEBUG] Pending flags - navigation: ${isNavigationPending}, reload: ${isReloadPending}`);
+          
+          // If this is a window load event and there's a pending action
+          if (message.isInitial && (isNavigationPending || isReloadPending)) {
+            if (isReloadPending) {
+              console.log(`[Extension][DUPLICATION DEBUG] Converting initial state to reload state due to pending reload`);
+              message.isInitial = false;
+              message.isReload = true;
+              state.isInitial = false;
+              state.isReload = true;
+            } else if (isNavigationPending) {
+              console.log(`[Extension][DUPLICATION DEBUG] Converting initial state to navigation state due to pending navigation`);
+              message.isInitial = false;
+              message.isNavigation = true;
+              state.isInitial = false;
+              state.isNavigation = true;
               
-              // Schedule clearing of lastInteractionInfo after 3 seconds
-              setTimeout(() => {
-                // Only clear if it's still the same interaction
-                if (interactionQueue.length > 0 && interactionQueue[0].timestamp === state.interactionInfo.timestamp) {
-                  console.log('[DEBUG] Clearing stored interaction after timeout');
-                  interactionQueue.shift();
-                }
-              }, 3000);
-              
-              // Skip recording the interaction state if it's a navigation button
-              if (isNavigationButton) {
-                console.log('[DEBUG] Skipping recording of navigation button click, will be included in navigation state');
-                // Store separately for navigation
-                lastInteractionInfo = state.interactionInfo;
-                sendResponse({ success: true, skipped: true, reason: 'navigation_button' });
-                return true;
+              // Add interaction info to navigation state if available
+              if (lastInteractionInfo) {
+                console.log('[DEBUG] Adding stored navigation interaction to state');
+                state.interactionInfo = lastInteractionInfo;
+                lastInteractionInfo = null; // Clear after use
               }
             }
             
-            // Check for pending navigation or reload
-            const navigationInfo = await chrome.storage.session.get([
+            // Clear the pending flags
+            await chrome.storage.session.remove([
               'isNavigationPending', 
               'isReloadPending', 
               'navigationDetails'
             ]);
-            
-            const isNavigationPending = navigationInfo.isNavigationPending === true;
-            const isReloadPending = navigationInfo.isReloadPending === true;
-            
-            console.log(`[Extension][DUPLICATION DEBUG] Pending flags - navigation: ${isNavigationPending}, reload: ${isReloadPending}`);
-            
-            // If this is a window load event and there's a pending action
-            if (message.isInitial && (isNavigationPending || isReloadPending)) {
-              if (isReloadPending) {
-                console.log(`[Extension][DUPLICATION DEBUG] Converting initial state to reload state due to pending reload`);
-                message.isInitial = false;
-                message.isReload = true;
-                state.isInitial = false;
-                state.isReload = true;
-              } else if (isNavigationPending) {
-                console.log(`[Extension][DUPLICATION DEBUG] Converting initial state to navigation state due to pending navigation`);
-                message.isInitial = false;
-                message.isNavigation = true;
-                state.isInitial = false;
-                state.isNavigation = true;
-                
-                // Add interaction info to navigation state if available
-                if (lastInteractionInfo) {
-                  console.log('[DEBUG] Adding stored navigation interaction to state');
-                  state.interactionInfo = lastInteractionInfo;
-                  lastInteractionInfo = null; // Clear after use
-                }
-              }
-              
-              // Clear the pending flags
-              await chrome.storage.session.remove([
-                'isNavigationPending', 
-                'isReloadPending', 
-                'navigationDetails'
-              ]);
-              console.log(`[Extension][DUPLICATION DEBUG] Cleared pending flags`);
-            }
-            
-            // Transfer special event flags from message to state if they exist
-            if (message.isNavigation === true) {
-              state.isNavigation = true;
-              console.log(`[Extension][DUPLICATION DEBUG] Setting isNavigation flag`);
-            }
-            if (message.isReload === true) {
-              state.isReload = true;
-              console.log(`[Extension][DUPLICATION DEBUG] Setting isReload flag`);
-            }
-            if (message.isInitial === true) {
-              state.isInitial = true;
-              console.log(`[Extension][DUPLICATION DEBUG] Setting isInitial flag`);
-            }
-            if (message.isInteraction === true) {
-              state.isInteraction = true;
-              console.log(`[Extension][DUPLICATION DEBUG] Setting isInteraction flag`);
-            }
-            if (message.isDuplicate === true) {
-              state.isDuplicate = true;
-              console.log(`[Extension][DUPLICATION DEBUG] Setting isDuplicate flag`);
-            }
-            if (message.reusedStateId) {
-              state.reusedStateId = message.reusedStateId;
-              console.log(`[Extension][DUPLICATION DEBUG] Setting reusedStateId: ${message.reusedStateId}`);
-            }
-            
-            const result = await saveDOMState(state);
-            console.log(`[Extension][DUPLICATION DEBUG] saveDOMState result: ${JSON.stringify(result)}`);
-            sendResponse(result);
-          } catch (error) {
-            console.error('[Extension][DUPLICATION DEBUG] Error saving state:', error);
-            sendResponse({ success: false, error: error.message });
+            console.log(`[Extension][DUPLICATION DEBUG] Cleared pending flags`);
           }
-        })();
-        return true;
-        
-      case 'setSaveLoadingStates':
-        (async () => {
-          try {
-            console.log(`[Extension] Received setSaveLoadingStates message with value: ${message.value}`);
-            const value = message.value === true || message.value === 'true';
-            const result = await setSaveLoadingStates(value);
-            console.log(`[Extension] setSaveLoadingStates result:`, result);
-            sendResponse(result);
-          } catch (error) {
-            console.error('[Extension] Error in setSaveLoadingStates:', error);
-            sendResponse({ success: false, error: error.message });
+          
+          // Transfer special event flags from message to state if they exist
+          if (message.isNavigation === true) {
+            state.isNavigation = true;
+            console.log(`[Extension][DUPLICATION DEBUG] Setting isNavigation flag`);
           }
-        })();
-        return true;
-        
-      default:
-        sendResponse({ success: false, error: 'Unknown action' });
-        return true;
+          if (message.isReload === true) {
+            state.isReload = true;
+            console.log(`[Extension][DUPLICATION DEBUG] Setting isReload flag`);
+          }
+          if (message.isInitial === true) {
+            state.isInitial = true;
+            console.log(`[Extension][DUPLICATION DEBUG] Setting isInitial flag`);
+          }
+          if (message.isInteraction === true) {
+            state.isInteraction = true;
+            console.log(`[Extension][DUPLICATION DEBUG] Setting isInteraction flag`);
+          }
+          if (message.isDuplicate === true) {
+            state.isDuplicate = true;
+            console.log(`[Extension][DUPLICATION DEBUG] Setting isDuplicate flag`);
+          }
+          if (message.reusedStateId) {
+            state.reusedStateId = message.reusedStateId;
+            console.log(`[Extension][DUPLICATION DEBUG] Setting reusedStateId: ${message.reusedStateId}`);
+          }
+          
+          const result = await saveDOMState(state);
+          console.log(`[Extension][DUPLICATION DEBUG] saveDOMState result: ${JSON.stringify(result)}`);
+          sendResponse(result);
+        } catch (error) {
+          console.error('[Extension][DUPLICATION DEBUG] Error saving state:', error);
+          sendResponse({ success: false, error: error.message });
+        }
+      })();
+      return true;
+      
+    case 'setSaveLoadingStates':
+      (async () => {
+        try {
+          console.log(`[Extension] Received setSaveLoadingStates message with value: ${message.value}`);
+          const value = message.value === true || message.value === 'true';
+          const result = await setSaveLoadingStates(value);
+          console.log(`[Extension] setSaveLoadingStates result:`, result);
+          sendResponse(result);
+        } catch (error) {
+          console.error('[Extension] Error in setSaveLoadingStates:', error);
+          sendResponse({ success: false, error: error.message });
+        }
+      })();
+      return true;
+      
+    case 'login':
+      handleLogin(message.username, message.password, sendResponse);
+      return true; // Indicates that the response will be sent asynchronously
+    case 'register':
+      handleRegister(message.username, message.password, sendResponse);
+      return true; // Indicates that the response will be sent asynchronously
+    case 'logout':
+      handleLogout(sendResponse);
+      return true; // Indicates that the response will be sent asynchronously
+      
+    default:
+      sendResponse({ success: false, error: 'Unknown action' });
+      return true;
+  }
+});
+
+// NEW: Handle Login
+async function handleLogin(usernameToLogin, password, sendResponse) {
+  try {
+    console.log(`[Extension] Attempting login for user: ${usernameToLogin}`);
+    const url = getApiUrl('auth/login');
+    console.log(`[Extension] Login request URL: ${url}`);
+    
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: usernameToLogin, password })
+    });
+
+    const data = await response.json();
+    console.log('[Extension] Login response:', data);
+
+    if (response.ok && data.success) {
+      // Update global variables
+      userId = data.userId;
+      username = data.username;
+      
+      // Save to storage
+      await chrome.storage.local.set({ 
+        userId: data.userId, 
+        username: data.username 
+      });
+      
+      console.log('[Extension] Login successful, updated global state and storage:', { userId, username });
+      
+      // Send message to popup to update its UI
+      chrome.runtime.sendMessage({ 
+        action: 'authStatusUpdate', 
+        successMessage: 'Login successful!', 
+        username 
+      });
+      
+      sendResponse({ success: true });
+    } else {
+      console.error('[Extension] Login failed:', data.message || 'Unknown error');
+      // Send error to popup
+      chrome.runtime.sendMessage({ action: 'authStatusUpdate', error: data.message || 'Login failed' });
+      sendResponse({ success: false, error: data.message || 'Login failed' });
     }
   } catch (error) {
-    console.error('[Extension] Error handling message:', error);
-    sendResponse({ success: false, error: error.message });
-    return true;
+    console.error('[Extension] Error during login:', error);
+    chrome.runtime.sendMessage({ action: 'authStatusUpdate', error: 'Login request failed: ' + error.message });
+    sendResponse({ success: false, error: 'Login request failed: ' + error.message });
   }
-}); 
+}
+
+// NEW: Handle Register
+async function handleRegister(usernameToRegister, password, sendResponse) {
+  try {
+    console.log(`[Extension] Attempting registration for user: ${usernameToRegister}`);
+    const url = getApiUrl('auth/register');
+    console.log(`[Extension] Registration request URL: ${url}`);
+    
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: usernameToRegister, password })
+    });
+
+    const data = await response.json();
+    console.log('[Extension] Registration response:', data);
+
+    if (response.ok && data.success) {
+      // Update global variables
+      userId = data.userId;
+      username = data.username;
+      
+      // Save to storage  
+      await chrome.storage.local.set({ 
+        userId: data.userId, 
+        username: data.username 
+      });
+      
+      console.log('[Extension] Registration successful, updated global state and storage:', { userId, username });
+      
+      chrome.runtime.sendMessage({ 
+        action: 'authStatusUpdate', 
+        successMessage: 'Registration successful! You are now logged in.', 
+        username 
+      });
+      
+      sendResponse({ success: true });
+    } else {
+      console.error('[Extension] Registration failed:', data.message || 'Unknown error');
+      chrome.runtime.sendMessage({ action: 'authStatusUpdate', error: data.message || 'Registration failed' });
+      sendResponse({ success: false, error: data.message || 'Registration failed' });
+    }
+  } catch (error) {
+    console.error('[Extension] Error during registration:', error);
+    chrome.runtime.sendMessage({ action: 'authStatusUpdate', error: 'Registration request failed: ' + error.message });
+    sendResponse({ success: false, error: 'Registration request failed: ' + error.message });
+  }
+}
+
+// NEW: Handle Logout
+async function handleLogout(sendResponse) {
+  try {
+    console.log('[Extension] Logging out user:', username);
+    
+    // Clear global variables
+    userId = null;
+    username = null;
+    
+    // Clear from storage
+    await chrome.storage.local.remove(['userId', 'username']);
+    
+    console.log('[Extension] User logged out, cleared global state and storage');
+    
+    chrome.runtime.sendMessage({ action: 'authStatusUpdate', successMessage: 'Logged out successfully.' });
+    sendResponse({ success: true });
+  } catch (error) {
+    console.error('[Extension] Error during logout:', error);
+    sendResponse({ success: false, error: 'Logout error: ' + error.message });
+  }
+}
+
+// Utility to get API URL (ensure it's consistent or passed around if needed)
+function getApiUrl(endpoint) {
+    // Make sure the endpoint doesn't start with a slash
+    const cleanEndpoint = endpoint.startsWith('/') ? endpoint.substring(1) : endpoint;
+    
+    // Parse the API_BASE_URL to make sure we're not adding double slashes
+    const baseUrlWithoutTrailingSlash = API_BASE_URL.endsWith('/') 
+        ? API_BASE_URL.slice(0, -1) 
+        : API_BASE_URL;
+    
+    const fullUrl = `${baseUrlWithoutTrailingSlash}/${cleanEndpoint}`;
+    console.log('[Extension] Generated API URL:', fullUrl);
+    return fullUrl;
+}
+
+// Refresh the API_BASE_URL from storage
+async function refreshApiBaseUrl() {
+    try {
+        const result = await chrome.storage.local.get('apiBaseUrl');
+        
+        if (result.apiBaseUrl) {
+            API_BASE_URL = result.apiBaseUrl;
+            console.log('[Extension] API_BASE_URL refreshed to:', API_BASE_URL);
+            
+            // Test connection to the API using the known working endpoint
+            try {
+                const pingUrl = getApiUrl('extension/ping');
+                console.log('[Extension] Testing API connection with:', pingUrl);
+                
+                const response = await fetch(pingUrl, { 
+                    method: 'GET',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    console.log('[Extension] API connection test successful:', data);
+                } else {
+                    console.error('[Extension] API connection test failed:', response.status, response.statusText);
+                    // Try to get error text
+                    const errorText = await response.text();
+                    console.error('[Extension] Error response:', errorText.substring(0, 200));
+                }
+            } catch (error) {
+                console.error('[Extension] Error testing API connection:', error);
+            }
+        } else {
+            console.log('[Extension] API_BASE_URL not found in storage, using default:', API_BASE_URL);
+        }
+    } catch (error) {
+        console.error('[Extension] Error refreshing API_BASE_URL:', error);
+    }
+}
+
+// Call it once on load, and potentially before critical API calls if staleness is a concern.
+refreshApiBaseUrl(); 

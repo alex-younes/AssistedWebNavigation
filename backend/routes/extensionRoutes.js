@@ -8,6 +8,12 @@ const db = require('../database');
 const serviceManager = require('../services/ServiceManager');
 const DOMState = require('../models/DOMState');
 
+// NEW: Ping endpoint for connection testing
+router.get('/ping', (req, res) => {
+  debug('[API/Extension] Received ping request');
+  res.json({ success: true, message: 'Pong!', timestamp: new Date().toISOString() });
+});
+
 // Helper function to get user status - now uses serviceManager
 const getUserStatus = async (userId) => {
     if (!userId) return null;

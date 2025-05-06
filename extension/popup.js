@@ -11,6 +11,10 @@ let startTime = null;
 let recordingTimer = null;
 let interactionCount = 0;
 
+// NEW: Auth-related DOM elements
+let usernameInput, passwordInput, loginBtn, registerBtn, logoutBtn;
+let loginStatusText, authErrorDisplay, authForm, userInfoSection;
+
 // Helper function to show status message
 function showStatus(message, type = null) {
     const statusDiv = document.getElementById('status');
@@ -30,8 +34,9 @@ function showStatus(message, type = null) {
         
         // Also update status with error state
         if (statusDiv) {
-            statusDiv.textContent = 'Error occurred';
+            statusDiv.textContent = 'Error occurred'; // Generic error for main status
             statusDiv.className = 'status error';
+            statusDiv.style.display = 'block';
         }
     } else {
         // Hide error message
@@ -57,13 +62,13 @@ function updateStatus(status, sessionId = null) {
         stopRecordingBtn = document.getElementById('stopRecordingBtn');
     }
     if (!statusLabel) {
-        statusLabel = document.getElementById('statusLabel');
+        statusLabel = document.getElementById('recordingStatusLabel') || document.getElementById('statusLabel');
     }
     if (!statsCard) {
         statsCard = document.getElementById('statsCard');
     }
     if (!sessionIdElement) {
-        sessionIdElement = document.getElementById('sessionId');
+        sessionIdElement = document.getElementById('sessionIdDisplay');
     }
     
     const wasRecording = startRecordingBtn.disabled;
@@ -104,7 +109,7 @@ function updateStatus(status, sessionId = null) {
 // Helper function to update duration in stats card
 function updateDuration() {
     if (!durationElement) {
-        durationElement = document.getElementById('duration');
+        durationElement = document.getElementById('durationDisplay');
     }
     
     if (startTime && durationElement) {
@@ -126,7 +131,7 @@ function updateDuration() {
 // Helper function to update stats card
 function updateStatsCard() {
     if (!interactionCountElement) {
-        interactionCountElement = document.getElementById('interactionCount');
+        interactionCountElement = document.getElementById('interactionCountDisplay');
     }
     if (!statsCard) {
         statsCard = document.getElementById('statsCard');
@@ -142,11 +147,22 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Initialize DOM element references
     startRecordingBtn = document.getElementById('startRecordingBtn');
     stopRecordingBtn = document.getElementById('stopRecordingBtn');
-    statusLabel = document.getElementById('statusLabel');
+    statusLabel = document.getElementById('recordingStatusLabel') || document.getElementById('statusLabel');
     statsCard = document.getElementById('statsCard');
-    sessionIdElement = document.getElementById('sessionId');
-    interactionCountElement = document.getElementById('interactionCount');
-    durationElement = document.getElementById('duration');
+    sessionIdElement = document.getElementById('sessionIdDisplay');
+    interactionCountElement = document.getElementById('interactionCountDisplay');
+    durationElement = document.getElementById('durationDisplay');
+    
+    // NEW: Initialize Auth DOM elements
+    usernameInput = document.getElementById('usernameInput');
+    passwordInput = document.getElementById('passwordInput');
+    loginBtn = document.getElementById('loginBtn');
+    registerBtn = document.getElementById('registerBtn');
+    logoutBtn = document.getElementById('logoutBtn');
+    loginStatusText = document.getElementById('loginStatusText');
+    authErrorDisplay = document.getElementById('authErrorDisplay');
+    authForm = document.getElementById('authForm');
+    userInfoSection = document.getElementById('userInfoSection');
     
     // Check server configuration
     await checkServerConfiguration();
@@ -157,6 +173,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Set up event listeners
     startRecordingBtn.addEventListener('click', startRecording);
     stopRecordingBtn.addEventListener('click', stopRecording);
+    
+    // NEW: Auth event listeners
+    loginBtn.addEventListener('click', handleLogin);
+    registerBtn.addEventListener('click', handleRegister);
+    logoutBtn.addEventListener('click', handleLogout);
+    
+    // Initial UI update for auth section
+    updateAuthUI();
     
     // Set up save loading states toggle
     const saveLoadingStatesToggle = document.getElementById('saveLoadingStatesToggle');
@@ -200,9 +224,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         serverForm.addEventListener('submit', async (e) => {
             e.preventDefault();
             
-            const ipInput = document.getElementById('serverIp');
-            const portInput = document.getElementById('serverPort');
-            
+            const ipInput = document.getElementById('serverIpInput');
+            const portInput = document.getElementById('serverPortInput');
+            const configErrorEl = document.getElementById('configErrorDisplay');
+
             if (ipInput && portInput) {
                 serverConfig.ip = ipInput.value.trim();
                 serverConfig.port = portInput.value.trim();
@@ -214,15 +239,20 @@ document.addEventListener('DOMContentLoaded', async () => {
                 });
                 
                 // Update API URL in background script
-                const apiUrl = `http://${serverConfig.ip}:${serverConfig.port}/api`;
+                const apiUrl = getApiUrl('extension/ping');
                 chrome.runtime.sendMessage({
                     action: 'setApiUrl',
                     url: apiUrl
                 }, (response) => {
+                    if (configErrorEl) configErrorEl.style.display = 'none';
                     if (response && response.success) {
                         showStatus('Server configuration saved', 'success');
                         testServerConnection();
                     } else {
+                        if (configErrorEl) {
+                            configErrorEl.textContent = (response && response.error) || 'Error saving server configuration';
+                            configErrorEl.style.display = 'block';
+                        }
                         showStatus('Error saving server configuration', 'error');
                     }
                 });
@@ -234,7 +264,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const serverConfigResult = await chrome.storage.local.get(['serverIp', 'serverPort']);
     if (serverConfigResult.serverIp) {
         serverConfig.ip = serverConfigResult.serverIp;
-        const ipInput = document.getElementById('serverIp');
+        const ipInput = document.getElementById('serverIpInput');
         if (ipInput) {
             ipInput.value = serverConfig.ip;
         }
@@ -242,7 +272,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     if (serverConfigResult.serverPort) {
         serverConfig.port = serverConfigResult.serverPort;
-        const portInput = document.getElementById('serverPort');
+        const portInput = document.getElementById('serverPortInput');
         if (portInput) {
             portInput.value = serverConfig.port;
         }
@@ -267,35 +297,44 @@ async function checkServerConfiguration() {
 
 // Test connection to server
 async function testServerConnection() {
-    const serverStatusElement = document.getElementById('serverStatus');
+    const apiUrl = getApiUrl('extension/ping');
+    const serverStatusElement = document.getElementById('serverStatusIndicator');
+    const configErrorEl = document.getElementById('configErrorDisplay');
+
     if (!serverStatusElement) return;
     
     try {
-        // Use direct URL for health check without the /api prefix
-        const healthUrl = `http://${serverConfig.ip}:${serverConfig.port}/health`;
-        serverStatusElement.textContent = 'Connecting...';
-        
-        const response = await fetch(healthUrl, {
+        const response = await fetch(apiUrl, {
             method: 'GET'
         });
         
         if (response.ok) {
             const data = await response.json();
             
-            if (data.status === 'ok') {
+            if (data.success === true) {
                 serverStatusElement.textContent = 'Connected';
                 serverStatusElement.className = 'status-indicator connected';
+                if (configErrorEl) configErrorEl.style.display = 'none';
             } else {
+                const errorText = `Error: ${response.status} - ${(data && data.message) || response.statusText || 'Ping unsuccessful'}`;
                 serverStatusElement.textContent = 'Error';
                 serverStatusElement.className = 'status-indicator error';
+                if (configErrorEl) {
+                    configErrorEl.textContent = `Connection failed. ${errorText}`;
+                    configErrorEl.style.display = 'block';
+                }
             }
         } else {
             throw new Error('Server returned status ' + response.status);
         }
     } catch (error) {
-        console.error('Error connecting to server:', error);
-        serverStatusElement.textContent = 'Disconnected';
-        serverStatusElement.className = 'status-indicator disconnected';
+        serverStatusElement.textContent = 'Error';
+        serverStatusElement.className = 'status-indicator error';
+        if (configErrorEl) {
+            configErrorEl.textContent = `Connection error: ${error.message}`;
+            configErrorEl.style.display = 'block';
+        }
+        console.error('[Popup] Server connection test error:', error);
     }
 }
 
@@ -322,69 +361,148 @@ async function updateCurrentStatus() {
 
 // Start recording
 async function startRecording() {
-    try {
-        showStatus('Starting recording...', 'info');
-        
-        // Make sure server is configured
-        if (!await checkServerConfiguration()) {
-            showStatus('Please configure server first', 'error');
-            return;
-        }
-        
-        // Tell background script to start recording
-        const result = await chrome.runtime.sendMessage({
-            action: 'startRecording'
-        });
-        
-        if (result && result.success) {
+    const result = await chrome.storage.local.get(['userId', 'username']);
+    // Check if user is logged in OR if anonymous recording is allowed by background.js (implicit)
+    // For now, we proceed, and background.js will generate an anon ID if needed.
+    // A stricter approach would be to prevent recording if !result.userId and login is mandatory.
+    // if (!result.userId) {
+    //     if (authErrorDisplay) {
+    //         authErrorDisplay.textContent = 'Please login to start recording.';
+    //         authErrorDisplay.style.display = 'block';
+    //     }
+    //     return;
+    // }
+
+    showStatus('Starting recording...', 'info');
+    chrome.runtime.sendMessage({ action: 'startRecording' }, (response) => {
+        if (response && response.success) {
             showStatus('Recording started', 'success');
-            updateStatus('recording', result.sessionId);
+            updateStatus('recording', response.sessionId);
         } else {
-            showStatus('Error starting recording: ' + (result?.error || 'Unknown error'), 'error');
+            showStatus('Error starting recording: ' + (response?.error || 'Unknown error'), 'error');
         }
-    } catch (error) {
-        console.error('Error starting recording:', error);
-        showStatus('Error starting recording: ' + error.message, 'error');
-    }
+    });
 }
 
 // Stop recording
 async function stopRecording() {
-    try {
-        showStatus('Stopping recording...', 'info');
-        
-        // Tell background script to stop recording
-        const result = await chrome.runtime.sendMessage({
-            action: 'stopRecording'
-        });
-        
-        if (result && result.success) {
+    showStatus('Stopping recording...', 'info');
+    chrome.runtime.sendMessage({ action: 'stopRecording' }, (response) => {
+        if (response && response.success) {
             showStatus('Recording stopped', 'success');
             updateStatus('idle');
         } else {
-            showStatus('Error stopping recording: ' + (result?.error || 'Unknown error'), 'error');
+            showStatus('Error stopping recording: ' + (response?.error || 'Unknown error'), 'error');
         }
-    } catch (error) {
-        console.error('Error stopping recording:', error);
-        showStatus('Error stopping recording: ' + error.message, 'error');
-    }
+    });
 }
 
 // Get API URL
 function getApiUrl(endpoint) {
-    const baseUrl = `http://${serverConfig.ip}:${serverConfig.port}/api`;
-    return baseUrl + (endpoint ? `/${endpoint}` : '');
+    // Use serverConfig if populated, otherwise try to get from storage directly or default
+    let baseUrl = `http://${serverConfig.ip || 'localhost'}:${serverConfig.port || '3001'}/api`;
+    
+    // Fallback if serverConfig is somehow not populated from DOM/storage yet
+    // This part is mostly a safeguard, initialization should handle it.
+    if (!serverConfig.ip) {
+        chrome.storage.local.get(['serverIp', 'serverPort']).then(storedConfig => {
+            const ip = storedConfig.serverIp || 'localhost';
+            const port = storedConfig.serverPort || '3001';
+            baseUrl = `http://${ip}:${port}/api`;
+        });
+    }
+    return `${baseUrl}/${endpoint}`;
 }
 
-// Listen for messages from background script
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message.action === 'updateInteractionCount') {
-        interactionCount = message.count;
-        updateStatsCard();
-    } else if (message.action === 'updateStatus') {
-        updateStatus(message.status, message.sessionId);
+// NEW: Function to update Authentication UI
+async function updateAuthUI() {
+    const result = await chrome.storage.local.get(['userId', 'username']);
+    if (result.userId && result.username) {
+        // Logged in
+        loginStatusText.textContent = `Logged in as: ${result.username}`;
+        authForm.style.display = 'none';
+        logoutBtn.style.display = 'block';
+        startRecordingBtn.disabled = false; // Enable recording if logged in
+    } else {
+        // Not logged in
+        loginStatusText.textContent = 'Not logged in';
+        authForm.style.display = 'block';
+        logoutBtn.style.display = 'none';
+        // Optionally disable recording if login is mandatory, or allow anonymous based on background.js logic
+        // For now, let background.js handle anonymous ID generation if no userId from auth
     }
-    
-    // Required for async response
-    return true;
+    if (passwordInput) passwordInput.value = ''; // Clear password field
+    if (authErrorDisplay) authErrorDisplay.style.display = 'none'; // Clear previous errors
+}
+
+// NEW: Handle Login
+function handleLogin() {
+    const username = usernameInput.value.trim();
+    const password = passwordInput.value.trim();
+    if (!username || !password) {
+        if (authErrorDisplay) {
+            authErrorDisplay.textContent = 'Username and password are required.';
+            authErrorDisplay.style.display = 'block';
+        }
+        return;
+    }
+    chrome.runtime.sendMessage({ action: 'login', username, password });
+}
+
+// NEW: Handle Register
+function handleRegister() {
+    const username = usernameInput.value.trim();
+    const password = passwordInput.value.trim();
+    if (!username || !password) {
+        if (authErrorDisplay) {
+            authErrorDisplay.textContent = 'Username and password are required.';
+            authErrorDisplay.style.display = 'block';
+        }
+        return;
+    }
+    chrome.runtime.sendMessage({ action: 'register', username, password });
+}
+
+// NEW: Handle Logout
+function handleLogout() {
+    chrome.runtime.sendMessage({ action: 'logout' });
+}
+
+// NEW: Listen for messages from background script (e.g., login/register results)
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.action === 'authStatusUpdate') {
+        updateAuthUI(); // Update UI based on new auth state
+        if (message.error && authErrorDisplay) {
+            authErrorDisplay.textContent = message.error;
+            authErrorDisplay.style.display = 'block';
+        } else if (message.successMessage && authErrorDisplay) {
+            // Using authErrorDisplay for success messages temporarily, or add a new element
+            authErrorDisplay.textContent = message.successMessage;
+            authErrorDisplay.className = 'status success'; // Style as success
+            authErrorDisplay.style.display = 'block';
+            setTimeout(() => { 
+                authErrorDisplay.style.display = 'none'; 
+                authErrorDisplay.className = 'error-message'; // Reset class
+            }, 3000);
+        }
+    } else if (message.action === 'updatePopupStats') {
+        // Handle stats update if needed from other messages
+        if (message.interactionCount !== undefined) {
+            interactionCount = message.interactionCount;
+        }
+        updateStatsCard();
+    } else if (message.action === 'updateRecordingStatus') {
+        updateStatus(message.status, message.sessionId);
+        if (message.status === 'recording') {
+            interactionCount = message.interactionCount || 0;
+            if (message.sessionStartTime) {
+                startTime = new Date(message.sessionStartTime);
+            } else {
+                startTime = new Date(); // Fallback if not provided
+            }
+            updateDuration(); // Initial duration update
+            updateStatsCard();
+        }
+    }
+    return true; // Keep the message channel open for asynchronous sendResponse if needed
 }); 

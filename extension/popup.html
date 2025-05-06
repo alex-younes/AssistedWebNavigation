@@ -94,7 +94,51 @@
         #stopRecordingBtn:hover:not(:disabled) {
             background-color: #d9302c;
         }
+
+        .user-info-section {
+            background-color: white;
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 16px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+
+        #loginStatusText {
+            font-size: 12px;
+            font-weight: 500;
+            margin-bottom: 8px;
+            text-align: center;
+        }
+
+        #authForm .form-row {
+            margin-bottom: 8px; 
+        }
+
+        #authForm input {
+            width: calc(100% - 18px); /* Adjusted width for padding and border */
+            padding: 8px; /* Increased padding */
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-size: 12px;
+            box-sizing: border-box; /* Ensures padding doesn't add to width */
+        }
         
+        #authForm .button-group button { /* Style buttons within authForm */
+            font-size: 12px; /* Smaller font for login/register buttons */
+            padding: 8px 12px; /* Adjust padding */
+        }
+        
+        #logoutBtn {
+            background-color: #8e8e93; /* Grey color for logout */
+            color: white;
+            font-size: 12px;
+            padding: 8px 12px;
+        }
+
+        #logoutBtn:hover:not(:disabled) {
+            background-color: #6c6c70;
+        }
+
         .stats-card {
             background-color: white;
             border-radius: 8px;
@@ -148,11 +192,11 @@
             color: #0066cc;
         }
         
-        .error-message {
+        .error-message { /* General error display for auth or other messages */
             display: none;
             font-size: 12px;
             padding: 8px;
-            margin-top: 12px;
+            margin-top: 8px; /* Adjusted margin */
             border-radius: 4px;
             background-color: #ffebeb;
             color: #cc0000;
@@ -177,12 +221,12 @@
             gap: 8px;
         }
         
-        .form-row {
+        .server-form .form-row { /* Target form-row within server-form specifically */
             display: flex;
             gap: 8px;
         }
         
-        .form-row input {
+        .server-form .form-row input {
             flex: 1;
             padding: 6px 8px;
             border: 1px solid #ccc;
@@ -313,34 +357,53 @@
     <div class="container">
         <div class="header">
             <h1>DOM State Tracker</h1>
-            <div id="statusLabel" class="status-label idle">Idle</div>
+            <span id="recordingStatusLabel" class="status-label idle">Idle</span>
         </div>
-        
+
+        <div id="userInfoSection" class="user-info-section">
+            <p id="loginStatusText">Not logged in</p>
+            <div id="authForm">
+                <div class="form-row">
+                    <input type="text" id="usernameInput" placeholder="Username">
+                </div>
+                <div class="form-row">
+                    <input type="password" id="passwordInput" placeholder="Password">
+                </div>
+                <div class="button-group">
+                    <button id="loginBtn">Login</button>
+                    <button id="registerBtn">Register</button>
+                </div>
+            </div>
+            <div id="authErrorDisplay" class="error-message"></div> <!-- Specifically for auth errors -->
+            <div class="button-group" style="margin-top: 8px;">
+                 <button id="logoutBtn" style="display:none;">Logout</button>
+            </div>
+        </div>
+
         <div class="button-group">
             <button id="startRecordingBtn">Start Recording</button>
             <button id="stopRecordingBtn" disabled>Stop Recording</button>
         </div>
         
         <div id="status" class="status" style="display: none;"></div>
-        <div id="error-message" class="error-message"></div>
+        <!-- <div id="error-message" class="error-message"></div> This was an old error message, replaced by more specific ones or use status. -->
         
         <div id="statsCard" class="stats-card" style="display: none;">
             <h2>Recording Stats</h2>
             <div class="stats-row">
                 <span class="stats-label">Session ID:</span>
-                <span id="sessionId" class="stats-value">-</span>
+                <span id="sessionIdDisplay" class="stats-value">-</span> <!-- Changed ID for clarity -->
             </div>
             <div class="stats-row">
                 <span class="stats-label">Interactions:</span>
-                <span id="interactionCount" class="stats-value">0</span>
+                <span id="interactionCountDisplay" class="stats-value">0</span> <!-- Changed ID for clarity -->
             </div>
             <div class="stats-row">
                 <span class="stats-label">Duration:</span>
-                <span id="duration" class="stats-value">0s</span>
+                <span id="durationDisplay" class="stats-value">0s</span> <!-- Changed ID for clarity -->
             </div>
         </div>
         
-        <!-- New settings section -->
         <div class="settings-section stats-card">
             <h2>Recording Settings</h2>
             <div class="setting-row">
@@ -359,14 +422,15 @@
             <h2>Server Configuration</h2>
             <form id="serverConfigForm" class="server-form">
                 <div class="form-row">
-                    <input type="text" id="serverIp" placeholder="Server IP" value="localhost" required>
-                    <input type="text" id="serverPort" placeholder="Port" value="3001" required>
+                    <input type="text" id="serverIpInput" placeholder="Server IP" value="localhost"> <!-- Changed ID -->
+                    <input type="text" id="serverPortInput" placeholder="Port" value="3001"> <!-- Changed ID -->
                 </div>
                 <button type="submit">Save Configuration</button>
             </form>
             <div class="server-status">
-                Status: <span id="serverStatus" class="status-indicator disconnected">Disconnected</span>
+                Status: <span id="serverStatusIndicator" class="status-indicator disconnected">Disconnected</span> <!-- Changed ID -->
             </div>
+            <div id="configErrorDisplay" class="error-message"></div> <!-- Specifically for config errors -->
         </div>
     </div>
     

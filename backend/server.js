@@ -9,6 +9,7 @@ const { PORT, CORS_CONFIG } = require('./config/constants');
 const browserRoutes = require('./routes/browserRoutes');
 const recorderRoutes = require('./routes/recorderRoutes');
 const extensionRoutes = require('./routes/extensionRoutes');
+const authRoutes = require('./routes/authRoutes');
 const db = require('./database');
 const serviceManager = require('./services/ServiceManager');
 
@@ -62,15 +63,198 @@ app.use((req, res, next) => {
 // Parse JSON bodies
 app.use(express.json({ limit: '50mb' })); // Increased limit for DOM content
 
+// Test route for debugging
+app.get('/api/test', (req, res) => {
+    console.log('[Backend] Test route accessed');
+    res.json({ success: true, message: 'Test route works!' });
+});
+
+// Direct save session route to bypass extensionRoutes mounting issues
+app.post('/api/recorder/saveSession', async (req, res) => {
+    console.log('[Backend] Direct saveSession route accessed');
+    try {
+        const { sessionId, userId, url, browser, metadata } = req.body;
+        
+        if (!sessionId || !userId) {
+            return res.status(400).json({
+                success: false,
+                error: 'Missing session ID or user ID'
+            });
+        }
+        
+        // Use ServiceManager to save session
+        await serviceManager.startRecording(
+            userId, 
+            sessionId, 
+            {
+                url,
+                browser,
+                ...metadata
+            }
+        );
+        
+        console.log(`[Backend] Saved recording session direct route: ${sessionId} for user: ${userId}`);
+        
+        return res.json({
+            success: true,
+            sessionId,
+            message: 'Recording session started'
+        });
+    } catch (error) {
+        console.error('[Backend] Error in direct save session route:', error);
+        return res.status(500).json({
+            success: false,
+            error: 'Error saving recording session: ' + error.message
+        });
+    }
+});
+
+// Direct DOM state save route to bypass extensionRoutes mounting issues
+app.post('/api/states', async (req, res) => {
+    console.log('[Backend] Direct states route accessed');
+    try {
+        const { 
+            stateId, 
+            sessionId, 
+            userId, 
+            url, 
+            pathname, 
+            timestamp, 
+            isNewState, 
+            stateNumber, 
+            hash, 
+            dom, 
+            metrics, 
+            title, 
+            loadingInfo, 
+            mutationInfo,
+            interactionInfo,
+            previousStateId,
+            previousHash
+        } = req.body;
+        
+        console.log(`[Backend] Received state: ${stateId}, hash: ${hash}, dom size: ${dom ? dom.length : 0} bytes`);
+        
+        if (!hash || !dom) {
+            return res.status(400).json({ error: 'Missing required fields: hash and dom are required' });
+        }
+        
+        const DOMState = require('./models/DOMState');
+        
+        // Check for duplicate state - but don't return early, just set isDuplicate flag
+        let isDuplicate = false;
+        let existingState = null;
+        
+        existingState = await DOMState.findOne({ hash, sessionId });
+        if (existingState) {
+            console.log(`[Backend] Duplicate state detected with hash: ${hash}, will save with isNewState=false`);
+            isDuplicate = true;
+        }
+        
+        // Get the current state number for this session
+        const lastState = await DOMState.findOne({ sessionId }).sort({ stateNumber: -1 });
+        const nextStateNumber = lastState ? lastState.stateNumber + 1 : 0;
+        
+        // Determine if this is a loading state from the stateId format
+        const isLoadingState = stateId && stateId.includes('loading_');
+        
+        // Create new state, even if it's a duplicate
+        const state = new DOMState({
+            stateId: stateId || `state_${Date.now()}`,
+            sessionId,
+            userId,
+            url: url || req.headers.origin || 'unknown',
+            pathname: pathname || new URL(url || req.headers.origin || 'http://unknown').pathname,
+            timestamp: timestamp || new Date(),
+            isNewState: isDuplicate ? false : (isNewState !== undefined ? isNewState : true), // Set to false for duplicates
+            stateNumber: stateNumber !== undefined ? stateNumber : nextStateNumber,
+            hash,
+            previousStateId: previousStateId,
+            previousHash: previousHash,
+            dom,
+            metrics: metrics || {
+                domSize: 0,
+                elementCount: 0,
+                formElements: 0,
+                visibleElements: 0
+            },
+            title: title || '',
+            // Add interaction info if present
+            interactionInfo: interactionInfo || null,
+            loadingInfo: {
+                isNavigation: loadingInfo?.isNavigation || false,
+                isInitial: loadingInfo?.isInitial || false,
+                isReload: loadingInfo?.isReload || false,
+                isFinalState: loadingInfo?.isFinalState || false,
+                isPartOfLoading: isLoadingState || loadingInfo?.isPartOfLoading || false,
+                loadTime: loadingInfo?.loadTime || 0,
+                resourceCount: loadingInfo?.resourceCount || 0,
+                resourceTypes: loadingInfo?.resourceTypes || {},
+                errorCount: loadingInfo?.errorCount || 0,
+                networkInfo: loadingInfo?.networkInfo || {},
+                timestamp: loadingInfo?.timestamp || new Date()
+            },
+            mutationInfo: {
+                count: mutationInfo?.count || 0,
+                types: mutationInfo?.types || [],
+                timestamp: mutationInfo?.timestamp || new Date()
+            }
+        });
+        
+        await state.save();
+        console.log(`[Backend] Saved ${isDuplicate ? 'duplicate' : 'new'} state direct route: ${state.stateId} (hash: ${hash}, stateNumber: ${state.stateNumber}, isLoading: ${isLoadingState})`);
+        
+        res.status(201).json({ 
+            stateId: state.stateId,
+            isDuplicate: isDuplicate
+        });
+    } catch (error) {
+        console.error('[Backend] Error saving state direct route:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Direct stop session route to bypass extensionRoutes mounting issues
+app.post('/api/recorder/stopSession', async (req, res) => {
+    console.log('[Backend] Direct stopSession route accessed');
+    try {
+        const { sessionId, userId, reason } = req.body;
+        
+        if (!sessionId) {
+            return res.status(400).json({
+                success: false,
+                error: 'Missing session ID'
+            });
+        }
+        
+        // Use ServiceManager to stop session
+        await serviceManager.stopRecording(sessionId, reason || 'user_stopped');
+        
+        console.log(`[Backend] Stopped recording session direct route: ${sessionId}`);
+        
+        return res.json({
+            success: true,
+            message: 'Recording session stopped'
+        });
+    } catch (error) {
+        console.error('[Backend] Error in direct stop session route:', error);
+        return res.status(500).json({
+            success: false,
+            error: 'Error stopping recording session: ' + error.message
+        });
+    }
+});
+
 // Health check endpoint
 app.get('/health', (req, res) => {
     res.json({ status: 'ok' });
 });
 
 // Mount routes
-app.use('/api', browserRoutes);
-app.use('/api', recorderRoutes);
-app.use('/api', extensionRoutes);
+app.use('/api/recorder', recorderRoutes);
+app.use('/api/browser', browserRoutes);
+app.use('/api/extension', extensionRoutes);
+app.use('/api/auth', authRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {

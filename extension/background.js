@@ -1328,6 +1328,13 @@ async function saveNonTransitionalEvents(data, sendResponse) {
           data.events.repeatedInputs.length);
       }
       
+      // Process oscillatingHovers events
+      if (data.events.oscillatingHovers && Array.isArray(data.events.oscillatingHovers)) {
+        cleanData.events.oscillatingHovers = data.events.oscillatingHovers;
+        console.log('[Extension] Processing oscillatingHovers events:', 
+          data.events.oscillatingHovers.length);
+      }
+      
       // Process inputFieldIdle events
       if (data.events.inputFieldIdle && Array.isArray(data.events.inputFieldIdle)) {
         cleanData.events.inputFieldIdle = data.events.inputFieldIdle;
@@ -1430,6 +1437,7 @@ async function saveNonTransitionalEvents(data, sendResponse) {
           copyText: cleanData.events.copyText?.length || 0,
           pasteWithoutTyping: cleanData.events.pasteWithoutTyping?.length || 0,
           repeatedInputs: cleanData.events.repeatedInputs?.length || 0,
+          oscillatingHovers: cleanData.events.oscillatingHovers?.length || 0,
           inputFieldIdle: cleanData.events.inputFieldIdle?.length || 0,
           heatmapLength: cleanData.events.mousemove?.heatmap?.length || 0,
           keyTyping: Object.keys(cleanData.events.keyTyping?.fields || {}).length || 0,

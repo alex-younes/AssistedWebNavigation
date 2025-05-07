@@ -75,10 +75,15 @@ const NonTransitionalEventsSchema = new mongoose.Schema({
       timestamp: Date
     }],
     oscillatingHovers: [{
-      elements: [String],
-      selectors: [String],
-      count: Number,
-      timestamp: Date
+      elements: [{
+        element: String,
+        selector: String, 
+        occurrences: Number
+      }],
+      totalSwitches: Number,
+      duration: Number,
+      timestamp: Date,
+      hoverPattern: [String]
     }],
     inactivity: [{
       duration: Number,

@@ -228,6 +228,7 @@ async function sendNonTransitionalEvents() {
         copyText: [...nonTransitionalEvents.copyText],
         pasteWithoutTyping: [...nonTransitionalEvents.pasteWithoutTyping],
         repeatedInputs: [...nonTransitionalEvents.repeatedInputs],
+        oscillatingHovers: [...nonTransitionalEvents.oscillatingHovers],
         inputFieldIdle: [...nonTransitionalEvents.inputFieldIdle]
     };
     
@@ -273,6 +274,7 @@ async function sendNonTransitionalEvents() {
         events.copyText.length === 0 &&
         events.pasteWithoutTyping.length === 0 &&
         events.repeatedInputs.length === 0 &&
+        events.oscillatingHovers.length === 0 &&
         events.inputFieldIdle.length === 0) {
         return;
     }
@@ -310,6 +312,11 @@ function scheduleNonTransitionalSend() {
 
 // Setup hover detection
 function setupHoverTracking() {
+    // Variables for tracking oscillating hovers
+    let hoverHistory = [];
+    const MAX_HOVER_HISTORY = 10;
+    const MIN_OSCILLATION_LENGTH = 2; // Reduced from 3 to 2 to require fewer hover events
+    
     // Track mouseover for hover
     document.addEventListener('mouseover', event => {
         if (!isRecording) return;
@@ -319,19 +326,31 @@ function setupHoverTracking() {
             const hoverEndTime = Date.now();
             const duration = hoverEndTime - hoverStartTime;
             
-            // Only record if hover was longer than 100ms to avoid tracking quick mouse movements
-            if (duration > 100) {
+            // Only record if hover was longer than 50ms to avoid tracking quick mouse movements
+            // Reduced from 100ms to 50ms to capture more hovers
+            if (duration > 50) {
                 const elementInfo = getElementInfo(currentHoverElement);
                 
-                nonTransitionalEvents.hover.push({
+                const hoverEvent = {
                     element: currentHoverElement.tagName.toLowerCase(),
                     selector: elementInfo.selector,
                     duration: duration,
                     timestamp: new Date(hoverStartTime)
-                });
+                };
+                
+                nonTransitionalEvents.hover.push(hoverEvent);
                 
                 // Update total hover time
                 nonTransitionalMetrics.totalHoverTime += duration;
+                
+                // Add to hover history for oscillation detection
+                hoverHistory.push(hoverEvent);
+                if (hoverHistory.length > MAX_HOVER_HISTORY) {
+                    hoverHistory.shift(); // Remove oldest hover
+                }
+                
+                // Check for oscillating hover patterns
+                detectOscillatingHovers(hoverHistory);
                 
                 scheduleNonTransitionalSend();
             }
@@ -350,19 +369,31 @@ function setupHoverTracking() {
             const hoverEndTime = Date.now();
             const duration = hoverEndTime - hoverStartTime;
             
-            // Only record if hover was longer than 100ms
-            if (duration > 100) {
+            // Only record if hover was longer than 50ms
+            // Reduced from 100ms to 50ms to capture more hovers
+            if (duration > 50) {
                 const elementInfo = getElementInfo(currentHoverElement);
                 
-                nonTransitionalEvents.hover.push({
+                const hoverEvent = {
                     element: currentHoverElement.tagName.toLowerCase(),
                     selector: elementInfo.selector,
                     duration: duration,
                     timestamp: new Date(hoverStartTime)
-                });
+                };
+                
+                nonTransitionalEvents.hover.push(hoverEvent);
                 
                 // Update total hover time
                 nonTransitionalMetrics.totalHoverTime += duration;
+                
+                // Add to hover history for oscillation detection
+                hoverHistory.push(hoverEvent);
+                if (hoverHistory.length > MAX_HOVER_HISTORY) {
+                    hoverHistory.shift(); // Remove oldest hover
+                }
+                
+                // Check for oscillating hover patterns
+                detectOscillatingHovers(hoverHistory);
                 
                 scheduleNonTransitionalSend();
             }
@@ -372,6 +403,81 @@ function setupHoverTracking() {
             hoverStartTime = null;
         }
     });
+    
+    // Function to detect oscillating hover patterns
+    function detectOscillatingHovers(history) {
+        console.log(`[DOM Tracker][DEBUG] Checking for oscillating hovers with history length: ${history.length}`);
+        
+        if (history.length < MIN_OSCILLATION_LENGTH) {
+            console.log(`[DOM Tracker][DEBUG] Not enough hover history (${history.length}) to detect pattern`);
+            return;
+        }
+        
+        // Check the most recent hovers to detect oscillation pattern A->B->A->B...
+        const recentHovers = history.slice(-6); // Look at the last 6 hovers
+        console.log(`[DOM Tracker][DEBUG] Recent hover selectors: ${recentHovers.map(h => h.selector).join(' -> ')}`);
+        
+        // Map of selectors to their indices in the hover sequence
+        const selectorIndices = {};
+        recentHovers.forEach((hover, index) => {
+            if (!selectorIndices[hover.selector]) {
+                selectorIndices[hover.selector] = [];
+            }
+            selectorIndices[hover.selector].push(index);
+        });
+        
+        console.log(`[DOM Tracker][DEBUG] Selector occurrences: ${JSON.stringify(selectorIndices)}`);
+        
+        // Get selectors that appeared multiple times
+        const oscillatingSelectors = Object.keys(selectorIndices).filter(
+            selector => selectorIndices[selector].length >= 2
+        );
+        
+        console.log(`[DOM Tracker][DEBUG] Potential oscillating selectors: ${oscillatingSelectors.join(', ')}`);
+        
+        // Check if we have at least 2 elements involved in oscillation
+        if (oscillatingSelectors.length >= 2) {
+            // Look for alternating pattern between any 2 or 3 elements
+            const startTime = recentHovers[0].timestamp;
+            const endTime = recentHovers[recentHovers.length - 1].timestamp;
+            const totalDuration = endTime - startTime;
+            const totalSwitches = recentHovers.length - 1;
+            
+            // Make time threshold more permissive - allow up to 5 seconds between switches
+            const avgTimeBetweenSwitches = totalDuration / totalSwitches;
+            console.log(`[DOM Tracker][DEBUG] Avg time between switches: ${avgTimeBetweenSwitches}ms`);
+            
+            if (avgTimeBetweenSwitches < 5000) { // Increased from 2000ms to 5000ms
+                // Extract the segments that form the oscillation pattern
+                const segments = oscillatingSelectors.map(selector => {
+                    const hoverForSelector = recentHovers.find(h => h.selector === selector);
+                    return {
+                        element: hoverForSelector.element,
+                        selector: selector,
+                        occurrences: selectorIndices[selector].length
+                    };
+                });
+                
+                // Create oscillation event
+                nonTransitionalEvents.oscillatingHovers.push({
+                    elements: segments,
+                    totalSwitches: totalSwitches,
+                    duration: totalDuration,
+                    timestamp: startTime,
+                    hoverPattern: recentHovers.map(h => h.selector)
+                });
+                
+                console.log(`[DOM Tracker] Oscillating hover pattern detected between ${oscillatingSelectors.join(' and ')}`);
+                console.log(`[DOM Tracker] Total switches: ${totalSwitches}, duration: ${totalDuration}ms`);
+                
+                scheduleNonTransitionalSend();
+            } else {
+                console.log(`[DOM Tracker][DEBUG] Switches too slow (${avgTimeBetweenSwitches}ms) to be considered oscillating`);
+            }
+        } else {
+            console.log(`[DOM Tracker][DEBUG] Not enough repeating elements to detect oscillation`);
+        }
+    }
 }
 
 // Setup mouse movement tracking

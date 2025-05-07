@@ -220,6 +220,17 @@ const db = {
     try {
       const NonTransitionalEvents = require('./models/NonTransitionalEvents');
       
+      // Log all incoming event types and counts
+      console.log(`[Database] Received non-transitional events for state ${stateId}:`,
+        Object.keys(eventsData.events || {}).map(type => 
+          `${type}: ${Array.isArray(eventsData.events[type]) ? 
+            eventsData.events[type].length : 
+            (type === 'keyTyping' ? 
+              (eventsData.events[type]?.fields ? Object.keys(eventsData.events[type].fields).length : 0) : 
+              'object')}`
+        ).join(', ')
+      );
+      
       // Try to find existing document
       let document = await NonTransitionalEvents.findOne({ stateId, sessionId });
       
@@ -232,12 +243,17 @@ const db = {
           events: {}, // Will be populated in the update
           metrics: {}  // Will be populated in the update
         });
+        console.log(`[Database] Created new non-transitional events document for state ${stateId}`);
+      } else {
+        console.log(`[Database] Found existing non-transitional events document for state ${stateId}`);
       }
       
       // Update the events and metrics based on the incoming data
       // This uses a deep merge approach for complex nested objects
       if (eventsData.events) {
         for (const [eventType, eventData] of Object.entries(eventsData.events)) {
+          console.log(`[Database] Processing event type: ${eventType}`);
+          
           // Special case for mousemove with 2D arrays that need careful handling
           if (eventType === 'mousemove' && typeof eventData === 'object') {
             if (!document.events.mousemove) {
@@ -313,6 +329,7 @@ const db = {
             if (!document.events[eventType]) {
               document.events[eventType] = [];
             }
+            console.log(`[Database] Adding ${eventData.length} items to ${eventType} array`);
             document.events[eventType].push(...eventData);
           } 
           else if (typeof eventData === 'object') {
@@ -329,16 +346,20 @@ const db = {
                 }
                 // Regular arrays can use push
                 document.events[eventType][key].push(...value);
+                console.log(`[Database] Added ${value.length} items to ${eventType}.${key} array`);
               } else if (typeof value === 'number' && document.events[eventType][key]) {
                 document.events[eventType][key] += value;
+                console.log(`[Database] Updated numeric value for ${eventType}.${key}`);
               } else {
                 document.events[eventType][key] = value;
+                console.log(`[Database] Set value for ${eventType}.${key}`);
               }
             }
           } 
           else {
             // For simple values, just replace
             document.events[eventType] = eventData;
+            console.log(`[Database] Set simple value for ${eventType}`);
           }
         }
       }
@@ -369,7 +390,7 @@ const db = {
       document.lastUpdated = new Date();
       
       await document.save();
-      console.log(`[Database] Updated non-transitional events for state: ${stateId}`);
+      console.log(`[Database] Saved non-transitional events for state: ${stateId} with event types: ${Object.keys(document.events).join(', ')}`);
       
       return document;
     } catch (error) {

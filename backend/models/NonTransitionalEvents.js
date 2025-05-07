@@ -45,7 +45,8 @@ const NonTransitionalEventsSchema = new mongoose.Schema({
     },
     keyTypingCadence: [{
       field: String,
-      cadence: [Number], // ms between keypresses
+      key: String,
+      timeSinceLast: Number,
       timestamp: Date
     }],
     keydownWithoutSubmit: [{
@@ -81,7 +82,8 @@ const NonTransitionalEventsSchema = new mongoose.Schema({
     }],
     inactivity: [{
       duration: Number,
-      timestamp: Date
+      timestamp: Date,
+      trigger: String
     }],
     readingTime: [{
       duration: Number,

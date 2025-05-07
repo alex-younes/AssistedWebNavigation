@@ -1286,6 +1286,41 @@ async function saveNonTransitionalEvents(data, sendResponse) {
         cleanData.events.escapeBackspace = data.events.escapeBackspace;
       }
       
+      // Process keyTypingCadence events - NEW
+      if (data.events.keyTypingCadence && Array.isArray(data.events.keyTypingCadence)) {
+        cleanData.events.keyTypingCadence = data.events.keyTypingCadence;
+        console.log('[Extension] Processing keyTypingCadence events:', 
+          data.events.keyTypingCadence.length);
+      }
+      
+      // Process tabNavigation events - NEW
+      if (data.events.tabNavigation && Array.isArray(data.events.tabNavigation)) {
+        cleanData.events.tabNavigation = data.events.tabNavigation;
+        console.log('[Extension] Processing tabNavigation events:', 
+          data.events.tabNavigation.length);
+      }
+      
+      // Process repeatedClicks events - NEW
+      if (data.events.repeatedClicks && Array.isArray(data.events.repeatedClicks)) {
+        cleanData.events.repeatedClicks = data.events.repeatedClicks;
+        console.log('[Extension] Processing repeatedClicks events:', 
+          data.events.repeatedClicks.length);
+      }
+      
+      // Process copyText events - NEW
+      if (data.events.copyText && Array.isArray(data.events.copyText)) {
+        cleanData.events.copyText = data.events.copyText;
+        console.log('[Extension] Processing copyText events:', 
+          data.events.copyText.length);
+      }
+      
+      // Process pasteWithoutTyping events - NEW
+      if (data.events.pasteWithoutTyping && Array.isArray(data.events.pasteWithoutTyping)) {
+        cleanData.events.pasteWithoutTyping = data.events.pasteWithoutTyping;
+        console.log('[Extension] Processing pasteWithoutTyping events:', 
+          data.events.pasteWithoutTyping.length);
+      }
+      
       // Special handling for mousemove data
       if (data.events.mousemove) {
         // Initialize with default numeric values to prevent NaN
@@ -1365,18 +1400,24 @@ async function saveNonTransitionalEvents(data, sendResponse) {
     const url = getApiUrl('nontransitional-events');
     console.log('[Extension] Non-transitional events API URL:', url);
     
-    // Log the cleaned data for debugging
-    console.log('[Extension] Cleaned non-transitional events data:', 
+    // Log the detailed cleaned data for debugging
+    console.log('[Extension] Sending non-transitional events with data:', 
       JSON.stringify({
-        hover: cleanData.events.hover?.length || 0,
-        escapeBackspace: cleanData.events.escapeBackspace?.length || 0,
-        heatmapLength: cleanData.events.mousemove?.heatmap?.length || 0,
-        keyTyping: Object.keys(cleanData.events.keyTyping?.fields || {}).length || 0,
-        inactivity: cleanData.events.inactivity?.length || 0,
-        dataTypes: {
-          mousemove: typeof cleanData.events.mousemove,
-          totalDistance: cleanData.events.mousemove?.totalDistance,
-          averageSpeed: cleanData.events.mousemove?.averageSpeed
+        stateId: cleanData.stateId,
+        sessionId: cleanData.sessionId,
+        userId: cleanData.userId,
+        eventTypes: Object.keys(cleanData.events),
+        eventCounts: {
+          hover: cleanData.events.hover?.length || 0,
+          escapeBackspace: cleanData.events.escapeBackspace?.length || 0,
+          keyTypingCadence: cleanData.events.keyTypingCadence?.length || 0,
+          tabNavigation: cleanData.events.tabNavigation?.length || 0,
+          repeatedClicks: cleanData.events.repeatedClicks?.length || 0,
+          copyText: cleanData.events.copyText?.length || 0,
+          pasteWithoutTyping: cleanData.events.pasteWithoutTyping?.length || 0,
+          heatmapLength: cleanData.events.mousemove?.heatmap?.length || 0,
+          keyTyping: Object.keys(cleanData.events.keyTyping?.fields || {}).length || 0,
+          inactivity: cleanData.events.inactivity?.length || 0
         }
       })
     );

@@ -35,7 +35,12 @@ let nonTransitionalEvents = {
         fields: {}
     },
     inactivity: [],
-    escapeBackspace: []
+    escapeBackspace: [],
+    keyTypingCadence: [],
+    tabNavigation: [],
+    repeatedClicks: [],
+    copyText: [],
+    pasteWithoutTyping: []
 };
 
 // Metrics tracking
@@ -65,6 +70,10 @@ let idleThreshold = 2000; // 2 seconds of no movement = idle
 let viewportHeight = window.innerHeight;
 let viewportWidth = window.innerWidth;
 let scrollPosition = { x: window.scrollX, y: window.scrollY };
+
+// --- Key Typing Cadence Tracking ---
+let keyCadenceTimers = {};
+let lastKeyTime = {};
 
 // Generate heatmap grid - 10x10 grid of the viewport
 function initializeHeatmap() {
@@ -139,7 +148,12 @@ async function sendNonTransitionalEvents() {
             fields: {...nonTransitionalEvents.keyTyping.fields}
         },
         inactivity: [...nonTransitionalEvents.inactivity],
-        escapeBackspace: [...nonTransitionalEvents.escapeBackspace]
+        escapeBackspace: [...nonTransitionalEvents.escapeBackspace],
+        keyTypingCadence: [...nonTransitionalEvents.keyTypingCadence],
+        tabNavigation: [...nonTransitionalEvents.tabNavigation],
+        repeatedClicks: [...nonTransitionalEvents.repeatedClicks],
+        copyText: [...nonTransitionalEvents.copyText],
+        pasteWithoutTyping: [...nonTransitionalEvents.pasteWithoutTyping]
     };
     
     const metrics = {...nonTransitionalMetrics};
@@ -156,7 +170,12 @@ async function sendNonTransitionalEvents() {
             fields: {}
         },
         inactivity: [],
-        escapeBackspace: []
+        escapeBackspace: [],
+        keyTypingCadence: [],
+        tabNavigation: [],
+        repeatedClicks: [],
+        copyText: [],
+        pasteWithoutTyping: []
     };
     
     // Only reset cumulative metrics that should be per-batch
@@ -166,7 +185,12 @@ async function sendNonTransitionalEvents() {
     if (events.hover.length === 0 && 
         Object.keys(events.keyTyping.fields).length === 0 &&
         events.inactivity.length === 0 &&
-        events.escapeBackspace.length === 0) {
+        events.escapeBackspace.length === 0 &&
+        events.keyTypingCadence.length === 0 &&
+        events.tabNavigation.length === 0 &&
+        events.repeatedClicks.length === 0 &&
+        events.copyText.length === 0 &&
+        events.pasteWithoutTyping.length === 0) {
         return;
     }
     
@@ -294,10 +318,11 @@ function setupMouseMoveTracking() {
             const idleDuration = idleEndTime - idleStartTime;
             
             // Record idle period if it was longer than the threshold
-            if (idleDuration >= idleThreshold) {
+            if (idleDuration >= idleThreshold) { // idleThreshold is 2000ms (2 seconds)
                 nonTransitionalEvents.inactivity.push({
                     duration: idleDuration,
-                    timestamp: new Date(idleStartTime)
+                    timestamp: new Date(idleStartTime),
+                    trigger: "mouse_idle_2s" // Added trigger
                 });
                 
                 // Update idle metrics
@@ -379,6 +404,62 @@ function setupKeyboardTracking() {
         if (!isRecording) return;
         
         const element = event.target;
+        const key = event.key;
+        
+        // Key typing cadence tracking
+        const now = Date.now();
+        const cadenceFieldId = element && (element.tagName.toLowerCase() === 'input' || 
+                                  element.tagName.toLowerCase() === 'textarea') 
+                      ? (element.id || element.name || getElementPath(element))
+                      : 'document';
+        
+        // Track the cadence (time between keystrokes)
+        if (lastKeyTime[cadenceFieldId]) {
+            const timeBetweenKeystrokes = now - lastKeyTime[cadenceFieldId];
+            
+            // Only record if the time is reasonable (between 10ms and 5000ms)
+            if (timeBetweenKeystrokes >= 10 && timeBetweenKeystrokes <= 5000) {
+                nonTransitionalEvents.keyTypingCadence.push({
+                    field: cadenceFieldId,
+                    key: key.length === 1 ? 'key' : key, // Don't record actual letter for privacy, only special keys
+                    timeSinceLast: timeBetweenKeystrokes,
+                    timestamp: new Date()
+                });
+                
+                scheduleNonTransitionalSend();
+            }
+        }
+        
+        // Update the last key time for this field
+        lastKeyTime[cadenceFieldId] = now;
+        
+        // Clear any existing cadence timer for this field
+        if (keyCadenceTimers[cadenceFieldId]) {
+            clearTimeout(keyCadenceTimers[cadenceFieldId]);
+        }
+        
+        // Set a timer to detect end of typing sequence
+        keyCadenceTimers[cadenceFieldId] = setTimeout(() => {
+            // End of typing sequence detected after timeout with no keys
+            if (lastKeyTime[cadenceFieldId]) {
+                const endTime = Date.now();
+                const typingDuration = endTime - lastKeyTime[cadenceFieldId];
+                
+                // Only add end marker if longer than threshold
+                if (typingDuration > 500) {
+                    nonTransitionalEvents.keyTypingCadence.push({
+                        field: cadenceFieldId,
+                        key: 'sequence_end',
+                        timeSinceLast: typingDuration,
+                        timestamp: new Date()
+                    });
+                    scheduleNonTransitionalSend();
+                }
+                
+                // Reset tracking for this field
+                delete lastKeyTime[cadenceFieldId];
+            }
+        }, 1500); // 1.5 second timeout to detect end of typing sequence
         
         // Track Escape and Backspace keys for all elements
         if (event.key === 'Escape' || event.key === 'Backspace') {
@@ -412,19 +493,19 @@ function setupKeyboardTracking() {
         }
         
         // Get field identifier
-        const fieldId = element.id || element.name || getElementPath(element);
+        const inputFieldId = element.id || element.name || getElementPath(element);
         
         // Initialize field in keyTyping if needed
-        if (!nonTransitionalEvents.keyTyping.fields[fieldId]) {
-            nonTransitionalEvents.keyTyping.fields[fieldId] = {
+        if (!nonTransitionalEvents.keyTyping.fields[inputFieldId]) {
+            nonTransitionalEvents.keyTyping.fields[inputFieldId] = {
                 keystrokes: 0,
                 lastUpdated: new Date()
             };
         }
         
         // Increment keystroke count
-        nonTransitionalEvents.keyTyping.fields[fieldId].keystrokes++;
-        nonTransitionalEvents.keyTyping.fields[fieldId].lastUpdated = new Date();
+        nonTransitionalEvents.keyTyping.fields[inputFieldId].keystrokes++;
+        nonTransitionalEvents.keyTyping.fields[inputFieldId].lastUpdated = new Date();
         
         // Update metrics
         nonTransitionalMetrics.totalKeystrokes++;
@@ -466,7 +547,8 @@ function setupInactivityTracking() {
                 
                 nonTransitionalEvents.inactivity.push({
                     duration: inactiveDuration,
-                    timestamp: new Date(lastActivityTime)
+                    timestamp: new Date(lastActivityTime),
+                    trigger: "activity_resumed" // Added trigger
                 });
                 
                 scheduleNonTransitionalSend();
@@ -486,7 +568,8 @@ function setupInactivityTracking() {
                     // We trigger send here to ensure inactivity is recorded even if user never returns
                     nonTransitionalEvents.inactivity.push({
                         duration: inactiveTime,
-                        timestamp: new Date(lastActivityTime)
+                        timestamp: new Date(lastActivityTime),
+                        trigger: "timeout_30s" // Added trigger
                     });
                     
                     scheduleNonTransitionalSend();
@@ -503,6 +586,10 @@ function setupNonTransitionalTracking() {
     setupKeyboardTracking();
     setupClickTracking();
     setupInactivityTracking();
+    setupTabNavigationTracking();
+    setupRepeatedClicksTracking();
+    setupCopyTextTracking();
+    setupPasteTracking();
     
     // Initial timer for sending events
     nonTransitionalSendTimer = setTimeout(() => {
@@ -511,6 +598,99 @@ function setupNonTransitionalTracking() {
     }, nonTransitionalBatchInterval);
     
     console.log('[DOM Tracker] Non-transitional event tracking initialized');
+}
+
+// Setup tab navigation tracking
+function setupTabNavigationTracking() {
+    let tabNavSequence = [];
+    document.addEventListener('keydown', event => {
+        if (!isRecording) return;
+        if (event.key === 'Tab') {
+            const element = document.activeElement;
+            const fieldId = element ? (element.id || element.name || getElementPath(element)) : '';
+            tabNavSequence.push(fieldId);
+            // If sequence gets long or after 2s pause, record
+            clearTimeout(tabNavSequence._timeout);
+            if (tabNavSequence.length >= 5) {
+                nonTransitionalEvents.tabNavigation.push({
+                    sequence: [...tabNavSequence],
+                    timestamp: new Date()
+                });
+                tabNavSequence = [];
+                scheduleNonTransitionalSend();
+            } else {
+                tabNavSequence._timeout = setTimeout(() => {
+                    if (tabNavSequence.length > 0) {
+                        nonTransitionalEvents.tabNavigation.push({
+                            sequence: [...tabNavSequence],
+                            timestamp: new Date()
+                        });
+                        tabNavSequence = [];
+                        scheduleNonTransitionalSend();
+                    }
+                }, 2000);
+            }
+        }
+    });
+}
+
+// Setup repeated clicks tracking
+function setupRepeatedClicksTracking() {
+    let lastClick = { selector: '', time: 0, count: 0 };
+    document.addEventListener('click', event => {
+        if (!isRecording) return;
+        const element = event.target;
+        const selector = getElementPath(element);
+        const now = Date.now();
+        if (lastClick.selector === selector && now - lastClick.time < 1000) {
+            lastClick.count++;
+        } else {
+            if (lastClick.count > 1) {
+                nonTransitionalEvents.repeatedClicks.push({
+                    element: element.tagName.toLowerCase(),
+                    selector: lastClick.selector,
+                    count: lastClick.count,
+                    timestamp: new Date(lastClick.time)
+                });
+                scheduleNonTransitionalSend();
+            }
+            lastClick = { selector, time: now, count: 1 };
+        }
+    });
+}
+
+// Setup copy text tracking
+function setupCopyTextTracking() {
+    document.addEventListener('copy', event => {
+        if (!isRecording) return;
+        const selection = window.getSelection();
+        if (selection && selection.toString().length > 0) {
+            nonTransitionalEvents.copyText.push({
+                text: selection.toString(),
+                source: document.activeElement ? getElementPath(document.activeElement) : '',
+                timestamp: new Date()
+            });
+            scheduleNonTransitionalSend();
+        }
+    });
+}
+
+// Setup paste tracking
+function setupPasteTracking() {
+    document.addEventListener('paste', event => {
+        if (!isRecording) return;
+        const element = event.target;
+        if (!element || (element.tagName.toLowerCase() !== 'input' && element.tagName.toLowerCase() !== 'textarea')) return;
+        const fieldId = element.id || element.name || getElementPath(element);
+        
+        // Always record paste events as non-transitional events
+        nonTransitionalEvents.pasteWithoutTyping.push({
+            field: fieldId,
+            content: (event.clipboardData ? event.clipboardData.getData('text') : ''),
+            timestamp: new Date()
+        });
+        scheduleNonTransitionalSend();
+    });
 }
 
 // Variables for idle detection
@@ -1900,4 +2080,5 @@ async function captureAndSendState(stateData, flags = {}) {
         console.error(`[DOM Tracker] Error in captureAndSendState #${sequenceNumber}:`, error);
         return null;
     }
-} 
+}
+

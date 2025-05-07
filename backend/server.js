@@ -258,6 +258,25 @@ app.post('/api/nontransitional-events', async (req, res) => {
             });
         }
         
+        // Log event types being received
+        console.log(`[Backend] Received non-transitional events for stateId ${stateId} with types:`, 
+            Object.keys(events || {}).join(', '));
+        
+        // Log counts for each event type
+        if (events) {
+            const eventCounts = {};
+            for (const [key, value] of Object.entries(events)) {
+                if (Array.isArray(value)) {
+                    eventCounts[key] = value.length;
+                } else if (key === 'keyTyping' && value.fields) {
+                    eventCounts[key] = Object.keys(value.fields).length;
+                } else if (typeof value === 'object') {
+                    eventCounts[key] = 'object';
+                }
+            }
+            console.log(`[Backend] Event counts:`, JSON.stringify(eventCounts));
+        }
+        
         // Use database service to update non-transitional events
         const result = await db.updateNonTransitionalEvents(stateId, sessionId, userId, {
             events,

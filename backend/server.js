@@ -245,6 +245,40 @@ app.post('/api/recorder/stopSession', async (req, res) => {
     }
 });
 
+// Direct non-transitional events route
+app.post('/api/nontransitional-events', async (req, res) => {
+    console.log('[Backend] Direct non-transitional events route accessed');
+    try {
+        const { stateId, sessionId, userId, events, metrics } = req.body;
+        
+        if (!stateId || !sessionId || !userId) {
+            return res.status(400).json({
+                success: false,
+                error: 'Missing required fields: stateId, sessionId, or userId'
+            });
+        }
+        
+        // Use database service to update non-transitional events
+        const result = await db.updateNonTransitionalEvents(stateId, sessionId, userId, {
+            events,
+            metrics
+        });
+        
+        console.log(`[Backend] Updated non-transitional events for state: ${stateId}`);
+        
+        return res.json({
+            success: true,
+            message: 'Non-transitional events saved successfully'
+        });
+    } catch (error) {
+        console.error('[Backend] Error saving non-transitional events:', error);
+        return res.status(500).json({
+            success: false,
+            error: 'Error saving non-transitional events: ' + error.message
+        });
+    }
+});
+
 // Health check endpoint
 app.get('/health', (req, res) => {
     res.json({ status: 'ok' });

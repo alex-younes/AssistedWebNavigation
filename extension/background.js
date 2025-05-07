@@ -1053,6 +1053,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       handleLogout(sendResponse);
       return true; // Indicates that the response will be sent asynchronously
       
+    case 'saveNonTransitionalEvents':
+      (async () => {
+        try {
+          // Pass the message directly rather than message.state since it already contains the needed data
+          await saveNonTransitionalEvents(message, sendResponse);
+        } catch (error) {
+          console.error('[Extension] Error saving non-transitional events:', error);
+          sendResponse({ success: false, error: error.message });
+        }
+      })();
+      return true;
+      
     default:
       sendResponse({ success: false, error: 'Unknown action' });
       return true;
@@ -1234,4 +1246,167 @@ async function refreshApiBaseUrl() {
 }
 
 // Call it once on load, and potentially before critical API calls if staleness is a concern.
-refreshApiBaseUrl(); 
+refreshApiBaseUrl();
+
+// Save non-transitional events via the API
+async function saveNonTransitionalEvents(data, sendResponse) {
+  try {
+    console.log('[Extension] Saving non-transitional events for state:', data.stateId);
+    
+    // Create a clean copy of the data with proper data types
+    const cleanData = {
+      stateId: data.stateId,
+      sessionId: data.sessionId,
+      userId: data.userId,
+      events: {},
+      metrics: {...data.metrics}
+    };
+    
+    // Only include event types that exist
+    if (data.events) {
+      // Process hover events
+      if (data.events.hover && Array.isArray(data.events.hover)) {
+        cleanData.events.hover = data.events.hover;
+      }
+      
+      // Process key typing events
+      if (data.events.keyTyping && data.events.keyTyping.fields) {
+        cleanData.events.keyTyping = {
+          fields: data.events.keyTyping.fields
+        };
+      }
+      
+      // Process inactivity events
+      if (data.events.inactivity && Array.isArray(data.events.inactivity)) {
+        cleanData.events.inactivity = data.events.inactivity;
+      }
+      
+      // Process escapeBackspace events
+      if (data.events.escapeBackspace && Array.isArray(data.events.escapeBackspace)) {
+        cleanData.events.escapeBackspace = data.events.escapeBackspace;
+      }
+      
+      // Special handling for mousemove data
+      if (data.events.mousemove) {
+        // Initialize with default numeric values to prevent NaN
+        cleanData.events.mousemove = {
+          totalDistance: 0,
+          averageSpeed: 0,
+          heatmap: []
+        };
+        
+        // Safely assign numeric values with defaults and validation
+        const totalDistance = parseFloat(data.events.mousemove.totalDistance);
+        cleanData.events.mousemove.totalDistance = isNaN(totalDistance) ? 0 : totalDistance;
+        
+        const averageSpeed = parseFloat(data.events.mousemove.averageSpeed);
+        cleanData.events.mousemove.averageSpeed = isNaN(averageSpeed) ? 0 : averageSpeed;
+        
+        // Handle heatmap - careful parsing if it's a string
+        if (data.events.mousemove.heatmap) {
+          if (typeof data.events.mousemove.heatmap === 'string') {
+            try {
+              const parsedHeatmap = JSON.parse(data.events.mousemove.heatmap);
+              if (Array.isArray(parsedHeatmap)) {
+                cleanData.events.mousemove.heatmap = parsedHeatmap.map(row => {
+                  if (Array.isArray(row)) {
+                    return row.map(val => {
+                      const num = parseFloat(val);
+                      return isNaN(num) ? 0 : num;
+                    });
+                  } else {
+                    return [];
+                  }
+                });
+              }
+            } catch (e) {
+              console.error('[Extension] Failed to parse heatmap string:', e);
+              cleanData.events.mousemove.heatmap = [];
+            }
+          } else if (Array.isArray(data.events.mousemove.heatmap)) {
+            // Make sure each row is an array of numbers
+            cleanData.events.mousemove.heatmap = data.events.mousemove.heatmap.map(row => {
+              if (Array.isArray(row)) {
+                return row.map(val => {
+                  const num = parseFloat(val);
+                  return isNaN(num) ? 0 : num;
+                });
+              } else if (typeof row === 'string') {
+                try {
+                  const parsed = JSON.parse(row);
+                  if (Array.isArray(parsed)) {
+                    return parsed.map(val => {
+                      const num = parseFloat(val);
+                      return isNaN(num) ? 0 : num;
+                    });
+                  }
+                } catch (e) {
+                  return [];
+                }
+              } else {
+                return [];
+              }
+            });
+          }
+        }
+      }
+    }
+    
+    // Ensure metrics are valid numbers
+    if (cleanData.metrics) {
+      for (const key in cleanData.metrics) {
+        if (typeof cleanData.metrics[key] === 'number' && isNaN(cleanData.metrics[key])) {
+          cleanData.metrics[key] = 0;
+        }
+      }
+    }
+    
+    // Construct the API endpoint
+    const url = getApiUrl('nontransitional-events');
+    console.log('[Extension] Non-transitional events API URL:', url);
+    
+    // Log the cleaned data for debugging
+    console.log('[Extension] Cleaned non-transitional events data:', 
+      JSON.stringify({
+        hover: cleanData.events.hover?.length || 0,
+        escapeBackspace: cleanData.events.escapeBackspace?.length || 0,
+        heatmapLength: cleanData.events.mousemove?.heatmap?.length || 0,
+        keyTyping: Object.keys(cleanData.events.keyTyping?.fields || {}).length || 0,
+        inactivity: cleanData.events.inactivity?.length || 0,
+        dataTypes: {
+          mousemove: typeof cleanData.events.mousemove,
+          totalDistance: cleanData.events.mousemove?.totalDistance,
+          averageSpeed: cleanData.events.mousemove?.averageSpeed
+        }
+      })
+    );
+    
+    // Make the API request
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(cleanData)
+    });
+    
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`Server error: ${response.status} - ${text}`);
+    }
+    
+    const responseData = await response.json();
+    console.log('[Extension] Non-transitional events saved successfully:', responseData);
+    
+    sendResponse({
+      success: true,
+      message: 'Non-transitional events saved'
+    });
+  } catch (error) {
+    console.error('[Extension] Error saving non-transitional events:', error);
+    sendResponse({
+      success: false,
+      error: error.message
+    });
+  }
+} 

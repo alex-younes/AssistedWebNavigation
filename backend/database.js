@@ -212,6 +212,192 @@ const db = {
     });
     
     return stateGroups;
+  },
+
+  // Add database methods for non-transitional events
+  // Create or update non-transitional events for a state
+  async updateNonTransitionalEvents(stateId, sessionId, userId, eventsData) {
+    try {
+      const NonTransitionalEvents = require('./models/NonTransitionalEvents');
+      
+      // Try to find existing document
+      let document = await NonTransitionalEvents.findOne({ stateId, sessionId });
+      
+      if (!document) {
+        // Create new document if none exists
+        document = new NonTransitionalEvents({
+          stateId,
+          sessionId,
+          userId,
+          events: {}, // Will be populated in the update
+          metrics: {}  // Will be populated in the update
+        });
+      }
+      
+      // Update the events and metrics based on the incoming data
+      // This uses a deep merge approach for complex nested objects
+      if (eventsData.events) {
+        for (const [eventType, eventData] of Object.entries(eventsData.events)) {
+          // Special case for mousemove with 2D arrays that need careful handling
+          if (eventType === 'mousemove' && typeof eventData === 'object') {
+            if (!document.events.mousemove) {
+              document.events.mousemove = {
+                heatmap: [],
+                pathPoints: [],
+                totalDistance: 0,
+                averageSpeed: 0
+              };
+            }
+            
+            // Handle pathPoints separately (2D array)
+            if (eventData.pathPoints && Array.isArray(eventData.pathPoints)) {
+              // Ensure pathPoints exists on document
+              if (!document.events.mousemove.pathPoints) {
+                document.events.mousemove.pathPoints = [];
+              }
+              
+              // Add each point set as its own array
+              eventData.pathPoints.forEach(pointSet => {
+                if (Array.isArray(pointSet)) {
+                  // Ensure each item is a number
+                  const numericPointSet = pointSet.map(Number);
+                  document.events.mousemove.pathPoints.push(numericPointSet);
+                }
+              });
+            }
+            
+            // Handle heatmap separately (2D array)
+            if (eventData.heatmap && Array.isArray(eventData.heatmap)) {
+              // Ensure heatmap exists on document
+              if (!document.events.mousemove.heatmap) {
+                document.events.mousemove.heatmap = [];
+              }
+              
+              // If the document heatmap is empty, initialize it
+              if (document.events.mousemove.heatmap.length === 0 && eventData.heatmap.length > 0) {
+                for (let i = 0; i < eventData.heatmap.length; i++) {
+                  if (Array.isArray(eventData.heatmap[i])) {
+                    document.events.mousemove.heatmap[i] = [...eventData.heatmap[i].map(Number)];
+                  }
+                }
+              } 
+              // Otherwise update the existing heatmap by adding values
+              else if (document.events.mousemove.heatmap.length > 0 && eventData.heatmap.length > 0) {
+                for (let i = 0; i < Math.min(document.events.mousemove.heatmap.length, eventData.heatmap.length); i++) {
+                  const docRow = document.events.mousemove.heatmap[i];
+                  const newRow = eventData.heatmap[i];
+                  
+                  if (Array.isArray(docRow) && Array.isArray(newRow)) {
+                    for (let j = 0; j < Math.min(docRow.length, newRow.length); j++) {
+                      docRow[j] += Number(newRow[j] || 0);
+                    }
+                  }
+                }
+              }
+            }
+            
+            // Handle simple numeric properties
+            if (typeof eventData.totalDistance === 'number') {
+              document.events.mousemove.totalDistance += eventData.totalDistance;
+            }
+            
+            if (typeof eventData.averageSpeed === 'number') {
+              // Calculate new average based on current and new values
+              const oldSpeed = document.events.mousemove.averageSpeed || 0;
+              document.events.mousemove.averageSpeed = (oldSpeed + eventData.averageSpeed) / 2;
+            }
+          } 
+          // Regular handling for other event types
+          else if (Array.isArray(eventData)) {
+            // If it's an array (like hover events), push new items
+            if (!document.events[eventType]) {
+              document.events[eventType] = [];
+            }
+            document.events[eventType].push(...eventData);
+          } 
+          else if (typeof eventData === 'object') {
+            // For objects with standard structure
+            if (!document.events[eventType]) {
+              document.events[eventType] = {};
+            }
+            
+            // Process each property
+            for (const [key, value] of Object.entries(eventData)) {
+              if (Array.isArray(value)) {
+                if (!document.events[eventType][key]) {
+                  document.events[eventType][key] = [];
+                }
+                // Regular arrays can use push
+                document.events[eventType][key].push(...value);
+              } else if (typeof value === 'number' && document.events[eventType][key]) {
+                document.events[eventType][key] += value;
+              } else {
+                document.events[eventType][key] = value;
+              }
+            }
+          } 
+          else {
+            // For simple values, just replace
+            document.events[eventType] = eventData;
+          }
+        }
+      }
+      
+      // Update metrics
+      if (eventsData.metrics) {
+        for (const [metricName, metricValue] of Object.entries(eventsData.metrics)) {
+          if (typeof metricValue === 'number') {
+            // For cumulative metrics, add to existing value
+            if (['totalIdleTime', 'totalMouseDistance', 'totalKeystrokes', 'totalClicks', 'totalHoverTime'].includes(metricName)) {
+              document.metrics[metricName] = (document.metrics[metricName] || 0) + metricValue;
+            } 
+            // For max metrics, take the max value
+            else if (['longestIdlePeriod'].includes(metricName)) {
+              document.metrics[metricName] = Math.max(document.metrics[metricName] || 0, metricValue);
+            }
+            // For other metrics, just replace if higher
+            else {
+              document.metrics[metricName] = metricValue;
+            }
+          } else {
+            document.metrics[metricName] = metricValue;
+          }
+        }
+      }
+      
+      // Update lastUpdated timestamp
+      document.lastUpdated = new Date();
+      
+      await document.save();
+      console.log(`[Database] Updated non-transitional events for state: ${stateId}`);
+      
+      return document;
+    } catch (error) {
+      console.error(`[Database] Error updating non-transitional events for state ${stateId}:`, error);
+      throw error;
+    }
+  },
+
+  // Get non-transitional events for a state
+  async getNonTransitionalEvents(stateId, sessionId) {
+    try {
+      const NonTransitionalEvents = require('./models/NonTransitionalEvents');
+      return await NonTransitionalEvents.findOne({ stateId, sessionId });
+    } catch (error) {
+      console.error(`[Database] Error getting non-transitional events for state ${stateId}:`, error);
+      throw error;
+    }
+  },
+
+  // Get all non-transitional events for a session
+  async getNonTransitionalEventsBySession(sessionId) {
+    try {
+      const NonTransitionalEvents = require('./models/NonTransitionalEvents');
+      return await NonTransitionalEvents.find({ sessionId }).sort({ createdAt: 1 });
+    } catch (error) {
+      console.error(`[Database] Error getting non-transitional events for session ${sessionId}:`, error);
+      throw error;
+    }
   }
 };
 

@@ -22,6 +22,500 @@ let lastStateHash = null; // Track the last state hash
 let stateSequenceNumber = 0; // Track the sequence of state captures
 let pendingStateSaves = {}; // Track in-progress state saves
 
+// =============== NON-TRANSITIONAL EVENT TRACKING ===============
+// Variables for tracking non-transitional events
+let nonTransitionalEvents = {
+    hover: [],
+    mousemove: {
+        heatmap: [],
+        totalDistance: 0,
+        averageSpeed: 0
+    },
+    keyTyping: {
+        fields: {}
+    },
+    inactivity: [],
+    escapeBackspace: []
+};
+
+// Metrics tracking
+let nonTransitionalMetrics = {
+    totalIdleTime: 0,
+    longestIdlePeriod: 0,
+    dwellTimeBeforeAction: 0,
+    totalMouseDistance: 0,
+    totalKeystrokes: 0,
+    totalClicks: 0,
+    totalHoverTime: 0
+};
+
+// Throttling and batching variables
+let lastNonTransitionalSendTime = 0;
+let nonTransitionalBatchInterval = 2000; // Send every 2 seconds
+let nonTransitionalSendTimer = null;
+
+// Variables for tracking hover state
+let currentHoverElement = null;
+let hoverStartTime = null;
+let lastMousePosition = { x: 0, y: 0 };
+let lastMouseMoveTime = 0;
+let idleStartTime = null;
+let isIdle = false;
+let idleThreshold = 2000; // 2 seconds of no movement = idle
+let viewportHeight = window.innerHeight;
+let viewportWidth = window.innerWidth;
+let scrollPosition = { x: window.scrollX, y: window.scrollY };
+
+// Generate heatmap grid - 10x10 grid of the viewport
+function initializeHeatmap() {
+    const heatmap = [];
+    const gridSize = 10;
+    for (let i = 0; i < gridSize; i++) {
+        heatmap[i] = [];
+        for (let j = 0; j < gridSize; j++) {
+            heatmap[i][j] = 0;
+        }
+    }
+    return heatmap;
+}
+
+// Convert absolute mouse position to heatmap grid position
+function positionToHeatmapCoord(x, y) {
+    const gridSize = 10;
+    // Adjust for scroll position
+    const adjustedX = x + scrollPosition.x;
+    const adjustedY = y + scrollPosition.y;
+    
+    // Calculate grid position
+    const gridX = Math.floor((adjustedX / document.documentElement.scrollWidth) * gridSize);
+    const gridY = Math.floor((adjustedY / document.documentElement.scrollHeight) * gridSize);
+    
+    // Ensure values are within bounds
+    return {
+        x: Math.max(0, Math.min(gridX, 9)),
+        y: Math.max(0, Math.min(gridY, 9))
+    };
+}
+
+// Calculate distance between two points
+function calculateDistance(p1, p2) {
+    // Check for invalid inputs
+    if (!p1 || !p2 || 
+        typeof p1.x !== 'number' || typeof p1.y !== 'number' || 
+        typeof p2.x !== 'number' || typeof p2.y !== 'number' ||
+        isNaN(p1.x) || isNaN(p1.y) || isNaN(p2.x) || isNaN(p2.y)) {
+        return 0;
+    }
+    
+    // Calculate Euclidean distance
+    const dx = p2.x - p1.x;
+    const dy = p2.y - p1.y;
+    const distance = Math.sqrt(dx * dx + dy * dy);
+    
+    // Ensure the result is a valid number
+    return isNaN(distance) || !isFinite(distance) ? 0 : distance;
+}
+
+// Get element path for better identification
+function getElementPath(element) {
+    const selector = generateCssSelector(element);
+    return selector;
+}
+
+// Send non-transitional events to the backend
+async function sendNonTransitionalEvents() {
+    if (!isRecording || !lastStateId) return;
+    
+    // Clone the events and metrics to avoid race conditions
+    // Use a shallow copy instead of JSON.stringify/parse which can cause type issues
+    const events = {
+        hover: [...nonTransitionalEvents.hover],
+        mousemove: {
+            heatmap: nonTransitionalEvents.mousemove.heatmap.map(row => [...row]),
+            totalDistance: nonTransitionalEvents.mousemove.totalDistance,
+            averageSpeed: nonTransitionalEvents.mousemove.averageSpeed
+        },
+        keyTyping: {
+            fields: {...nonTransitionalEvents.keyTyping.fields}
+        },
+        inactivity: [...nonTransitionalEvents.inactivity],
+        escapeBackspace: [...nonTransitionalEvents.escapeBackspace]
+    };
+    
+    const metrics = {...nonTransitionalMetrics};
+    
+    // Reset the events and metrics
+    nonTransitionalEvents = {
+        hover: [],
+        mousemove: {
+            heatmap: initializeHeatmap(),
+            totalDistance: 0,
+            averageSpeed: 0
+        },
+        keyTyping: {
+            fields: {}
+        },
+        inactivity: [],
+        escapeBackspace: []
+    };
+    
+    // Only reset cumulative metrics that should be per-batch
+    nonTransitionalMetrics.totalMouseDistance = 0;
+    
+    // If there are no events to send, don't bother
+    if (events.hover.length === 0 && 
+        Object.keys(events.keyTyping.fields).length === 0 &&
+        events.inactivity.length === 0 &&
+        events.escapeBackspace.length === 0) {
+        return;
+    }
+    
+    try {
+        console.log(`[DOM Tracker] Sending non-transitional events for state: ${lastStateId}`);
+        
+        // Use the background script to make the API call instead of direct call
+        // This ensures we use the correct API base URL from the background script
+        const result = await sendToBackground('saveNonTransitionalEvents', {
+            stateId: lastStateId,
+            sessionId: sessionId,
+            userId: userId,
+            events: events,
+            metrics: metrics
+        });
+        
+        console.log(`[DOM Tracker] Non-transitional events sent result:`, result);
+    } catch (error) {
+        console.error(`[DOM Tracker] Error sending non-transitional events:`, error);
+    }
+}
+
+// Schedule a send of non-transitional events
+function scheduleNonTransitionalSend() {
+    if (nonTransitionalSendTimer) {
+        clearTimeout(nonTransitionalSendTimer);
+    }
+    
+    nonTransitionalSendTimer = setTimeout(() => {
+        sendNonTransitionalEvents();
+        lastNonTransitionalSendTime = Date.now();
+    }, nonTransitionalBatchInterval);
+}
+
+// Setup hover detection
+function setupHoverTracking() {
+    // Track mouseover for hover
+    document.addEventListener('mouseover', event => {
+        if (!isRecording) return;
+        
+        // End previous hover if there is one
+        if (currentHoverElement && hoverStartTime) {
+            const hoverEndTime = Date.now();
+            const duration = hoverEndTime - hoverStartTime;
+            
+            // Only record if hover was longer than 100ms to avoid tracking quick mouse movements
+            if (duration > 100) {
+                const elementInfo = getElementInfo(currentHoverElement);
+                
+                nonTransitionalEvents.hover.push({
+                    element: currentHoverElement.tagName.toLowerCase(),
+                    selector: elementInfo.selector,
+                    duration: duration,
+                    timestamp: new Date(hoverStartTime)
+                });
+                
+                // Update total hover time
+                nonTransitionalMetrics.totalHoverTime += duration;
+                
+                scheduleNonTransitionalSend();
+            }
+        }
+        
+        // Start new hover
+        currentHoverElement = event.target;
+        hoverStartTime = Date.now();
+    });
+    
+    // Track mouseout to end hover
+    document.addEventListener('mouseout', event => {
+        if (!isRecording) return;
+        
+        if (currentHoverElement === event.target && hoverStartTime) {
+            const hoverEndTime = Date.now();
+            const duration = hoverEndTime - hoverStartTime;
+            
+            // Only record if hover was longer than 100ms
+            if (duration > 100) {
+                const elementInfo = getElementInfo(currentHoverElement);
+                
+                nonTransitionalEvents.hover.push({
+                    element: currentHoverElement.tagName.toLowerCase(),
+                    selector: elementInfo.selector,
+                    duration: duration,
+                    timestamp: new Date(hoverStartTime)
+                });
+                
+                // Update total hover time
+                nonTransitionalMetrics.totalHoverTime += duration;
+                
+                scheduleNonTransitionalSend();
+            }
+            
+            // Reset hover tracking
+            currentHoverElement = null;
+            hoverStartTime = null;
+        }
+    });
+}
+
+// Setup mouse movement tracking
+function setupMouseMoveTracking() {
+    // Initialize heatmap
+    nonTransitionalEvents.mousemove.heatmap = initializeHeatmap();
+    
+    // Ensure proper initialization of tracking variables
+    lastMousePosition = { x: 0, y: 0 };
+    lastMouseMoveTime = null;
+    
+    // Track mousemove events
+    document.addEventListener('mousemove', event => {
+        if (!isRecording) return;
+        
+        // Get current time and position
+        const currentTime = Date.now();
+        const mouseX = event.clientX;
+        const mouseY = event.clientY;
+        
+        // Update scroll position
+        scrollPosition = { x: window.scrollX, y: window.scrollY };
+        
+        // Exit idle state if we were idle
+        if (isIdle) {
+            const idleEndTime = currentTime;
+            const idleDuration = idleEndTime - idleStartTime;
+            
+            // Record idle period if it was longer than the threshold
+            if (idleDuration >= idleThreshold) {
+                nonTransitionalEvents.inactivity.push({
+                    duration: idleDuration,
+                    timestamp: new Date(idleStartTime)
+                });
+                
+                // Update idle metrics
+                nonTransitionalMetrics.totalIdleTime += idleDuration;
+                nonTransitionalMetrics.longestIdlePeriod = Math.max(nonTransitionalMetrics.longestIdlePeriod, idleDuration);
+                
+                scheduleNonTransitionalSend();
+            }
+            
+            isIdle = false;
+            idleStartTime = null;
+        }
+        
+        // If this is the first movement or it's been a while since the last one
+        if (!lastMouseMoveTime || currentTime - lastMouseMoveTime > 100) {
+            // Record the position for the path
+            const position = { x: mouseX, y: mouseY };
+            
+            // Don't calculate distance if this is the first point
+            if (lastMousePosition.x !== 0 || lastMousePosition.y !== 0) {
+                const distance = calculateDistance(
+                    lastMousePosition,
+                    position
+                );
+                
+                // Ensure distance is a valid number
+                if (!isNaN(distance) && isFinite(distance)) {
+                    // Update metrics
+                    nonTransitionalEvents.mousemove.totalDistance += distance;
+                    nonTransitionalMetrics.totalMouseDistance += distance;
+                }
+            }
+            
+            // Update heatmap
+            const heatmapCoord = positionToHeatmapCoord(mouseX, mouseY);
+            if (nonTransitionalEvents.mousemove.heatmap[heatmapCoord.y]) {
+                if (nonTransitionalEvents.mousemove.heatmap[heatmapCoord.y][heatmapCoord.x] !== undefined) {
+                    nonTransitionalEvents.mousemove.heatmap[heatmapCoord.y][heatmapCoord.x]++;
+                }
+            }
+            
+            // Update last position and time
+            lastMousePosition = position;
+            lastMouseMoveTime = currentTime;
+        }
+        
+        // Reset the idle detection timer
+        if (idleDetectionInterval) {
+            clearTimeout(idleDetectionInterval);
+        }
+        
+        idleDetectionInterval = setTimeout(() => {
+            if (!isIdle) {
+                isIdle = true;
+                idleStartTime = Date.now();
+            }
+        }, idleThreshold);
+    });
+    
+    // Track window resize for viewport changes
+    window.addEventListener('resize', () => {
+        viewportHeight = window.innerHeight;
+        viewportWidth = window.innerWidth;
+    });
+    
+    // Track scroll events
+    document.addEventListener('scroll', () => {
+        if (!isRecording) return;
+        
+        // Update scroll position
+        scrollPosition = { x: window.scrollX, y: window.scrollY };
+    });
+}
+
+// Setup keyboard typing tracking
+function setupKeyboardTracking() {
+    // Track keydown events
+    document.addEventListener('keydown', event => {
+        if (!isRecording) return;
+        
+        const element = event.target;
+        
+        // Track Escape and Backspace keys for all elements
+        if (event.key === 'Escape' || event.key === 'Backspace') {
+            // Get field identifier if it's a form element
+            let fieldId = '';
+            if (element && (element.tagName.toLowerCase() === 'input' || 
+                          element.tagName.toLowerCase() === 'textarea' ||
+                          element.tagName.toLowerCase() === 'select')) {
+                fieldId = element.id || element.name || getElementPath(element);
+            }
+            
+            if (!nonTransitionalEvents.escapeBackspace) {
+                nonTransitionalEvents.escapeBackspace = [];
+            }
+            
+            // Record the escape/backspace event
+            nonTransitionalEvents.escapeBackspace.push({
+                field: fieldId,
+                key: event.key,
+                timestamp: new Date()
+            });
+            
+            scheduleNonTransitionalSend();
+            return;
+        }
+        
+        // Only track keystrokes in input elements for regular typing
+        if (!element || (element.tagName.toLowerCase() !== 'input' && 
+                        element.tagName.toLowerCase() !== 'textarea')) {
+            return;
+        }
+        
+        // Get field identifier
+        const fieldId = element.id || element.name || getElementPath(element);
+        
+        // Initialize field in keyTyping if needed
+        if (!nonTransitionalEvents.keyTyping.fields[fieldId]) {
+            nonTransitionalEvents.keyTyping.fields[fieldId] = {
+                keystrokes: 0,
+                lastUpdated: new Date()
+            };
+        }
+        
+        // Increment keystroke count
+        nonTransitionalEvents.keyTyping.fields[fieldId].keystrokes++;
+        nonTransitionalEvents.keyTyping.fields[fieldId].lastUpdated = new Date();
+        
+        // Update metrics
+        nonTransitionalMetrics.totalKeystrokes++;
+        
+        scheduleNonTransitionalSend();
+    });
+}
+
+// Setup click tracking
+function setupClickTracking() {
+    document.addEventListener('click', event => {
+        if (!isRecording) return;
+        
+        // Update metrics
+        nonTransitionalMetrics.totalClicks++;
+        
+        scheduleNonTransitionalSend();
+    });
+}
+
+// Setup user inactivity tracking
+let userActivityTimeout = null;
+let lastActivityTime = Date.now();
+let inactivityThreshold = 30000; // 30 seconds of no activity = inactivity
+
+function setupInactivityTracking() {
+    // Track user activity events
+    const activityEvents = ['mousedown', 'keydown', 'scroll', 'click', 'touchstart'];
+    
+    activityEvents.forEach(eventType => {
+        document.addEventListener(eventType, () => {
+            if (!isRecording) return;
+            
+            const currentTime = Date.now();
+            
+            // If user was inactive, record it
+            if (currentTime - lastActivityTime > inactivityThreshold) {
+                const inactiveDuration = currentTime - lastActivityTime;
+                
+                nonTransitionalEvents.inactivity.push({
+                    duration: inactiveDuration,
+                    timestamp: new Date(lastActivityTime)
+                });
+                
+                scheduleNonTransitionalSend();
+            }
+            
+            // Reset activity time
+            lastActivityTime = currentTime;
+            
+            // Clear and reset inactivity timeout
+            if (userActivityTimeout) {
+                clearTimeout(userActivityTimeout);
+            }
+            
+            userActivityTimeout = setTimeout(() => {
+                const inactiveTime = Date.now() - lastActivityTime;
+                if (inactiveTime > inactivityThreshold) {
+                    // We trigger send here to ensure inactivity is recorded even if user never returns
+                    nonTransitionalEvents.inactivity.push({
+                        duration: inactiveTime,
+                        timestamp: new Date(lastActivityTime)
+                    });
+                    
+                    scheduleNonTransitionalSend();
+                }
+            }, inactivityThreshold);
+        });
+    });
+}
+
+// Setup all non-transitional event tracking
+function setupNonTransitionalTracking() {
+    setupHoverTracking();
+    setupMouseMoveTracking();
+    setupKeyboardTracking();
+    setupClickTracking();
+    setupInactivityTracking();
+    
+    // Initial timer for sending events
+    nonTransitionalSendTimer = setTimeout(() => {
+        sendNonTransitionalEvents();
+        lastNonTransitionalSendTime = Date.now();
+    }, nonTransitionalBatchInterval);
+    
+    console.log('[DOM Tracker] Non-transitional event tracking initialized');
+}
+
+// Variables for idle detection
+let idleDetectionInterval = null;
+
 // Send a message to the background script
 function sendToBackground(action, data) {
     // Add call stack info to identify where the call is coming from
@@ -1075,6 +1569,7 @@ function startRecording(newSessionId, newUserId) {
     setupMutationObserver();
     setupNavigationTracking();
     setupFormChangeDetection(); // Add form change detection
+    setupNonTransitionalTracking(); // Add non-transitional event tracking
     
     // Start loading detection
     startLoadingDetection();

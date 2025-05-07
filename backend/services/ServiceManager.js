@@ -9,6 +9,7 @@ const debug = require('../utils/debug');
 const User = require('../models/User');
 const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
+const mongoose = require('mongoose');
 
 // In-memory recording status tracking
 const activeRecordings = new Map();
@@ -70,7 +71,7 @@ class ServiceManager {
   /**
    * Start recording for a user
    * @param {string} userId - User ID
-   * @param {string} sessionId - Session ID
+   * @param {string} sessionId - Session ID (this is the new session being started)
    * @param {Object} metadata - Session metadata
    */
   async startRecording(userId, sessionId, metadata = {}) {
@@ -78,25 +79,44 @@ class ServiceManager {
       throw new Error('User ID and Session ID are required');
     }
     
+    const newSessionStartTime = new Date();
+
     try {
-      // Create session in database
-      const session = await db.saveSession({
+      // Find and close any existing active sessions for this user
+      const Session = mongoose.model('Session'); // Get Session model
+      const existingActiveSessions = await Session.find({ userId: userId, status: 'active' });
+
+      if (existingActiveSessions.length > 0) {
+        console.log(`[ServiceManager] User ${userId} has ${existingActiveSessions.length} existing active session(s). Closing them.`);
+        for (const oldSession of existingActiveSessions) {
+          console.log(`[ServiceManager] Closing old active session ${oldSession.id} for user ${userId}.`);
+          await db.updateSession(oldSession.id, {
+            endTime: newSessionStartTime, // Or new Date() if preferred
+            status: 'completed', // Or 'abandoned'
+            'metadata.endReason': 'new_session_started'
+          });
+          activeRecordings.delete(oldSession.id); // Also remove from in-memory if present
+        }
+      }
+
+      // Create the new session in database
+      const newSession = await db.saveSession({
         id: sessionId,
         userId,
-        startTime: new Date(),
+        startTime: newSessionStartTime,
         status: 'active',
         metadata
       });
       
-      // Track in memory
+      // Track the new session in memory
       activeRecordings.set(sessionId, {
         userId,
-        startTime: session.startTime,
+        startTime: newSession.startTime,
         status: 'active'
       });
       
-      console.log(`[ServiceManager] Started recording session ${sessionId} for user ${userId}`);
-      return session;
+      console.log(`[ServiceManager] Started new recording session ${sessionId} for user ${userId}`);
+      return newSession;
     } catch (error) {
       console.error(`[ServiceManager] Error starting recording for ${userId}:`, error);
       throw error;

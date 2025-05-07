@@ -45,7 +45,7 @@ const getUserStatus = async (userId) => {
 };
 
 // Verify connection endpoint
-router.post('/extension/recorder/verifyConnection', async (req, res) => {
+router.post('/recorder/verifyConnection', async (req, res) => {
     console.log('[Backend] Received connection verification request');
     
     const { userId, connectionId } = req.body;
@@ -62,7 +62,7 @@ router.post('/extension/recorder/verifyConnection', async (req, res) => {
 });
 
 // Endpoint to save a recording session
-router.post('/extension/recorder/saveSession', async (req, res) => {
+router.post('/recorder/saveSession', async (req, res) => {
     try {
         console.log('[Backend] Received session save request');
         const { sessionId, userId, url, browser, metadata } = req.body;
@@ -102,7 +102,7 @@ router.post('/extension/recorder/saveSession', async (req, res) => {
 });
 
 // Endpoint to stop a recording session
-router.post('/extension/recorder/stopSession', async (req, res) => {
+router.post('/recorder/stopSession', async (req, res) => {
     try {
         const { sessionId, userId, reason } = req.body;
         
@@ -132,7 +132,7 @@ router.post('/extension/recorder/stopSession', async (req, res) => {
 });
 
 // Endpoint to save interactions
-router.post('/extension/recorder/saveInteractions', async (req, res) => {
+router.post('/recorder/saveInteractions', async (req, res) => {
     try {
         const { interactions, sessionId, userId } = req.body;
         console.log(`[Backend] Received ${interactions?.length} interactions for session ${sessionId}`);
@@ -170,7 +170,7 @@ router.post('/extension/recorder/saveInteractions', async (req, res) => {
 });
 
 // Endpoint to save DOM state
-router.post('/extension/recorder/saveDOMState', async (req, res) => {
+router.post('/recorder/saveDOMState', async (req, res) => {
     try {
         const { state, sessionId, userId } = req.body;
         
@@ -199,7 +199,7 @@ router.post('/extension/recorder/saveDOMState', async (req, res) => {
 });
 
 // Endpoint to get recording status
-router.get('/extension/recorder/status', async (req, res) => {
+router.get('/recorder/status', async (req, res) => {
     try {
         const { userId } = req.query;
         
@@ -228,7 +228,7 @@ router.get('/extension/recorder/status', async (req, res) => {
 });
 
 // Endpoint to get session data
-router.get('/extension/recorder/session/:sessionId', async (req, res) => {
+router.get('/recorder/session/:sessionId', async (req, res) => {
     try {
         const { sessionId } = req.params;
         
@@ -272,28 +272,28 @@ router.get('/extension/recorder/session/:sessionId', async (req, res) => {
     }
 });
 
-// Endpoint to get session states
-router.get('/extension/recorder/session/:sessionId/states', async (req, res) => {
+// Endpoint to get all states for a specific session
+router.get('/recorder/session/:sessionId/states', async (req, res) => {
     try {
         const { sessionId } = req.params;
-        
         if (!sessionId) {
-            return res.status(400).json({
-                success: false,
-                error: 'Missing session ID'
-            });
+            return res.status(400).json({ success: false, error: 'Missing session ID' });
         }
-        
-        // Get states for this session using the state number order
-        const states = await db.getStatesByStateNumber(sessionId);
-        
-        return res.json({
-            success: true,
-            states,
-            count: states.length
-        });
+
+        // First, check if the session itself exists (optional, but good practice)
+        const session = await db.getSessions({ id: sessionId });
+        if (!session) {
+            return res.status(404).json({ success: false, error: 'Session not found' });
+        }
+
+        // Get DOM states for the session, sorted by timestamp or stateNumber
+        // The DOMState model is already imported at the top of this file.
+        const states = await DOMState.find({ sessionId: sessionId }).sort({ timestamp: 1 }); // or stateNumber: 1
+
+        res.json({ success: true, sessionId, states });
+
     } catch (error) {
-        console.error('[Backend] Error getting session states:', error);
+        console.error(`[Backend] Error getting states for session ${req.params.sessionId}:`, error);
         return res.status(500).json({
             success: false,
             error: 'Error getting session states: ' + error.message
@@ -302,7 +302,7 @@ router.get('/extension/recorder/session/:sessionId/states', async (req, res) => 
 });
 
 // New endpoint to get states grouped by page and loading status
-router.get('/extension/recorder/session/:sessionId/statesByPage', async (req, res) => {
+router.get('/recorder/session/:sessionId/statesByPage', async (req, res) => {
     try {
         const { sessionId } = req.params;
         
@@ -362,7 +362,7 @@ router.get('/extension/recorder/session/:sessionId/statesByPage', async (req, re
 });
 
 // Endpoint to get state interactions
-router.get('/extension/recorder/state/:stateId/interactions', async (req, res) => {
+router.get('/recorder/state/:stateId/interactions', async (req, res) => {
     try {
         const { stateId } = req.params;
         

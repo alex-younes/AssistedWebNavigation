@@ -10,6 +10,7 @@ const browserRoutes = require('./routes/browserRoutes');
 const recorderRoutes = require('./routes/recorderRoutes');
 const extensionRoutes = require('./routes/extensionRoutes');
 const authRoutes = require('./routes/authRoutes');
+const adminRoutes = require('./routes/adminRoutes');
 const db = require('./database');
 const serviceManager = require('./services/ServiceManager');
 
@@ -310,6 +311,7 @@ app.use('/api/recorder', recorderRoutes);
 app.use('/api/browser', browserRoutes);
 app.use('/api/extension', extensionRoutes);
 app.use('/api/auth', authRoutes);
+app.use('/api/admin', adminRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {

@@ -85,40 +85,20 @@ const NonTransitionalEventsSchema = new mongoose.Schema({
       timestamp: Date,
       trigger: String
     }],
-    readingTime: [{
-      duration: Number,
-      timestamp: Date
-    }],
-    formDwellTime: [{
-      formId: String,
-      duration: Number,
-      timestamp: Date
-    }],
     inputFieldIdle: [{
       field: String,
+      label: String,
+      placeholder: String,
+      fieldType: String,
+      formId: String,
+      formName: String,
+      url: String,
+      page: String,
+      eventType: String,
       duration: Number,
-      timestamp: Date
-    }],
-    menuOpenCloseWithoutSelect: [{
-      menu: String,
-      timestamp: Date
-    }],
-    formFilledThenCleared: [{
-      form: String,
-      fields: [String],
-      timestamp: Date
-    }],
-    modalOpenedThenCanceled: [{
-      modal: String,
-      timestamp: Date
-    }],
-    noCtaInteraction: [{
-      cta: String,
-      timestamp: Date
-    }],
-    interactionWithHiddenElement: [{
-      element: String,
-      selector: String,
+      valueChanged: Boolean,
+      initialValue: String,
+      currentValue: String,
       timestamp: Date
     }],
     pasteWithoutTyping: [{
@@ -130,22 +110,12 @@ const NonTransitionalEventsSchema = new mongoose.Schema({
       text: String,
       source: String,
       timestamp: Date
-    }],
-    rapidContextSwitch: [{
-      sequence: [String],
-      timestamp: Date
-    }],
-    pauseBeforeSubmit: [{
-      form: String,
-      duration: Number,
-      timestamp: Date
     }]
   },
   metrics: {
     totalIdleTime: { type: Number, default: 0 },
     longestIdlePeriod: { type: Number, default: 0 },
     dwellTimeBeforeAction: { type: Number, default: 0 },
-    readingTime: { type: Number, default: 0 },
     totalMouseDistance: { type: Number, default: 0 },
     totalKeystrokes: { type: Number, default: 0 },
     totalClicks: { type: Number, default: 0 },

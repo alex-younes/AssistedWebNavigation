@@ -47,7 +47,12 @@ let nonTransitionalEvents = {
     repeatedClicks: [],
     copyText: [],
     pasteWithoutTyping: [],
-    repeatedInputs: []
+    repeatedInputs: [],
+    // Removed formDwellTime, readingTime, and menuOpenCloseWithoutSelect as requested
+    oscillatingHovers: [],
+    keydownWithoutSubmit: [],
+    inputFieldIdle: []
+    // Removed: interactionWithHiddenElement, rapidContextSwitch, pauseBeforeSubmit
 };
 
 // Metrics tracking
@@ -59,6 +64,7 @@ let nonTransitionalMetrics = {
     totalKeystrokes: 0,
     totalClicks: 0,
     totalHoverTime: 0
+    // Removed readingTime metric
 };
 
 // Throttling and batching variables
@@ -77,6 +83,13 @@ let idleThreshold = 2000; // 2 seconds of no movement = idle
 let viewportHeight = window.innerHeight;
 let viewportWidth = window.innerWidth;
 let scrollPosition = { x: window.scrollX, y: window.scrollY };
+
+// Variables for input field idle tracking
+let currentFocusedInput = null;
+let inputFocusTime = null;
+let lastInputActivityTime = null;
+let inputIdleThreshold = 3000; // 3 seconds of no typing = input field idle
+let inputIdleTimer = null;
 
 // --- Key Typing Cadence Tracking ---
 let keyCadenceTimers = {};
@@ -138,6 +151,59 @@ function getElementPath(element) {
     return selector;
 }
 
+// Function to get the label text for an input field
+function getFieldLabel(element) {
+    // Check if field has an explicit label using for/id
+    if (element.id) {
+        const label = document.querySelector(`label[for="${element.id}"]`);
+        if (label && label.textContent.trim()) {
+            return label.textContent.trim();
+        }
+    }
+    
+    // Check for parent label (when input is inside a label)
+    let parent = element.parentElement;
+    while (parent) {
+        if (parent.tagName.toLowerCase() === 'label') {
+            // Extract label text but exclude the text from the input itself
+            const cloneNode = parent.cloneNode(true);
+            const inputs = cloneNode.querySelectorAll('input, select, textarea');
+            inputs.forEach(input => input.remove());
+            const labelText = cloneNode.textContent.trim();
+            if (labelText) {
+                return labelText;
+            }
+            break;
+        }
+        parent = parent.parentElement;
+    }
+    
+    // Check for aria-label or aria-labelledby
+    if (element.getAttribute('aria-label')) {
+        return element.getAttribute('aria-label');
+    }
+    
+    if (element.getAttribute('aria-labelledby')) {
+        const labelId = element.getAttribute('aria-labelledby');
+        const labelElement = document.getElementById(labelId);
+        if (labelElement && labelElement.textContent.trim()) {
+            return labelElement.textContent.trim();
+        }
+    }
+    
+    // Check for preceding label or heading
+    const previousSibling = element.previousElementSibling;
+    if (previousSibling) {
+        if (previousSibling.tagName.toLowerCase() === 'label' || 
+            ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'].includes(previousSibling.tagName.toLowerCase())) {
+            return previousSibling.textContent.trim();
+        }
+    }
+    
+    // Default to field name or placeholder as fallback
+    return element.name || element.placeholder || '';
+}
+
 // Send non-transitional events to the backend
 async function sendNonTransitionalEvents() {
     if (!isRecording || !lastStateId) return;
@@ -161,7 +227,8 @@ async function sendNonTransitionalEvents() {
         repeatedClicks: [...nonTransitionalEvents.repeatedClicks],
         copyText: [...nonTransitionalEvents.copyText],
         pasteWithoutTyping: [...nonTransitionalEvents.pasteWithoutTyping],
-        repeatedInputs: [...nonTransitionalEvents.repeatedInputs]
+        repeatedInputs: [...nonTransitionalEvents.repeatedInputs],
+        inputFieldIdle: [...nonTransitionalEvents.inputFieldIdle]
     };
     
     const metrics = {...nonTransitionalMetrics};
@@ -184,7 +251,12 @@ async function sendNonTransitionalEvents() {
         repeatedClicks: [],
         copyText: [],
         pasteWithoutTyping: [],
-        repeatedInputs: []
+        repeatedInputs: [],
+        // Added the extra properties to match the initialization above
+        oscillatingHovers: [],
+        keydownWithoutSubmit: [],
+        inputFieldIdle: []
+        // Removed: interactionWithHiddenElement, rapidContextSwitch, pauseBeforeSubmit
     };
     
     // Only reset cumulative metrics that should be per-batch
@@ -200,7 +272,8 @@ async function sendNonTransitionalEvents() {
         events.repeatedClicks.length === 0 &&
         events.copyText.length === 0 &&
         events.pasteWithoutTyping.length === 0 &&
-        events.repeatedInputs.length === 0) {
+        events.repeatedInputs.length === 0 &&
+        events.inputFieldIdle.length === 0) {
         return;
     }
     
@@ -418,6 +491,60 @@ function setupKeyboardTracking() {
         const isInputField = element && (element.tagName.toLowerCase() === 'input' || element.tagName.toLowerCase() === 'textarea');
         const fieldId = isInputField ? (element.id || element.name || getElementPath(element)) : null;
 
+        // Reset input idle timer when typing occurs
+        if (isInputField && fieldId) {
+            // Update the last activity time
+            lastInputActivityTime = Date.now();
+            
+            // Clear any existing idle timer
+            if (inputIdleTimer) {
+                clearTimeout(inputIdleTimer);
+            }
+            
+            // Set a new idle timer
+            inputIdleTimer = setTimeout(() => {
+                // Only record idle if we're still focused on the same element
+                if (currentFocusedInput === element && lastInputActivityTime) {
+                    const idleDuration = Date.now() - lastInputActivityTime;
+                    if (idleDuration >= inputIdleThreshold) {
+                        // Get enhanced field information
+                        const fieldId = element.id || element.name || getElementPath(element);
+                        const fieldLabel = getFieldLabel(element);
+                        const fieldType = element.type || 'text';
+                        const formId = element.form ? (element.form.id || element.form.name || getElementPath(element.form)) : 'standalone';
+                        const formName = element.form ? element.form.getAttribute('name') || 'unnamed-form' : 'standalone';
+                        
+                        // Get current value to compare with initial
+                        const currentValue = element.type === 'checkbox' || element.type === 'radio' 
+                            ? element.checked 
+                            : element.value;
+                        const initialValue = element.dataset.initialValue || '';
+                        const valueChanged = currentValue !== initialValue;
+                        
+                        nonTransitionalEvents.inputFieldIdle.push({
+                            field: fieldId,
+                            label: fieldLabel,
+                            placeholder: element.placeholder || '',
+                            fieldType: fieldType,
+                            formId: formId,
+                            formName: formName,
+                            url: window.location.href,
+                            page: document.title,
+                            eventType: 'threshold_reached',
+                            duration: idleDuration,
+                            valueChanged: valueChanged,
+                            initialValue: initialValue,
+                            currentValue: currentValue,
+                            timestamp: new Date(lastInputActivityTime)
+                        });
+                        
+                        scheduleNonTransitionalSend();
+                        console.log(`[DOM Tracker] Input field idle threshold reached for ${fieldId}: ${idleDuration}ms`);
+                    }
+                }
+            }, inputIdleThreshold);
+        }
+
         // --- Repeated Inputs Tracking --- 
         if (isInputField && fieldId) {
             if (!fieldInputHistory[fieldId]) {
@@ -533,6 +660,149 @@ function setupKeyboardTracking() {
         scheduleNonTransitionalSend();
     });
 
+    // Track focus events on input fields
+    document.addEventListener('focus', event => {
+        if (!isRecording) return;
+        
+        const element = event.target;
+        if (element && (element.tagName.toLowerCase() === 'input' || element.tagName.toLowerCase() === 'textarea')) {
+            const fieldId = element.id || element.name || getElementPath(element);
+            
+            // Store current value as previous value (existing code)
+            let currentValue = element.value;
+            if (element.type === 'checkbox' || element.type === 'radio') {
+                currentValue = element.checked ? 'checked' : 'unchecked';
+            }
+            element.dataset.previousValue = currentValue;
+            
+            // Start tracking input field idle time
+            currentFocusedInput = element;
+            inputFocusTime = Date.now();
+            lastInputActivityTime = Date.now();
+            
+            // Store initial value for later comparison
+            const initialValue = element.type === 'checkbox' || element.type === 'radio' 
+                ? element.checked 
+                : element.value;
+            element.dataset.initialValue = initialValue;
+            
+            // Set idle timer
+            if (inputIdleTimer) {
+                clearTimeout(inputIdleTimer);
+            }
+            
+            inputIdleTimer = setTimeout(() => {
+                const idleDuration = Date.now() - lastInputActivityTime;
+                if (idleDuration >= inputIdleThreshold) {
+                    // Get enhanced field information
+                    const fieldLabel = getFieldLabel(element);
+                    const fieldType = element.type || 'text';
+                    const formId = element.form ? (element.form.id || element.form.name || getElementPath(element.form)) : 'standalone';
+                    const formName = element.form ? element.form.getAttribute('name') || 'unnamed-form' : 'standalone';
+                    
+                    // Get current value to compare with initial
+                    const currentValue = element.type === 'checkbox' || element.type === 'radio' 
+                        ? element.checked 
+                        : element.value;
+                    const valueChanged = currentValue !== initialValue;
+                    
+                    nonTransitionalEvents.inputFieldIdle.push({
+                        field: fieldId,
+                        label: fieldLabel,
+                        placeholder: element.placeholder || '',
+                        fieldType: fieldType,
+                        formId: formId,
+                        formName: formName,
+                        url: window.location.href,
+                        page: document.title,
+                        eventType: 'threshold_reached',
+                        duration: idleDuration,
+                        valueChanged: valueChanged,
+                        initialValue: initialValue,
+                        currentValue: currentValue,
+                        timestamp: new Date(lastInputActivityTime)
+                    });
+                    
+                    scheduleNonTransitionalSend();
+                    console.log(`[DOM Tracker] Input field idle threshold reached for ${fieldId}: ${idleDuration}ms`);
+                }
+            }, inputIdleThreshold);
+            
+            console.log(`[DOM Tracker] Started tracking input field: ${fieldId}`);
+        }
+    }, true);
+    
+    // Track blur events on input fields
+    document.addEventListener('blur', event => {
+        if (!isRecording) return;
+        
+        const element = event.target;
+        if (element && (element.tagName.toLowerCase() === 'input' || element.tagName.toLowerCase() === 'textarea')) {
+            const fieldId = element.id || element.name || getElementPath(element);
+            
+            // Clear input idle timer
+            if (inputIdleTimer) {
+                clearTimeout(inputIdleTimer);
+                inputIdleTimer = null;
+            }
+            
+            // If this field has been focused for a while and had no recent activity,
+            // record an idle period that ends now
+            if (element === currentFocusedInput && lastInputActivityTime) {
+                const timeSinceLastActivity = Date.now() - lastInputActivityTime;
+                if (timeSinceLastActivity >= inputIdleThreshold) {
+                    // Get enhanced field information
+                    const fieldId = element.id || element.name || getElementPath(element);
+                    const fieldLabel = getFieldLabel(element);
+                    const fieldType = element.type || 'text';
+                    const formId = element.form ? (element.form.id || element.form.name || getElementPath(element.form)) : 'standalone';
+                    const formName = element.form ? element.form.getAttribute('name') || 'unnamed-form' : 'standalone';
+                    
+                    // Get current value to compare with initial
+                    const currentValue = element.type === 'checkbox' || element.type === 'radio' 
+                        ? element.checked 
+                        : element.value;
+                    const initialValue = element.dataset.initialValue || '';
+                    const valueChanged = currentValue !== initialValue;
+                    
+                    nonTransitionalEvents.inputFieldIdle.push({
+                        field: fieldId,
+                        label: fieldLabel,
+                        placeholder: element.placeholder || '',
+                        fieldType: fieldType,
+                        formId: formId,
+                        formName: formName,
+                        url: window.location.href,
+                        page: document.title,
+                        eventType: 'total_idle_on_blur',
+                        duration: timeSinceLastActivity,
+                        valueChanged: valueChanged,
+                        initialValue: initialValue,
+                        currentValue: currentValue,
+                        timestamp: new Date(lastInputActivityTime)
+                    });
+                    
+                    scheduleNonTransitionalSend();
+                    console.log(`[DOM Tracker] Input field idle recorded on blur for ${fieldId}: ${timeSinceLastActivity}ms`);
+                }
+            }
+            
+            // Reset field tracking
+            if (currentFocusedInput === element) {
+                currentFocusedInput = null;
+                inputFocusTime = null;
+                lastInputActivityTime = null;
+            }
+            
+            // Existing code for clearing input history
+            if (fieldInputHistory[fieldId]) {
+                delete fieldInputHistory[fieldId];
+            }
+            
+            console.log(`[DOM Tracker] Stopped tracking input field: ${fieldId}`);
+        }
+    }, true);
+    
     // Add blur event listener to clear history when field loses focus - NEW
     document.addEventListener('blur', (event) => {
         if (!isRecording) return;
@@ -737,29 +1007,40 @@ function sendToBackground(action, data) {
     
     console.log(`[DOM Tracker] Sending to background: ${action} from: ${callerInfo}`);
     
-    // Simple message passing with unchanged functionality
+    // Simple message passing with improved error handling
     return new Promise((resolve, reject) => {
-        chrome.runtime.sendMessage({ action, ...data, _source: callerInfo }, response => {
-            if (chrome.runtime.lastError) {
-                console.error('[DOM Tracker] Error sending message:', chrome.runtime.lastError);
-                reject(chrome.runtime.lastError);
-                return;
-            }
-            
-            console.log(`[DOM Tracker] Response from ${action}:`, response);
-            
-            // Update local state tracking when we receive state save confirmation
-            if (action === 'recordState' && response && response.stateId) {
-                console.log(`[DOM Tracker] Updating local state tracking:`, {
-                    lastStateId: response.stateId,
-                    lastStateHash: data.state.hash
-                });
-                lastStateId = response.stateId;
-                lastStateHash = data.state.hash;
-            }
-            
-            resolve(response);
-        });
+        try {
+            chrome.runtime.sendMessage({ action, ...data, _source: callerInfo }, response => {
+                // Check for runtime errors first
+                if (chrome.runtime.lastError) {
+                    console.error('[DOM Tracker] Error sending message:', chrome.runtime.lastError);
+                    return resolve({ success: false, error: chrome.runtime.lastError.message });
+                }
+                
+                // Handle null or undefined response
+                if (!response) {
+                    console.error('[DOM Tracker] No response received from background');
+                    return resolve({ success: false, error: 'No response from background script' });
+                }
+                
+                console.log(`[DOM Tracker] Response from ${action}:`, response);
+                
+                // Update local state tracking when we receive state save confirmation
+                if (action === 'recordState' && response && response.stateId) {
+                    console.log(`[DOM Tracker] Updating local state tracking:`, {
+                        lastStateId: response.stateId,
+                        lastStateHash: data.state.hash
+                    });
+                    lastStateId = response.stateId;
+                    lastStateHash = data.state.hash;
+                }
+                
+                resolve(response);
+            });
+        } catch (error) {
+            console.error('[DOM Tracker] Exception in sendToBackground:', error);
+            resolve({ success: false, error: error.message });
+        }
     });
 }
 

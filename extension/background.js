@@ -1321,6 +1321,13 @@ async function saveNonTransitionalEvents(data, sendResponse) {
           data.events.pasteWithoutTyping.length);
       }
       
+      // Process repeatedInputs events - NEWLY ADDED
+      if (data.events.repeatedInputs && Array.isArray(data.events.repeatedInputs)) {
+        cleanData.events.repeatedInputs = data.events.repeatedInputs;
+        console.log('[Extension] Processing repeatedInputs events:', 
+          data.events.repeatedInputs.length);
+      }
+      
       // Special handling for mousemove data
       if (data.events.mousemove) {
         // Initialize with default numeric values to prevent NaN
@@ -1415,6 +1422,7 @@ async function saveNonTransitionalEvents(data, sendResponse) {
           repeatedClicks: cleanData.events.repeatedClicks?.length || 0,
           copyText: cleanData.events.copyText?.length || 0,
           pasteWithoutTyping: cleanData.events.pasteWithoutTyping?.length || 0,
+          repeatedInputs: cleanData.events.repeatedInputs?.length || 0,
           heatmapLength: cleanData.events.mousemove?.heatmap?.length || 0,
           keyTyping: Object.keys(cleanData.events.keyTyping?.fields || {}).length || 0,
           inactivity: cleanData.events.inactivity?.length || 0

@@ -22,6 +22,12 @@ let lastStateHash = null; // Track the last state hash
 let stateSequenceNumber = 0; // Track the sequence of state captures
 let pendingStateSaves = {}; // Track in-progress state saves
 
+// Input history for repeated inputs tracking - NEW
+let fieldInputHistory = {};
+const MIN_PATTERN_LENGTH = 3;
+const MAX_PATTERN_LENGTH = 10;
+const INPUT_HISTORY_MAX_LEN = 50;
+
 // =============== NON-TRANSITIONAL EVENT TRACKING ===============
 // Variables for tracking non-transitional events
 let nonTransitionalEvents = {
@@ -40,7 +46,8 @@ let nonTransitionalEvents = {
     tabNavigation: [],
     repeatedClicks: [],
     copyText: [],
-    pasteWithoutTyping: []
+    pasteWithoutTyping: [],
+    repeatedInputs: []
 };
 
 // Metrics tracking
@@ -153,7 +160,8 @@ async function sendNonTransitionalEvents() {
         tabNavigation: [...nonTransitionalEvents.tabNavigation],
         repeatedClicks: [...nonTransitionalEvents.repeatedClicks],
         copyText: [...nonTransitionalEvents.copyText],
-        pasteWithoutTyping: [...nonTransitionalEvents.pasteWithoutTyping]
+        pasteWithoutTyping: [...nonTransitionalEvents.pasteWithoutTyping],
+        repeatedInputs: [...nonTransitionalEvents.repeatedInputs]
     };
     
     const metrics = {...nonTransitionalMetrics};
@@ -175,7 +183,8 @@ async function sendNonTransitionalEvents() {
         tabNavigation: [],
         repeatedClicks: [],
         copyText: [],
-        pasteWithoutTyping: []
+        pasteWithoutTyping: [],
+        repeatedInputs: []
     };
     
     // Only reset cumulative metrics that should be per-batch
@@ -190,7 +199,8 @@ async function sendNonTransitionalEvents() {
         events.tabNavigation.length === 0 &&
         events.repeatedClicks.length === 0 &&
         events.copyText.length === 0 &&
-        events.pasteWithoutTyping.length === 0) {
+        events.pasteWithoutTyping.length === 0 &&
+        events.repeatedInputs.length === 0) {
         return;
     }
     
@@ -405,47 +415,72 @@ function setupKeyboardTracking() {
         
         const element = event.target;
         const key = event.key;
+        const isInputField = element && (element.tagName.toLowerCase() === 'input' || element.tagName.toLowerCase() === 'textarea');
+        const fieldId = isInputField ? (element.id || element.name || getElementPath(element)) : null;
+
+        // --- Repeated Inputs Tracking --- 
+        if (isInputField && fieldId) {
+            if (!fieldInputHistory[fieldId]) {
+                fieldInputHistory[fieldId] = '';
+            }
+
+            if (key.length === 1) { // Handle printable characters
+                fieldInputHistory[fieldId] += key;
+                if (fieldInputHistory[fieldId].length > INPUT_HISTORY_MAX_LEN) {
+                    fieldInputHistory[fieldId] = fieldInputHistory[fieldId].slice(-INPUT_HISTORY_MAX_LEN);
+                }
+
+                // Check for repeated patterns
+                const currentHistory = fieldInputHistory[fieldId];
+                for (let len = MIN_PATTERN_LENGTH; len <= MAX_PATTERN_LENGTH; len++) {
+                    if (currentHistory.length >= len * 2) {
+                        const lastPattern = currentHistory.slice(-len);
+                        const previousPattern = currentHistory.slice(-len * 2, -len);
+                        if (lastPattern === previousPattern) {
+                            nonTransitionalEvents.repeatedInputs.push({
+                                field: fieldId,
+                                pattern: lastPattern,
+                                timestamp: new Date()
+                            });
+                            scheduleNonTransitionalSend();
+                            // Clear history for this field after detection to avoid spamming for sub-patterns
+                            fieldInputHistory[fieldId] = ''; 
+                            break; // Found a repeat, no need to check shorter patterns for this key press
+                        }
+                    }
+                }
+            } else if (key === 'Backspace') {
+                if (fieldInputHistory[fieldId].length > 0) {
+                    fieldInputHistory[fieldId] = fieldInputHistory[fieldId].slice(0, -1);
+                }
+            }
+        }
+        // --- End Repeated Inputs Tracking ---
         
-        // Key typing cadence tracking
+        // Key typing cadence tracking (existing logic)
         const now = Date.now();
-        const cadenceFieldId = element && (element.tagName.toLowerCase() === 'input' || 
-                                  element.tagName.toLowerCase() === 'textarea') 
-                      ? (element.id || element.name || getElementPath(element))
-                      : 'document';
+        const cadenceFieldId = isInputField ? fieldId : 'document';
         
-        // Track the cadence (time between keystrokes)
         if (lastKeyTime[cadenceFieldId]) {
             const timeBetweenKeystrokes = now - lastKeyTime[cadenceFieldId];
-            
-            // Only record if the time is reasonable (between 10ms and 5000ms)
             if (timeBetweenKeystrokes >= 10 && timeBetweenKeystrokes <= 5000) {
                 nonTransitionalEvents.keyTypingCadence.push({
                     field: cadenceFieldId,
-                    key: key.length === 1 ? 'key' : key, // Don't record actual letter for privacy, only special keys
+                    key: key.length === 1 ? 'key' : key, 
                     timeSinceLast: timeBetweenKeystrokes,
                     timestamp: new Date()
                 });
-                
                 scheduleNonTransitionalSend();
             }
         }
-        
-        // Update the last key time for this field
         lastKeyTime[cadenceFieldId] = now;
-        
-        // Clear any existing cadence timer for this field
         if (keyCadenceTimers[cadenceFieldId]) {
             clearTimeout(keyCadenceTimers[cadenceFieldId]);
         }
-        
-        // Set a timer to detect end of typing sequence
         keyCadenceTimers[cadenceFieldId] = setTimeout(() => {
-            // End of typing sequence detected after timeout with no keys
             if (lastKeyTime[cadenceFieldId]) {
                 const endTime = Date.now();
                 const typingDuration = endTime - lastKeyTime[cadenceFieldId];
-                
-                // Only add end marker if longer than threshold
                 if (typingDuration > 500) {
                     nonTransitionalEvents.keyTypingCadence.push({
                         field: cadenceFieldId,
@@ -455,63 +490,61 @@ function setupKeyboardTracking() {
                     });
                     scheduleNonTransitionalSend();
                 }
-                
-                // Reset tracking for this field
                 delete lastKeyTime[cadenceFieldId];
             }
-        }, 1500); // 1.5 second timeout to detect end of typing sequence
+        }, 1500);
         
-        // Track Escape and Backspace keys for all elements
-        if (event.key === 'Escape' || event.key === 'Backspace') {
-            // Get field identifier if it's a form element
-            let fieldId = '';
+        // Track Escape and Backspace keys for all elements (existing logic for escapeBackspace event)
+        if (key === 'Escape' || key === 'Backspace') {
+            let escBkspFieldId = '';
             if (element && (element.tagName.toLowerCase() === 'input' || 
                           element.tagName.toLowerCase() === 'textarea' ||
                           element.tagName.toLowerCase() === 'select')) {
-                fieldId = element.id || element.name || getElementPath(element);
+                escBkspFieldId = element.id || element.name || getElementPath(element);
             }
-            
             if (!nonTransitionalEvents.escapeBackspace) {
                 nonTransitionalEvents.escapeBackspace = [];
             }
-            
-            // Record the escape/backspace event
             nonTransitionalEvents.escapeBackspace.push({
-                field: fieldId,
-                key: event.key,
+                field: escBkspFieldId,
+                key: key,
                 timestamp: new Date()
             });
-            
             scheduleNonTransitionalSend();
-            return;
+            // Do not return here if it's backspace and an input field, 
+            // as repeatedInput logic needs to handle backspace too.
+            if (key === 'Escape') return;
         }
         
-        // Only track keystrokes in input elements for regular typing
-        if (!element || (element.tagName.toLowerCase() !== 'input' && 
-                        element.tagName.toLowerCase() !== 'textarea')) {
+        // Only track keystrokes in input elements for regular typing (keyTyping.fields - existing logic)
+        if (!isInputField) {
             return;
         }
-        
-        // Get field identifier
-        const inputFieldId = element.id || element.name || getElementPath(element);
-        
-        // Initialize field in keyTyping if needed
+        const inputFieldId = fieldId; // Already derived
         if (!nonTransitionalEvents.keyTyping.fields[inputFieldId]) {
             nonTransitionalEvents.keyTyping.fields[inputFieldId] = {
                 keystrokes: 0,
                 lastUpdated: new Date()
             };
         }
-        
-        // Increment keystroke count
         nonTransitionalEvents.keyTyping.fields[inputFieldId].keystrokes++;
         nonTransitionalEvents.keyTyping.fields[inputFieldId].lastUpdated = new Date();
-        
-        // Update metrics
         nonTransitionalMetrics.totalKeystrokes++;
-        
         scheduleNonTransitionalSend();
     });
+
+    // Add blur event listener to clear history when field loses focus - NEW
+    document.addEventListener('blur', (event) => {
+        if (!isRecording) return;
+        const element = event.target;
+        if (element && (element.tagName.toLowerCase() === 'input' || element.tagName.toLowerCase() === 'textarea')) {
+            const fieldId = element.id || element.name || getElementPath(element);
+            if (fieldInputHistory[fieldId]) {
+                // console.log(`[DOM Tracker] Clearing input history for field on blur: ${fieldId}`);
+                delete fieldInputHistory[fieldId];
+            }
+        }
+    }, true); // Use capture phase for blur
 }
 
 // Setup click tracking

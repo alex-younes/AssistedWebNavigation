@@ -130,10 +130,11 @@ app.post('/api/states', async (req, res) => {
             mutationInfo,
             interactionInfo,
             previousStateId,
-            previousHash
+            previousHash,
+            timeSincePreviousState
         } = req.body;
         
-        console.log(`[Backend] Received state: ${stateId}, hash: ${hash}, dom size: ${dom ? dom.length : 0} bytes`);
+        console.log(`[Backend] Received state: ${stateId}, hash: ${hash}, dom size: ${dom ? dom.length : 0} bytes, timeSincePreviousState: ${timeSincePreviousState}`);
         
         if (!hash || !dom) {
             return res.status(400).json({ error: 'Missing required fields: hash and dom are required' });
@@ -171,6 +172,7 @@ app.post('/api/states', async (req, res) => {
             hash,
             previousStateId: previousStateId,
             previousHash: previousHash,
+            timeSincePreviousState: timeSincePreviousState !== undefined ? timeSincePreviousState : 0,
             dom,
             metrics: metrics || {
                 domSize: 0,

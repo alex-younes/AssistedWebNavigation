@@ -191,12 +191,14 @@ const startRecordingSession = async (sessionId, tabInfo = null) => {
     finalStateCounter = 0; // Reset final state counter too
     sessionStateHashes = {}; // Clear hash tracking
     stateProcessingLock = {}; // Reset processing locks
+    
     // Reset last state tracking to prevent references to previous session states
     lastStateId = null;
     lastStateHash = null;
     interactionQueue = []; // Clear any pending interactions
     lastInteractionInfo = null; // Clear last interaction info
-    console.log('[Extension] Reset state counter, hash tracking, and last state references for new session');
+    
+    console.log('[Extension] Reset all state tracking variables');
     
     // Update recording tab and status
     recordingTabId = tabInfo.id;
@@ -384,6 +386,9 @@ const saveDOMState = async (state) => {
     // Ensure the state has required fields
     if (!state.sessionId) state.sessionId = currentSessionId;
     if (!state.userId) state.userId = userId;
+    
+    // Capture the timestamp for this state early to ensure accurate timing
+    const stateTimestamp = new Date(state.timestamp).getTime();
     
     // Set previous state information based on the last saved state
     state.previousStateId = lastStateId;
@@ -646,7 +651,9 @@ const saveDOMState = async (state) => {
           }
         }
         
-        // Format the state data to match the backend model
+        // Calculate time difference directly from state timestamps if we have a previous state
+        const calculatedTimeSincePrevious = calculateTimeDifference(state.timestamp, state.previousStateId);
+
         const formattedState = {
           stateId: state.stateId,
           sessionId: state.sessionId,
@@ -659,6 +666,7 @@ const saveDOMState = async (state) => {
           hash: state.hash,
           previousStateId: state.previousStateId,
           previousHash: state.previousHash,
+          timeSincePreviousState: calculatedTimeSincePrevious,
           dom: state.dom,
           metrics: state.metrics || {
             domSize: 0,
@@ -687,7 +695,8 @@ const saveDOMState = async (state) => {
           }
         };
         
-        console.log(`[Extension][DUPLICATION DEBUG] Sending state to backend: stateId=${formattedState.stateId}, isNewState=${formattedState.isNewState}, stateNumber=${formattedState.stateNumber}, hash=${formattedState.hash}`);
+        console.log(`[Extension][SENDING_STATE] Payload to be sent for stateId ${formattedState.stateId}:`, JSON.stringify(formattedState, null, 2));
+        console.log(`[Extension][DUPLICATION DEBUG] Sending state to backend: stateId=${formattedState.stateId}, isNewState=${formattedState.isNewState}, stateNumber=${formattedState.stateNumber}, hash=${formattedState.hash}, timeSincePreviousState=${formattedState.timeSincePreviousState}`);
         
         // Build correct URL using getApiUrl
         const statesUrl = getApiUrl('states');
@@ -1473,5 +1482,77 @@ async function saveNonTransitionalEvents(data, sendResponse) {
       success: false,
       error: error.message
     });
+  }
+}
+
+// Calculate time difference between current timestamp and previous state timestamp
+function calculateTimeDifference(currentTimestamp, previousStateId) {
+  console.log(`[Extension][TIMEDIFF] Calculating for current: ${currentTimestamp}, previousId: ${previousStateId}`);
+  
+  try {
+    // Parse current timestamp to milliseconds
+    let currentTimeMs;
+    if (typeof currentTimestamp === 'number') {
+      currentTimeMs = currentTimestamp;
+    } else if (typeof currentTimestamp === 'string') {
+      currentTimeMs = new Date(currentTimestamp).getTime();
+    } else if (currentTimestamp instanceof Date) {
+      currentTimeMs = currentTimestamp.getTime();
+    } else {
+      console.warn(`[Extension][TIMEDIFF] Invalid current timestamp format: ${typeof currentTimestamp}, value: ${currentTimestamp}. Using Date.now().`);
+      currentTimeMs = Date.now();
+    }
+    console.log(`[Extension][TIMEDIFF] Parsed currentTimeMs: ${currentTimeMs} (is NaN: ${isNaN(currentTimeMs)})`);
+
+    if (isNaN(currentTimeMs)) {
+      console.error(`[Extension][TIMEDIFF] currentTimeMs is NaN. Aborting calculation.`);
+      return 0;
+    }
+    
+    if (!previousStateId) {
+      console.log(`[Extension][TIMEDIFF] No previousStateId provided. Returning 0.`);
+      return 0;
+    }
+    
+    if (previousStateId.includes('_')) {
+      const parts = previousStateId.split('_');
+      console.log(`[Extension][TIMEDIFF] previousStateId parts: ${JSON.stringify(parts)}`);
+      if (parts.length >= 3) {
+        const timestampStringFromId = parts[parts.length - 1];
+        const possibleTimestampMs = parseInt(timestampStringFromId, 10);
+        console.log(`[Extension][TIMEDIFF] Parsed possibleTimestampMs from ID part "${timestampStringFromId}": ${possibleTimestampMs} (is NaN: ${isNaN(possibleTimestampMs)})`);
+        
+        if (!isNaN(possibleTimestampMs) && possibleTimestampMs > 1000000000000) { // Timestamp after 2001
+          const rawMillisecondDifference = currentTimeMs - possibleTimestampMs;
+          console.log(`[Extension][TIMEDIFF] Raw millisecond difference (currentTimeMs - possibleTimestampMs): ${rawMillisecondDifference}`);
+          
+          const differenceInSecondsDecimal = rawMillisecondDifference / 1000;
+          console.log(`[Extension][TIMEDIFF] Difference in seconds (decimal): ${differenceInSecondsDecimal}`);
+          
+          const timeDiffSecondsRounded = Math.round(differenceInSecondsDecimal);
+          console.log(`[Extension][TIMEDIFF] Rounded timeDiffSeconds: ${timeDiffSecondsRounded}`);
+          
+          if (timeDiffSecondsRounded > 0) {
+            console.log(`[Extension][TIMEDIFF] Returning: ${timeDiffSecondsRounded}`);
+            return timeDiffSecondsRounded;
+          } else {
+            console.log(`[Extension][TIMEDIFF] Rounded timeDiffSeconds is <= 0. Returning 0.`);
+            return 0;
+          }
+        } else {
+          console.log(`[Extension][TIMEDIFF] possibleTimestampMs is invalid or too old: ${possibleTimestampMs}.`);
+        }
+      } else {
+        console.log(`[Extension][TIMEDIFF] previousStateId parts length is < 3.`);
+      }
+    } else {
+      console.log(`[Extension][TIMEDIFF] previousStateId does not include '_'.`);
+    }
+    
+    console.log(`[Extension][TIMEDIFF] Could not determine timestamp from previousStateId or other condition not met. Returning 0.`);
+    return 0;
+  } catch (error) {
+    console.error('[Extension][TIMEDIFF] Error calculating time difference:', error);
+    return 0;
   }
 } 

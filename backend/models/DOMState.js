@@ -13,6 +13,7 @@ const domStateSchema = new mongoose.Schema({
   hash: { type: String, required: true }, // Using hash for more consistency with standard terms
   previousStateId: { type: String }, // ID of the previous state
   previousHash: { type: String }, // Hash of the previous state
+  timeSincePreviousState: { type: Number, default: 0 }, // Time in seconds since the previous state
   dom: { type: String }, // Add the DOM field
   metrics: {
     domSize: { type: Number },

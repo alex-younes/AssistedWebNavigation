@@ -1065,17 +1065,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case 'saveNonTransitionalEvents':
       (async () => {
         try {
-          // Log the received data from content.js
-          console.log('[Extension Background] Received saveNonTransitionalEvents message with data:', 
+          // Log the received data from content.js - CORRECTED
+          console.log('[Extension Background] Received saveNonTransitionalEvents message:', 
                       { 
-                        stateId: message.data?.stateId, 
-                        events: JSON.parse(JSON.stringify(message.data?.events)), 
-                        metrics: JSON.parse(JSON.stringify(message.data?.metrics))
+                        stateId: message.stateId, 
+                        events: message.events ? 'Present' : 'Undefined',
+                        metrics: message.metrics ? 'Present' : 'Undefined'
                       }
                     );
 
-          const result = await saveNonTransitionalEvents(message.data, sendResponse); // Pass sendResponse if needed by the async handler
-          // sendResponse({ success: true, ...result }); // Ensure sendResponse is called if the original design expects it.
+          // Pass the correct message object to the function - CORRECTED
+          const result = await saveNonTransitionalEvents(message, sendResponse);
         } catch (error) {
           console.error('[Extension Background] Error processing saveNonTransitionalEvents:', error);
           sendResponse({ success: false, error: error.message });

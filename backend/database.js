@@ -216,183 +216,132 @@ const db = {
 
   // Add database methods for non-transitional events
   // Create or update non-transitional events for a state
-  async updateNonTransitionalEvents(stateId, sessionId, userId, eventsData) {
+  async updateNonTransitionalEvents(stateId, sessionId, userId, dataToUpdate) {
     try {
-      const NonTransitionalEvents = require('./models/NonTransitionalEvents');
+      const NonTransitionalEvents = mongoose.model('NonTransitionalEvents'); // Get model
       
-      // Log all incoming event types and counts
-      console.log(`[Database] Received non-transitional events for state ${stateId}:`,
-        Object.keys(eventsData.events || {}).map(type => 
-          `${type}: ${Array.isArray(eventsData.events[type]) ? 
-            eventsData.events[type].length : 
-            (type === 'keyTyping' ? 
-              (eventsData.events[type]?.fields ? Object.keys(eventsData.events[type].fields).length : 0) : 
-              'object')}`
-        ).join(', ')
+      // Log what is about to be set/updated
+      console.log(`[Database] updateNonTransitionalEvents for state ${stateId}. Data to update:`, 
+                  { 
+                    eventKeys: dataToUpdate.events ? Object.keys(dataToUpdate.events) : 'No events object provided to db', 
+                    metricKeys: dataToUpdate.metrics ? Object.keys(dataToUpdate.metrics) : 'No metrics object provided to db' 
+                  });
+      // For more detailed logging if needed:
+      // console.log('[Database] Detailed events for update:', JSON.stringify(dataToUpdate.events, null, 2));
+      // console.log('[Database] Detailed metrics for update:', JSON.stringify(dataToUpdate.metrics, null, 2));
+
+      const updatePayload = {};
+      if (dataToUpdate.events) {
+        // Iterate over each event type and construct $push or $set operations
+        // This ensures we are appending to arrays correctly or setting objects
+        for (const eventType in dataToUpdate.events) {
+          if (Array.isArray(dataToUpdate.events[eventType]) && dataToUpdate.events[eventType].length > 0) {
+            // For arrays like hover, keyTypingCadence, etc., push new events
+            updatePayload[`events.${eventType}`] = { $each: dataToUpdate.events[eventType] };
+          } else if (typeof dataToUpdate.events[eventType] === 'object' && dataToUpdate.events[eventType] !== null && Object.keys(dataToUpdate.events[eventType]).length > 0) {
+            // For objects like mousemove, set the whole object or specific fields if needed
+            // For mousemove, we might want to $inc totalDistance and update heatmap/avgSpeed carefully
+            if (eventType === 'mousemove') {
+                // This is a simplified update for mousemove. 
+                // A more robust version would increment distance and potentially average speed, and update heatmap sections.
+                updatePayload['events.mousemove.totalDistance'] = dataToUpdate.events.mousemove.totalDistance;
+                updatePayload['events.mousemove.averageSpeed'] = dataToUpdate.events.mousemove.averageSpeed;
+                updatePayload['events.mousemove.heatmap'] = dataToUpdate.events.mousemove.heatmap;
+            } else {
+                // For other potential object-based events, direct set (less common for current model)
+                 updatePayload[`events.${eventType}`] = dataToUpdate.events[eventType];
+            }
+          }
+        }
+      }
+      if (dataToUpdate.metrics) {
+        // For metrics, we usually want to increment them
+        for (const metricKey in dataToUpdate.metrics) {
+          if (typeof dataToUpdate.metrics[metricKey] === 'number') {
+            updatePayload[`metrics.${metricKey}`] = dataToUpdate.metrics[metricKey]; // This sets, if you want to increment, use $inc
+            // If using $inc, it would be: updatePayload[`metrics.${metricKey}`] = { $inc: dataToUpdate.metrics[metricKey] };
+            // Current model has metrics as simple numbers, so direct set or $inc is fine depending on if they are totals or per-batch.
+            // Assuming these are totals for the batch being sent for now.
+          }
+        }
+      }
+
+      if (Object.keys(updatePayload).length === 0) {
+        console.log(`[Database] No valid event or metric data to update for state ${stateId}.`);
+        return { message: 'No data to update', stateId, updated: false };
+      }
+
+      console.log('[Database] Constructed updatePayload:', JSON.stringify(updatePayload, null, 2));
+
+      const result = await NonTransitionalEvents.findOneAndUpdate(
+        { stateId, sessionId, userId },
+        { 
+          $push: updatePayload, // Use $push for array appends, $set for objects/metrics will be handled by $set below or specific paths
+          // For metrics and mousemove object, we need to $set or $inc them specifically if not pushing to arrays
+          // The $push above might not work correctly for non-array fields in updatePayload.
+          // Let's refine the update to be more specific.
+        },
+        { new: true, upsert: true, setDefaultsOnInsert: true }
       );
-      
-      // Try to find existing document
-      let document = await NonTransitionalEvents.findOne({ stateId, sessionId });
-      
-      if (!document) {
-        // Create new document if none exists
-        document = new NonTransitionalEvents({
-          stateId,
-          sessionId,
-          userId,
-          events: {}, // Will be populated in the update
-          metrics: {}  // Will be populated in the update
-        });
-        console.log(`[Database] Created new non-transitional events document for state ${stateId}`);
-      } else {
-        console.log(`[Database] Found existing non-transitional events document for state ${stateId}`);
-      }
-      
-      // Update the events and metrics based on the incoming data
-      // This uses a deep merge approach for complex nested objects
-      if (eventsData.events) {
-        for (const [eventType, eventData] of Object.entries(eventsData.events)) {
-          console.log(`[Database] Processing event type: ${eventType}`);
-          
-          // Special case for mousemove with 2D arrays that need careful handling
-          if (eventType === 'mousemove' && typeof eventData === 'object') {
-            if (!document.events.mousemove) {
-              document.events.mousemove = {
-                heatmap: [],
-                pathPoints: [],
-                totalDistance: 0,
-                averageSpeed: 0
-              };
-            }
-            
-            // Handle pathPoints separately (2D array)
-            if (eventData.pathPoints && Array.isArray(eventData.pathPoints)) {
-              // Ensure pathPoints exists on document
-              if (!document.events.mousemove.pathPoints) {
-                document.events.mousemove.pathPoints = [];
-              }
-              
-              // Add each point set as its own array
-              eventData.pathPoints.forEach(pointSet => {
-                if (Array.isArray(pointSet)) {
-                  // Ensure each item is a number
-                  const numericPointSet = pointSet.map(Number);
-                  document.events.mousemove.pathPoints.push(numericPointSet);
-                }
-              });
-            }
-            
-            // Handle heatmap separately (2D array)
-            if (eventData.heatmap && Array.isArray(eventData.heatmap)) {
-              // Ensure heatmap exists on document
-              if (!document.events.mousemove.heatmap) {
-                document.events.mousemove.heatmap = [];
-              }
-              
-              // If the document heatmap is empty, initialize it
-              if (document.events.mousemove.heatmap.length === 0 && eventData.heatmap.length > 0) {
-                for (let i = 0; i < eventData.heatmap.length; i++) {
-                  if (Array.isArray(eventData.heatmap[i])) {
-                    document.events.mousemove.heatmap[i] = [...eventData.heatmap[i].map(Number)];
-                  }
-                }
-              } 
-              // Otherwise update the existing heatmap by adding values
-              else if (document.events.mousemove.heatmap.length > 0 && eventData.heatmap.length > 0) {
-                for (let i = 0; i < Math.min(document.events.mousemove.heatmap.length, eventData.heatmap.length); i++) {
-                  const docRow = document.events.mousemove.heatmap[i];
-                  const newRow = eventData.heatmap[i];
-                  
-                  if (Array.isArray(docRow) && Array.isArray(newRow)) {
-                    for (let j = 0; j < Math.min(docRow.length, newRow.length); j++) {
-                      docRow[j] += Number(newRow[j] || 0);
-                    }
-                  }
-                }
-              }
-            }
-            
-            // Handle simple numeric properties
-            if (typeof eventData.totalDistance === 'number') {
-              document.events.mousemove.totalDistance += eventData.totalDistance;
-            }
-            
-            if (typeof eventData.averageSpeed === 'number') {
-              // Calculate new average based on current and new values
-              const oldSpeed = document.events.mousemove.averageSpeed || 0;
-              document.events.mousemove.averageSpeed = (oldSpeed + eventData.averageSpeed) / 2;
-            }
-          } 
-          // Regular handling for other event types
-          else if (Array.isArray(eventData)) {
-            // If it's an array (like hover events), push new items
-            if (!document.events[eventType]) {
-              document.events[eventType] = [];
-            }
-            console.log(`[Database] Adding ${eventData.length} items to ${eventType} array`);
-            document.events[eventType].push(...eventData);
-          } 
-          else if (typeof eventData === 'object') {
-            // For objects with standard structure
-            if (!document.events[eventType]) {
-              document.events[eventType] = {};
-            }
-            
-            // Process each property
-            for (const [key, value] of Object.entries(eventData)) {
-              if (Array.isArray(value)) {
-                if (!document.events[eventType][key]) {
-                  document.events[eventType][key] = [];
-                }
-                // Regular arrays can use push
-                document.events[eventType][key].push(...value);
-                console.log(`[Database] Added ${value.length} items to ${eventType}.${key} array`);
-              } else if (typeof value === 'number' && document.events[eventType][key]) {
-                document.events[eventType][key] += value;
-                console.log(`[Database] Updated numeric value for ${eventType}.${key}`);
-              } else {
-                document.events[eventType][key] = value;
-                console.log(`[Database] Set value for ${eventType}.${key}`);
-              }
-            }
-          } 
-          else {
-            // For simple values, just replace
-            document.events[eventType] = eventData;
-            console.log(`[Database] Set simple value for ${eventType}`);
+
+      // Corrected update logic:
+      // We need to separate $push for arrays and $set/$inc for other fields.
+      const pushOperations = {};
+      const setOperations = {};
+      const incOperations = {}; // For metrics we want to increment
+
+      if (dataToUpdate.events) {
+        for (const eventType in dataToUpdate.events) {
+          const eventData = dataToUpdate.events[eventType];
+          if (Array.isArray(eventData) && eventData.length > 0) {
+            pushOperations[`events.${eventType}`] = { $each: eventData };
+          } else if (eventType === 'mousemove' && typeof eventData === 'object' && eventData !== null) {
+            if (eventData.totalDistance) incOperations['events.mousemove.totalDistance'] = eventData.totalDistance; // Increment
+            if (eventData.averageSpeed) setOperations['events.mousemove.averageSpeed'] = eventData.averageSpeed; // Set (avg might be recalculated)
+            if (eventData.heatmap) setOperations['events.mousemove.heatmap'] = eventData.heatmap; // Set
+          } else if (typeof eventData === 'object' && eventData !== null && Object.keys(eventData).length > 0) {
+             setOperations[`events.${eventType}`] = eventData; // For other potential object-based events
           }
         }
       }
-      
-      // Update metrics
-      if (eventsData.metrics) {
-        for (const [metricName, metricValue] of Object.entries(eventsData.metrics)) {
-          if (typeof metricValue === 'number') {
-            // For cumulative metrics, add to existing value
-            if (['totalIdleTime', 'totalMouseDistance', 'totalKeystrokes', 'totalClicks', 'totalHoverTime'].includes(metricName)) {
-              document.metrics[metricName] = (document.metrics[metricName] || 0) + metricValue;
-            } 
-            // For max metrics, take the max value
-            else if (['longestIdlePeriod'].includes(metricName)) {
-              document.metrics[metricName] = Math.max(document.metrics[metricName] || 0, metricValue);
-            }
-            // For other metrics, just replace if higher
-            else {
-              document.metrics[metricName] = metricValue;
-            }
-          } else {
-            document.metrics[metricName] = metricValue;
+
+      if (dataToUpdate.metrics) {
+        for (const metricKey in dataToUpdate.metrics) {
+          if (typeof dataToUpdate.metrics[metricKey] === 'number') {
+            // Assuming metrics sent are per-batch, so we $inc them.
+            // If they are absolute values for the state, use $set.
+            incOperations[`metrics.${metricKey}`] = dataToUpdate.metrics[metricKey];
           }
         }
       }
-      
-      // Update lastUpdated timestamp
-      document.lastUpdated = new Date();
-      
-      await document.save();
-      console.log(`[Database] Saved non-transitional events for state: ${stateId} with event types: ${Object.keys(document.events).join(', ')}`);
-      
-      return document;
+
+      const finalUpdate = {};
+      if (Object.keys(pushOperations).length > 0) finalUpdate.$push = pushOperations;
+      if (Object.keys(setOperations).length > 0) finalUpdate.$set = setOperations;
+      if (Object.keys(incOperations).length > 0) finalUpdate.$inc = incOperations;
+      finalUpdate.$setOnInsert = { stateId, sessionId, userId, createdAt: new Date() }; // Ensure these are set on creation
+      finalUpdate.$set = { ...finalUpdate.$set, lastUpdated: new Date() }; // Always update lastUpdated
+
+      if (Object.keys(finalUpdate).length <= 2) { // only $setOnInsert and $set for lastUpdated
+        console.log(`[Database] No actual event or metric data to push/set/inc for state ${stateId}.`);
+        // Still might want to upsert to ensure the document exists with timestamps if it's the first event batch for a state
+        // return { message: 'No data to update', stateId, updated: false };
+      }
+
+      console.log('[Database] Final update for findOneAndUpdate:', JSON.stringify(finalUpdate, null, 2));
+
+      const finalResult = await NonTransitionalEvents.findOneAndUpdate(
+        { stateId, sessionId, userId },
+        finalUpdate,
+        { new: true, upsert: true, setDefaultsOnInsert: true }
+      );
+
+      console.log(`[Database] Non-transitional events for state ${stateId} updated/created. Result ID: ${finalResult?._id}`);
+      return { 
+        message: 'Non-transitional events updated', 
+        docId: finalResult?._id,
+        stateId 
+      };
     } catch (error) {
       console.error(`[Database] Error updating non-transitional events for state ${stateId}:`, error);
       throw error;

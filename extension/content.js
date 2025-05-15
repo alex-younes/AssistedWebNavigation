@@ -217,22 +217,28 @@ async function sendNonTransitionalEvents() {
             totalDistance: nonTransitionalEvents.mousemove.totalDistance,
             averageSpeed: nonTransitionalEvents.mousemove.averageSpeed
         },
-        keyTyping: {
-            fields: {...nonTransitionalEvents.keyTyping.fields}
-        },
+        // keyTyping: { // Remove this section as it doesn't match the backend model directly
+        //     fields: {...nonTransitionalEvents.keyTyping.fields}
+        // },
         inactivity: [...nonTransitionalEvents.inactivity],
         escapeBackspace: [...nonTransitionalEvents.escapeBackspace],
-        keyTypingCadence: [...nonTransitionalEvents.keyTypingCadence],
+        keyTypingCadence: [...nonTransitionalEvents.keyTypingCadence], // This is what the model expects
         tabNavigation: [...nonTransitionalEvents.tabNavigation],
         repeatedClicks: [...nonTransitionalEvents.repeatedClicks],
         copyText: [...nonTransitionalEvents.copyText],
         pasteWithoutTyping: [...nonTransitionalEvents.pasteWithoutTyping],
         repeatedInputs: [...nonTransitionalEvents.repeatedInputs],
         oscillatingHovers: [...nonTransitionalEvents.oscillatingHovers],
+        keydownWithoutSubmit: [...nonTransitionalEvents.keydownWithoutSubmit], // Ensure this is included if collected
         inputFieldIdle: [...nonTransitionalEvents.inputFieldIdle]
     };
     
     const metrics = {...nonTransitionalMetrics};
+    
+    // Add a log to see what's being prepared to send
+    console.log('[DOM Tracker] Preparing to send non-transitional data:', 
+                { stateId: lastStateId, eventsToLog: JSON.parse(JSON.stringify(events)), metricsToLog: JSON.parse(JSON.stringify(metrics)) }
+              );
     
     // Reset the events and metrics
     nonTransitionalEvents = {
@@ -242,9 +248,9 @@ async function sendNonTransitionalEvents() {
             totalDistance: 0,
             averageSpeed: 0
         },
-        keyTyping: {
-            fields: {}
-        },
+        // keyTyping: { // Also remove from reset if its collection is removed/changed
+        //     fields: {}
+        // },
         inactivity: [],
         escapeBackspace: [],
         keyTypingCadence: [],
@@ -253,11 +259,9 @@ async function sendNonTransitionalEvents() {
         copyText: [],
         pasteWithoutTyping: [],
         repeatedInputs: [],
-        // Added the extra properties to match the initialization above
         oscillatingHovers: [],
         keydownWithoutSubmit: [],
         inputFieldIdle: []
-        // Removed: interactionWithHiddenElement, rapidContextSwitch, pauseBeforeSubmit
     };
     
     // Only reset cumulative metrics that should be per-batch

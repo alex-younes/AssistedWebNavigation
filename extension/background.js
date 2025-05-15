@@ -1065,14 +1065,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case 'saveNonTransitionalEvents':
       (async () => {
         try {
-          // Pass the message directly rather than message.state since it already contains the needed data
-          await saveNonTransitionalEvents(message, sendResponse);
+          // Log the received data from content.js
+          console.log('[Extension Background] Received saveNonTransitionalEvents message with data:', 
+                      { 
+                        stateId: message.data?.stateId, 
+                        events: JSON.parse(JSON.stringify(message.data?.events)), 
+                        metrics: JSON.parse(JSON.stringify(message.data?.metrics))
+                      }
+                    );
+
+          const result = await saveNonTransitionalEvents(message.data, sendResponse); // Pass sendResponse if needed by the async handler
+          // sendResponse({ success: true, ...result }); // Ensure sendResponse is called if the original design expects it.
         } catch (error) {
-          console.error('[Extension] Error saving non-transitional events:', error);
+          console.error('[Extension Background] Error processing saveNonTransitionalEvents:', error);
           sendResponse({ success: false, error: error.message });
         }
       })();
-      return true;
+      return true; // Important for asynchronous sendResponse
       
     default:
       sendResponse({ success: false, error: 'Unknown action' });
@@ -1258,230 +1267,49 @@ async function refreshApiBaseUrl() {
 refreshApiBaseUrl();
 
 // Save non-transitional events via the API
-async function saveNonTransitionalEvents(data, sendResponse) {
+async function saveNonTransitionalEvents(data, sendResponseCallback) {
+  if (!data || !data.stateId || !data.sessionId || !data.userId) {
+    console.error('[Extension Background] Missing required fields for saveNonTransitionalEvents', data);
+    if(sendResponseCallback) sendResponseCallback({ success: false, error: 'Missing required fields' });
+    return { success: false, error: 'Missing required fields' }; // Also return for internal call consistency
+  }
+
   try {
-    console.log('[Extension] Saving non-transitional events for state:', data.stateId);
+    console.log(`[Extension Background] Forwarding non-transitional events for state: ${data.stateId} to backend.`);
+    const apiUrl = getApiUrl('nontransitional-events');
     
-    // Create a clean copy of the data with proper data types
-    const cleanData = {
+    const payload = {
       stateId: data.stateId,
       sessionId: data.sessionId,
       userId: data.userId,
-      events: {},
-      metrics: {...data.metrics}
+      events: data.events, // These are the events received from content.js
+      metrics: data.metrics, // These are the metrics received from content.js
+      // Add eventTypes and eventCounts if they are still expected by the backend based on old logic.
+      // However, the backend model NonTransitionalEvents seems to directly take the events and metrics objects.
     };
-    
-    // Only include event types that exist
-    if (data.events) {
-      // Process hover events
-      if (data.events.hover && Array.isArray(data.events.hover)) {
-        cleanData.events.hover = data.events.hover;
-      }
-      
-      // Process key typing events
-      if (data.events.keyTyping && data.events.keyTyping.fields) {
-        cleanData.events.keyTyping = {
-          fields: data.events.keyTyping.fields
-        };
-      }
-      
-      // Process inactivity events
-      if (data.events.inactivity && Array.isArray(data.events.inactivity)) {
-        cleanData.events.inactivity = data.events.inactivity;
-      }
-      
-      // Process escapeBackspace events
-      if (data.events.escapeBackspace && Array.isArray(data.events.escapeBackspace)) {
-        cleanData.events.escapeBackspace = data.events.escapeBackspace;
-      }
-      
-      // Process keyTypingCadence events - NEW
-      if (data.events.keyTypingCadence && Array.isArray(data.events.keyTypingCadence)) {
-        cleanData.events.keyTypingCadence = data.events.keyTypingCadence;
-        console.log('[Extension] Processing keyTypingCadence events:', 
-          data.events.keyTypingCadence.length);
-      }
-      
-      // Process tabNavigation events - NEW
-      if (data.events.tabNavigation && Array.isArray(data.events.tabNavigation)) {
-        cleanData.events.tabNavigation = data.events.tabNavigation;
-        console.log('[Extension] Processing tabNavigation events:', 
-          data.events.tabNavigation.length);
-      }
-      
-      // Process repeatedClicks events - NEW
-      if (data.events.repeatedClicks && Array.isArray(data.events.repeatedClicks)) {
-        cleanData.events.repeatedClicks = data.events.repeatedClicks;
-        console.log('[Extension] Processing repeatedClicks events:', 
-          data.events.repeatedClicks.length);
-      }
-      
-      // Process copyText events - NEW
-      if (data.events.copyText && Array.isArray(data.events.copyText)) {
-        cleanData.events.copyText = data.events.copyText;
-        console.log('[Extension] Processing copyText events:', 
-          data.events.copyText.length);
-      }
-      
-      // Process pasteWithoutTyping events - NEW
-      if (data.events.pasteWithoutTyping && Array.isArray(data.events.pasteWithoutTyping)) {
-        cleanData.events.pasteWithoutTyping = data.events.pasteWithoutTyping;
-        console.log('[Extension] Processing pasteWithoutTyping events:', 
-          data.events.pasteWithoutTyping.length);
-      }
-      
-      // Process repeatedInputs events - NEWLY ADDED
-      if (data.events.repeatedInputs && Array.isArray(data.events.repeatedInputs)) {
-        cleanData.events.repeatedInputs = data.events.repeatedInputs;
-        console.log('[Extension] Processing repeatedInputs events:', 
-          data.events.repeatedInputs.length);
-      }
-      
-      // Process oscillatingHovers events
-      if (data.events.oscillatingHovers && Array.isArray(data.events.oscillatingHovers)) {
-        cleanData.events.oscillatingHovers = data.events.oscillatingHovers;
-        console.log('[Extension] Processing oscillatingHovers events:', 
-          data.events.oscillatingHovers.length);
-      }
-      
-      // Process inputFieldIdle events
-      if (data.events.inputFieldIdle && Array.isArray(data.events.inputFieldIdle)) {
-        cleanData.events.inputFieldIdle = data.events.inputFieldIdle;
-        console.log('[Extension] Processing inputFieldIdle events:', 
-          data.events.inputFieldIdle.length);
-      }
-      
-      // Special handling for mousemove data
-      if (data.events.mousemove) {
-        // Initialize with default numeric values to prevent NaN
-        cleanData.events.mousemove = {
-          totalDistance: 0,
-          averageSpeed: 0,
-          heatmap: []
-        };
-        
-        // Safely assign numeric values with defaults and validation
-        const totalDistance = parseFloat(data.events.mousemove.totalDistance);
-        cleanData.events.mousemove.totalDistance = isNaN(totalDistance) ? 0 : totalDistance;
-        
-        const averageSpeed = parseFloat(data.events.mousemove.averageSpeed);
-        cleanData.events.mousemove.averageSpeed = isNaN(averageSpeed) ? 0 : averageSpeed;
-        
-        // Handle heatmap - careful parsing if it's a string
-        if (data.events.mousemove.heatmap) {
-          if (typeof data.events.mousemove.heatmap === 'string') {
-            try {
-              const parsedHeatmap = JSON.parse(data.events.mousemove.heatmap);
-              if (Array.isArray(parsedHeatmap)) {
-                cleanData.events.mousemove.heatmap = parsedHeatmap.map(row => {
-                  if (Array.isArray(row)) {
-                    return row.map(val => {
-                      const num = parseFloat(val);
-                      return isNaN(num) ? 0 : num;
-                    });
-                  } else {
-                    return [];
-                  }
-                });
-              }
-            } catch (e) {
-              console.error('[Extension] Failed to parse heatmap string:', e);
-              cleanData.events.mousemove.heatmap = [];
-            }
-          } else if (Array.isArray(data.events.mousemove.heatmap)) {
-            // Make sure each row is an array of numbers
-            cleanData.events.mousemove.heatmap = data.events.mousemove.heatmap.map(row => {
-              if (Array.isArray(row)) {
-                return row.map(val => {
-                  const num = parseFloat(val);
-                  return isNaN(num) ? 0 : num;
-                });
-              } else if (typeof row === 'string') {
-                try {
-                  const parsed = JSON.parse(row);
-                  if (Array.isArray(parsed)) {
-                    return parsed.map(val => {
-                      const num = parseFloat(val);
-                      return isNaN(num) ? 0 : num;
-                    });
-                  }
-                } catch (e) {
-                  return [];
-                }
-              } else {
-                return [];
-              }
-            });
-          }
-        }
-      }
-    }
-    
-    // Ensure metrics are valid numbers
-    if (cleanData.metrics) {
-      for (const key in cleanData.metrics) {
-        if (typeof cleanData.metrics[key] === 'number' && isNaN(cleanData.metrics[key])) {
-          cleanData.metrics[key] = 0;
-        }
-      }
-    }
-    
-    // Construct the API endpoint
-    const url = getApiUrl('nontransitional-events');
-    console.log('[Extension] Non-transitional events API URL:', url);
-    
-    // Log the detailed cleaned data for debugging
-    console.log('[Extension] Sending non-transitional events with data:', 
-      JSON.stringify({
-        stateId: cleanData.stateId,
-        sessionId: cleanData.sessionId,
-        userId: cleanData.userId,
-        eventTypes: Object.keys(cleanData.events),
-        eventCounts: {
-          hover: cleanData.events.hover?.length || 0,
-          escapeBackspace: cleanData.events.escapeBackspace?.length || 0,
-          keyTypingCadence: cleanData.events.keyTypingCadence?.length || 0,
-          tabNavigation: cleanData.events.tabNavigation?.length || 0,
-          repeatedClicks: cleanData.events.repeatedClicks?.length || 0,
-          copyText: cleanData.events.copyText?.length || 0,
-          pasteWithoutTyping: cleanData.events.pasteWithoutTyping?.length || 0,
-          repeatedInputs: cleanData.events.repeatedInputs?.length || 0,
-          oscillatingHovers: cleanData.events.oscillatingHovers?.length || 0,
-          inputFieldIdle: cleanData.events.inputFieldIdle?.length || 0,
-          heatmapLength: cleanData.events.mousemove?.heatmap?.length || 0,
-          keyTyping: Object.keys(cleanData.events.keyTyping?.fields || {}).length || 0,
-          inactivity: cleanData.events.inactivity?.length || 0
-        }
-      })
-    );
-    
-    // Make the API request
-    const response = await fetch(url, {
+
+    console.log('[Extension Background] Payload for /nontransitional-events:', JSON.parse(JSON.stringify(payload)));
+
+    const response = await fetch(apiUrl, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(cleanData)
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
     });
-    
+
     if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`Server error: ${response.status} - ${text}`);
+      const errorText = await response.text();
+      throw new Error(`Backend error: ${response.status} - ${errorText}`);
     }
-    
-    const responseData = await response.json();
-    console.log('[Extension] Non-transitional events saved successfully:', responseData);
-    
-    sendResponse({
-      success: true,
-      message: 'Non-transitional events saved'
-    });
+
+    const result = await response.json();
+    console.log('[Extension Background] Backend response for non-transitional events:', result);
+    if(sendResponseCallback) sendResponseCallback({ success: true, ...result });
+    return { success: true, ...result };
+
   } catch (error) {
-    console.error('[Extension] Error saving non-transitional events:', error);
-    sendResponse({
-      success: false,
-      error: error.message
-    });
+    console.error('[Extension Background] Error sending non-transitional events to backend:', error);
+    if(sendResponseCallback) sendResponseCallback({ success: false, error: error.message });
+    return { success: false, error: error.message };
   }
 }
 

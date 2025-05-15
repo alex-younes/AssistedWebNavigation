@@ -65,6 +65,45 @@ router.get('/users/:userId/sessions', DUMMY_ensureAdmin, async (req, res) => {
   }
 });
 
+/**
+ * @route   GET /api/admin/states/:stateId/nontransitional
+ * @desc    Get non-transitional events for a specific state (for admin panel)
+ * @access  Private (Admin)
+ */
+router.get('/states/:stateId/nontransitional', DUMMY_ensureAdmin, async (req, res) => {
+  try {
+    const { stateId } = req.params;
+    // We might also need sessionId if the service/db layer strictly requires it for lookup.
+    // For now, assuming stateId is unique enough or the service layer can handle it.
+    // If sessionId is needed, it might have to be passed as a query parameter or in the body for a GET, which is not ideal.
+    // Let's assume for now that stateId is sufficient for lookup by the service manager method.
+    // The serviceManager.getNonTransitionalEventsByState actually expects both.
+    // The frontend will need to know the sessionId of the state being queried.
+    // We can pass it as a query param: /api/admin/states/:stateId/nontransitional?sessionId=...
+    const { sessionId } = req.query;
+
+    if (!stateId || !sessionId) {
+      return res.status(400).json({ error: 'State ID and Session ID query parameter are required' });
+    }
+
+    const serviceManager = require('../services/ServiceManager'); // Ensure serviceManager is in scope
+    const nonTransitionalEvents = await serviceManager.getNonTransitionalEventsByState(stateId, sessionId);
+
+    if (!nonTransitionalEvents) {
+      // If null is returned (meaning not found), send a 404
+      return res.status(404).json({ message: 'Non-transitional events not found for this state.' });
+    }
+
+    res.json(nonTransitionalEvents);
+  } catch (error) {
+    console.error(`[Backend] Error fetching non-transitional events for state ${req.params.stateId}:`, error);
+    if (error.message.includes('State ID and Session ID are required')) {
+        return res.status(400).json({ error: error.message });
+    }
+    res.status(500).json({ error: 'Server error while fetching non-transitional events' });
+  }
+});
+
 // Add more admin-specific routes here later, e.g., for sessions by user
 
 module.exports = router; 

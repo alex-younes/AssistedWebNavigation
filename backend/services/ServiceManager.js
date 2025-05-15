@@ -352,6 +352,59 @@ class ServiceManager {
       return { success: false, message: errorMessage };
     }
   }
+
+  async getNonTransitionalEventsByState(stateId, sessionId) {
+    if (!stateId || !sessionId) {
+      debug('[ServiceManager] stateId and sessionId are required to fetch non-transitional events.');
+      throw new Error('State ID and Session ID are required.');
+    }
+    debug(`[ServiceManager] Fetching non-transitional events for stateId: ${stateId}, sessionId: ${sessionId}`);
+    try {
+      const events = await db.getNonTransitionalEvents(stateId, sessionId);
+      if (!events) {
+        debug(`[ServiceManager] No non-transitional events found for stateId: ${stateId}, sessionId: ${sessionId}`);
+        return null; // Or return an empty object/array as appropriate for the frontend
+      }
+      debug(`[ServiceManager] Successfully fetched non-transitional events for stateId: ${stateId}`);
+      return events;
+    } catch (error) {
+      console.error(`[ServiceManager] Error fetching non-transitional events for stateId ${stateId}:`, error);
+      throw error;
+    }
+  }
+
+  async saveNonTransitionalEvents(eventsData) {
+    if (!eventsData || !eventsData.stateId || !eventsData.sessionId || !eventsData.userId) {
+      console.error('[ServiceManager] Missing required fields for saveNonTransitionalEvents:', eventsData);
+      throw new Error('State ID, Session ID, and User ID are required for non-transitional events');
+    }
+
+    // Log received data structure
+    console.log('[ServiceManager] Received saveNonTransitionalEvents with data:', 
+                { 
+                  stateId: eventsData.stateId, 
+                  sessionId: eventsData.sessionId,
+                  userId: eventsData.userId, 
+                  eventKeys: eventsData.events ? Object.keys(eventsData.events) : 'No events object', 
+                  metricKeys: eventsData.metrics ? Object.keys(eventsData.metrics) : 'No metrics object' 
+                });
+    // For more detailed logging if needed:
+    // console.log('[ServiceManager] Detailed events:', JSON.stringify(eventsData.events, null, 2));
+    // console.log('[ServiceManager] Detailed metrics:', JSON.stringify(eventsData.metrics, null, 2));
+
+    try {
+      const result = await db.updateNonTransitionalEvents(
+        eventsData.stateId,
+        eventsData.sessionId,
+        eventsData.userId,
+        { events: eventsData.events, metrics: eventsData.metrics } // Pass events and metrics objects directly
+      );
+      return { success: true, ...result };
+    } catch (error) {
+      console.error(`[ServiceManager] Error in saveNonTransitionalEvents for state ${eventsData.stateId}:`, error);
+      throw error;
+    }
+  }
 }
 
 // Create and export singleton instance

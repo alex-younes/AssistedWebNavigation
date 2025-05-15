@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { getAllUsers, AdminUser, getUserSessions, UserSession } from '../services/adminService'; // Import service and types
 import { useNavigate } from 'react-router-dom'; // Import useNavigate
+import LLMAnalysisPanel from '../components/LLMAnalysisPanel';
 
 const AdminDashboardView: React.FC = () => {
   const { user, logout } = useAuth();
@@ -86,6 +87,7 @@ const AdminDashboardView: React.FC = () => {
         <h2 className="text-xl font-semibold mb-4 text-gray-700">Users</h2>
         {isLoadingUsers && <p className="text-blue-500">Loading users...</p>}
         {usersError && <p className="text-red-600">Error: {usersError}</p>}
+        
         {!isLoadingUsers && !usersError && (
           <div className="overflow-x-auto">
             {users.length === 0 ? (
@@ -115,30 +117,35 @@ const AdminDashboardView: React.FC = () => {
       </div>
 
       {selectedUser && (
-        <div className="mt-8 bg-white shadow-xl rounded-lg p-6">
-          <h2 className="text-xl font-semibold mb-4 text-gray-700">Sessions for {selectedUser.username}</h2>
-          {isLoadingSessions && <p className="text-blue-500">Loading sessions...</p>}
-          {sessionsError && <p className="text-red-600">Error: {sessionsError}</p>}
-          {!isLoadingSessions && !sessionsError && (
-            userSessions.length === 0 ? (
-              <p className="text-gray-500">No sessions found for this user.</p>
-            ) : (
-              <ul className="divide-y divide-gray-200">
-                {userSessions.map(session => (
-                  <li 
-                    key={session.id} 
-                    className="py-3 px-2 hover:bg-blue-50 cursor-pointer rounded transition duration-150 ease-in-out"
-                    onClick={() => handleSessionClick(session.id)} // Call handleSessionClick with session.id
-                  >
-                    <p className="text-sm font-medium text-gray-900">Session ID: {session.id}</p>
-                    <p className="text-sm text-gray-500">Start: {new Date(session.startTime).toLocaleString()}</p>
-                    {session.endTime && <p className="text-sm text-gray-500">End: {new Date(session.endTime).toLocaleString()}</p>}
-                    <p className="text-sm text-gray-500">Status: <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${session.status === 'completed' ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}`}>{session.status}</span></p>
-                  </li>
-                ))}
-              </ul>
-            )
-          )}
+        <div className="mt-8 grid grid-cols-1 lg:grid-cols-2 gap-8">
+          <div className="bg-white shadow-xl rounded-lg p-6">
+            <h2 className="text-xl font-semibold mb-4 text-gray-700">Sessions for {selectedUser.username}</h2>
+            {isLoadingSessions && <p className="text-blue-500">Loading sessions...</p>}
+            {sessionsError && <p className="text-red-600">Error: {sessionsError}</p>}
+            {!isLoadingSessions && !sessionsError && (
+              userSessions.length === 0 ? (
+                <p className="text-gray-500">No sessions found for this user.</p>
+              ) : (
+                <ul className="divide-y divide-gray-200">
+                  {userSessions.map(session => (
+                    <li 
+                      key={session.id} 
+                      className="py-3 px-2 hover:bg-blue-50 cursor-pointer rounded transition duration-150 ease-in-out"
+                      onClick={() => handleSessionClick(session.id)} // Call handleSessionClick with session.id
+                    >
+                      <p className="text-sm font-medium text-gray-900">Session ID: {session.id}</p>
+                      <p className="text-sm text-gray-500">Start: {new Date(session.startTime).toLocaleString()}</p>
+                      {session.endTime && <p className="text-sm text-gray-500">End: {new Date(session.endTime).toLocaleString()}</p>}
+                      <p className="text-sm text-gray-500">Status: <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${session.status === 'completed' ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}`}>{session.status}</span></p>
+                    </li>
+                  ))}
+                </ul>
+              )
+            )}
+          </div>
+          
+          {/* LLM Analysis Panel */}
+          <LLMAnalysisPanel userId={selectedUser.userId} />
         </div>
       )}
     </div>

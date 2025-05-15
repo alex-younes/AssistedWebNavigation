@@ -353,6 +353,11 @@ class ServiceManager {
     }
   }
 
+  /**
+   * Get non-transitional events for a state
+   * @param {string} stateId - State ID
+   * @param {string} sessionId - Session ID
+   */
   async getNonTransitionalEventsByState(stateId, sessionId) {
     if (!stateId || !sessionId) {
       debug('[ServiceManager] stateId and sessionId are required to fetch non-transitional events.');
@@ -402,6 +407,122 @@ class ServiceManager {
       return { success: true, ...result };
     } catch (error) {
       console.error(`[ServiceManager] Error in saveNonTransitionalEvents for state ${eventsData.stateId}:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Analyze all sessions for a user
+   * @param {string} userId - User ID
+   * @returns {Object} Analysis results
+   */
+  async analyzeUserSessions(userId) {
+    if (!userId) {
+      throw new Error('User ID is required');
+    }
+    
+    try {
+      console.log(`[ServiceManager] Analyzing sessions for user ${userId}`);
+      
+      // In a production environment, this would:
+      // 1. Fetch all user sessions from the database
+      // 2. For each session, fetch states and non-transitional events
+      // 3. Process data into a format suitable for the LLM
+      // 4. Send to LLM API for analysis
+      // 5. Process and return the results
+      
+      // For now, return mock data
+      return {
+        userId,
+        summary: "This user appears to be a moderately experienced user who navigates efficiently but occasionally struggles with form submissions. They spend most time on the preferences and dashboard sections.",
+        keyInsights: [
+          "User typically spends 2-3 minutes per session",
+          "Most active between 2pm and 5pm",
+          "Navigates through menu options systematically",
+          "Revisits the preferences page frequently"
+        ],
+        struggles: [
+          "Repeated form submission errors on the contact page",
+          "Multiple attempts needed on dropdown selections",
+          "Difficulty with multi-step processes",
+          "Gets stuck periodically when trying to save changes"
+        ],
+        behaviors: [
+          "Often hovers extensively before clicking",
+          "Uses keyboard shortcuts frequently",
+          "Takes time to read content thoroughly",
+          "Tends to navigate back and forth between related pages"
+        ],
+        suggestions: [
+          "Simplify the form submission process",
+          "Add more explicit instructions for multi-step processes",
+          "Consider adding tooltips for complex interface elements",
+          "Improve validation feedback on form errors"
+        ],
+        timestamp: new Date().toISOString()
+      };
+    } catch (error) {
+      console.error(`[ServiceManager] Error analyzing sessions for user ${userId}:`, error);
+      throw error;
+    }
+  }
+  
+  /**
+   * Analyze a specific session
+   * @param {string} sessionId - Session ID
+   * @returns {Object} Analysis results
+   */
+  async analyzeSession(sessionId) {
+    if (!sessionId) {
+      throw new Error('Session ID is required');
+    }
+    
+    try {
+      console.log(`[ServiceManager] Analyzing session ${sessionId}`);
+      
+      // In a production environment, this would:
+      // 1. Fetch the session data from the database
+      // 2. Fetch all states and non-transitional events for this session
+      // 3. Process data into a format suitable for the LLM
+      // 4. Send to LLM API for analysis
+      // 5. Process and return the results
+      
+      // For now, return mock data
+      const session = await db.getSessionById(sessionId);
+      const userId = session ? session.userId : "unknown_user";
+      
+      return {
+        sessionId,
+        userId,
+        summary: "This session shows a user exploring the preferences panel with some hesitation. The user appears to be looking for specific settings but struggled with finding the right options.",
+        keyInsights: [
+          "Session lasted approximately 5 minutes",
+          "User explored multiple preference categories",
+          "Several hover events before making selections",
+          "Two form submission attempts"
+        ],
+        struggles: [
+          "Difficulty locating the theme selection dropdown",
+          "Multiple clicks on non-clickable elements",
+          "Hesitation when filling form fields",
+          "Backtracked several times through the navigation path"
+        ],
+        behaviors: [
+          "Careful reading of options before selection",
+          "Methodical navigation through form fields",
+          "Uses tab navigation frequently",
+          "Pause periods indicating decision making"
+        ],
+        suggestions: [
+          "Make the theme selection more prominent",
+          "Add visual cues for clickable elements",
+          "Simplify the preferences layout",
+          "Consider a guided setup option for new users"
+        ],
+        timestamp: new Date().toISOString()
+      };
+    } catch (error) {
+      console.error(`[ServiceManager] Error analyzing session ${sessionId}:`, error);
       throw error;
     }
   }

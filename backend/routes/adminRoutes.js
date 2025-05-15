@@ -104,6 +104,52 @@ router.get('/states/:stateId/nontransitional', DUMMY_ensureAdmin, async (req, re
   }
 });
 
+/**
+ * @route   GET /api/admin/analysis/user/:userId
+ * @desc    Analyze all sessions for a specific user
+ * @access  Private (Admin)
+ */
+router.get('/analysis/user/:userId', DUMMY_ensureAdmin, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    if (!userId) {
+      return res.status(400).json({ error: 'User ID is required' });
+    }
+
+    // Use the serviceManager to analyze user sessions
+    const serviceManager = require('../services/ServiceManager');
+    const analysisResult = await serviceManager.analyzeUserSessions(userId);
+    
+    res.json(analysisResult);
+  } catch (error) {
+    console.error(`[Backend] Error analyzing sessions for user ${req.params.userId}:`, error);
+    res.status(500).json({ error: 'Server error while analyzing user sessions' });
+  }
+});
+
+/**
+ * @route   GET /api/admin/analysis/session/:sessionId
+ * @desc    Analyze a specific session
+ * @access  Private (Admin)
+ */
+router.get('/analysis/session/:sessionId', DUMMY_ensureAdmin, async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    if (!sessionId) {
+      return res.status(400).json({ error: 'Session ID is required' });
+    }
+
+    // Use the serviceManager to analyze the session
+    const serviceManager = require('../services/ServiceManager');
+    const analysisResult = await serviceManager.analyzeSession(sessionId);
+    
+    res.json(analysisResult);
+  } catch (error) {
+    console.error(`[Backend] Error analyzing session ${req.params.sessionId}:`, error);
+    res.status(500).json({ error: 'Server error while analyzing session' });
+  }
+});
+
 // Add more admin-specific routes here later, e.g., for sessions by user
 
 module.exports = router; 

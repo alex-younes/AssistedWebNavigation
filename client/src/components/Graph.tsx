@@ -20,6 +20,7 @@ import ReactFlow, {
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import styled from 'styled-components';
+import LLMAnalysisPanel from './LLMAnalysisPanel';
 
 // Define a styled component for the edges with more prominent styling
 const StyledEdge = styled(BaseEdge)`
@@ -1056,6 +1057,7 @@ const Graph = () => {
   const [edges, setEdges] = useState<Edge[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [showAnalysisPanel, setShowAnalysisPanel] = useState(false);
   
   // Global modal state
   const [showModal, setShowModal] = useState(false);
@@ -1288,6 +1290,10 @@ const Graph = () => {
     );
   }
 
+  const toggleAnalysisPanel = () => {
+    setShowAnalysisPanel(!showAnalysisPanel);
+  };
+
   return (
     <div className="w-full h-screen bg-gray-50 relative">
       <div className="absolute top-4 left-4 z-10 bg-white p-4 rounded-md shadow-md max-w-md">
@@ -1297,7 +1303,28 @@ const Graph = () => {
         <p className="text-sm text-gray-600 mt-1">
           {nodes.length} states • {edges.length} transitions
         </p>
+        <button
+          onClick={toggleAnalysisPanel}
+          className="mt-2 px-4 py-2 bg-indigo-600 text-white text-sm rounded hover:bg-indigo-700 transition"
+        >
+          {showAnalysisPanel ? 'Hide LLM Analysis' : 'Show LLM Analysis'}
+        </button>
       </div>
+      
+      {showAnalysisPanel && (
+        <div className="absolute top-4 right-4 z-10 bg-white p-4 rounded-md shadow-xl max-w-lg w-full max-h-[90vh] overflow-y-auto">
+          <button 
+            onClick={() => setShowAnalysisPanel(false)}
+            className="absolute top-2 right-2 text-gray-500 hover:text-gray-700"
+            aria-label="Close panel"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+          <LLMAnalysisPanel sessionId={sessionId} />
+        </div>
+      )}
       
       <ReactFlowProvider>
         <ReactFlow

@@ -151,6 +151,42 @@ const NonTransitionalEventsSchema = new mongoose.Schema({
       isInputField: Boolean,
       fieldIdentifier: String,
       eventMeaning: { type: String, default: "Individual key press recorded." }
+    }],
+    deadClicks: [{
+      _id: false,
+      timestamp: Date,
+      targetElementTag: String,
+      targetElementId: String,
+      targetElementPath: String,
+      targetElementFriendlyName: String,
+      clientX: Number,
+      clientY: Number,
+      eventMeaning: { type: String, default: "Clicked on a non-interactive element." }
+    }],
+    scrollEvents: [{
+      _id: false,
+      timestamp: Date,
+      targetElementTag: String,
+      targetElementId: String,
+      targetElementPath: String,
+      scrollX: Number,
+      scrollY: Number,
+      scrollDepthX: Number,
+      scrollDepthY: Number,
+      maxScrollX: Number,
+      maxScrollY: Number,
+      viewportWidth: Number,
+      viewportHeight: Number,
+      eventMeaning: { type: String, default: "User scrolled the page or an element." }
+    }],
+    dropdownToggle: [{
+      _id: false,
+      timestamp: Date,
+      elementTag: String,
+      elementId: String,
+      elementPath: String,
+      newState: String,
+      eventMeaning: { type: String, default: "Dropdown toggled." }
     }]
   },
   metrics: {

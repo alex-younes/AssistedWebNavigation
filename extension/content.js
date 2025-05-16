@@ -52,7 +52,10 @@ let nonTransitionalEvents = {
     oscillatingHovers: [],
     keydownWithoutSubmit: [],
     inputFieldIdle: [],
-    allKeyPresses: [] // ADDED for all key presses
+    allKeyPresses: [], // ADDED for all key presses
+    deadClicks: [], // ADDED for dead clicks
+    scrollEvents: [], // ADDED for scroll events
+    dropdownToggle: [] // ADDED for dropdown toggle events
     // Removed: interactionWithHiddenElement, rapidContextSwitch, pauseBeforeSubmit
 };
 
@@ -72,6 +75,7 @@ let nonTransitionalMetrics = {
 let lastNonTransitionalSendTime = 0;
 let nonTransitionalBatchInterval = 2000; // Send every 2 seconds
 let nonTransitionalSendTimer = null;
+let currentBatchMouseActiveTime = 0; // ADDED: Track active mouse movement time for current batch (in ms)
 
 // Variables for tracking hover state
 let currentHoverElement = null;
@@ -285,11 +289,21 @@ async function sendNonTransitionalEvents() {
         oscillatingHovers: [...nonTransitionalEvents.oscillatingHovers],
         keydownWithoutSubmit: [...nonTransitionalEvents.keydownWithoutSubmit],
         inputFieldIdle: [...nonTransitionalEvents.inputFieldIdle],
-        allKeyPresses: [...nonTransitionalEvents.allKeyPresses] // ADDED for all key presses
+        allKeyPresses: [...nonTransitionalEvents.allKeyPresses],
+        deadClicks: [...nonTransitionalEvents.deadClicks],
+        scrollEvents: [...nonTransitionalEvents.scrollEvents],
+        dropdownToggle: [...nonTransitionalEvents.dropdownToggle] // ADDED for dropdown toggle
     };
     
     const metrics = {...nonTransitionalMetrics};
     
+    // Calculate averageSpeed before sending
+    if (events.mousemove.totalDistance > 0 && currentBatchMouseActiveTime > 0) {
+        events.mousemove.averageSpeed = events.mousemove.totalDistance / (currentBatchMouseActiveTime / 1000); // pixels per second
+    } else {
+        events.mousemove.averageSpeed = 0; // Default to 0 if no distance or no active time
+    }
+
     console.log('[DOM Tracker] Preparing to send non-transitional data:', 
                 { stateId: lastStateId, eventsToLog: JSON.parse(JSON.stringify(events)), metricsToLog: JSON.parse(JSON.stringify(metrics)) }
               );
@@ -316,10 +330,15 @@ async function sendNonTransitionalEvents() {
         oscillatingHovers: [],
         keydownWithoutSubmit: [],
         inputFieldIdle: [],
-        allKeyPresses: [] // ADDED for all key presses
+        allKeyPresses: [],
+        deadClicks: [],
+        scrollEvents: [],
+        dropdownToggle: [] // ADDED for dropdown toggle
     };
     
     nonTransitionalMetrics.totalMouseDistance = 0;
+    // Reset the batch-specific active mouse time
+    currentBatchMouseActiveTime = 0;
     
     if (events.hover.length === 0 && 
         (!events.keyTyping || Object.keys(events.keyTyping.fields).length === 0) &&
@@ -333,7 +352,10 @@ async function sendNonTransitionalEvents() {
         events.repeatedInputs.length === 0 &&
         events.oscillatingHovers.length === 0 &&
         events.inputFieldIdle.length === 0 &&
-        events.allKeyPresses.length === 0) { // ADDED for all key presses
+        events.allKeyPresses.length === 0 &&
+        events.deadClicks.length === 0 && // ADDED for dead clicks
+        events.scrollEvents.length === 0 && // ADDED for scroll events
+        events.dropdownToggle.length === 0) { // ADDED for dropdown toggle
         return;
     }
     
@@ -358,7 +380,10 @@ async function sendNonTransitionalEvents() {
                 oscillatingHovers: events.oscillatingHovers,
                 keydownWithoutSubmit: events.keydownWithoutSubmit,
                 inputFieldIdle: events.inputFieldIdle,
-                allKeyPresses: events.allKeyPresses // ADDED for all key presses
+                allKeyPresses: events.allKeyPresses, // ADDED for all key presses
+                deadClicks: events.deadClicks, // ADDED for dead clicks
+                scrollEvents: events.scrollEvents, // ADDED for scroll events
+                dropdownToggle: events.dropdownToggle // ADDED for dropdown toggle
             }, 
             metrics: metrics
         });
@@ -620,6 +645,11 @@ function setupMouseMoveTracking() {
                 }
             }
             
+            // Add to active time: Calculate duration of this specific mouse movement segment
+            if (lastMouseMoveTime) { // Only add duration if it's not the first movement point of this activity burst
+                 currentBatchMouseActiveTime += (currentTime - lastMouseMoveTime); // currentTime is from the start of the event listener
+            }
+            
             // Update heatmap
             const heatmapCoord = positionToHeatmapCoord(mouseX, mouseY);
             if (nonTransitionalEvents.mousemove.heatmap[heatmapCoord.y]) {
@@ -652,13 +682,13 @@ function setupMouseMoveTracking() {
         viewportWidth = window.innerWidth;
     });
     
-    // Track scroll events
-    document.addEventListener('scroll', () => {
-        if (!isRecording) return;
-        
-        // Update scroll position
-        scrollPosition = { x: window.scrollX, y: window.scrollY };
-    });
+    // REMOVED scroll listener from here as it's now in setupScrollTracking
+    // document.addEventListener('scroll', () => {
+    //     if (!isRecording) return;
+    //     
+    //     // Update scroll position
+    //     scrollPosition = { x: window.scrollX, y: window.scrollY };
+    // });
 }
 
 // Setup keyboard typing tracking
@@ -943,11 +973,60 @@ function setupClickTracking() {
     document.addEventListener('click', event => {
         if (!isRecording) return;
         
-        // Update metrics
+        // Existing metric update - keep this
         nonTransitionalMetrics.totalClicks++;
+
+        const element = event.target;
+
+        // Determine if the click is "dead"
+        let isDeadClick = true;
+        if (element) {
+            const tagName = element.tagName.toLowerCase();
+            const interactiveTags = ['a', 'button', 'input', 'select', 'textarea', 'details', 'summary'];
+            const interactiveRoles = ['button', 'link', 'checkbox', 'radio', 'menuitem', 'tab', 'slider', 'textbox', 'option', 'treeitem'];
+            
+            if (interactiveTags.includes(tagName)) {
+                isDeadClick = false;
+            }
+            // For inputs, some types are not inherently interactive for a "click" action in this context
+            if (tagName === 'input' && ['hidden', 'image', 'reset', 'button', 'submit', 'checkbox', 'radio'].includes(element.type?.toLowerCase())){
+                 isDeadClick = false;
+            }
+            if (element.hasAttribute('onclick') || 
+                element.hasAttribute('href') || 
+                (element.getAttribute('role') && interactiveRoles.includes(element.getAttribute('role'))) ||
+                element.isContentEditable) {
+                isDeadClick = false;
+            }
+            // Check style for pointer cursor as a hint, but not definitive
+            const styles = window.getComputedStyle(element);
+            if (styles.cursor === 'pointer') {
+                 // Could still be a dead click if it's just styled to look interactive but does nothing.
+                 // For simplicity, we won't make it not-dead based on cursor alone unless it's already determined interactive.
+            }
+        }
+
+        if (isDeadClick) {
+            const path = getElementPath(element);
+            const friendlyName = getElementFriendlyName(element);
+            const deadClickData = {
+                timestamp: new Date(),
+                targetElementTag: element ? element.tagName.toLowerCase() : 'unknown',
+                targetElementId: element ? (element.id || 'N/A') : 'N/A',
+                targetElementPath: path || 'N/A',
+                targetElementFriendlyName: friendlyName || 'N/A',
+                clientX: event.clientX,
+                clientY: event.clientY
+            };
+            if (!nonTransitionalEvents.deadClicks) { // Defensive init
+                nonTransitionalEvents.deadClicks = [];
+            }
+            nonTransitionalEvents.deadClicks.push(deadClickData);
+            // console.log('Dead Click recorded:', deadClickData);
+        }
         
-        scheduleNonTransitionalSend();
-    });
+        scheduleNonTransitionalSend(); // This is already called in your original setupClickTracking
+    }, true); // Use capture phase to get all clicks
 }
 
 // Setup user inactivity tracking
@@ -1016,6 +1095,8 @@ function setupNonTransitionalTracking() {
     setupPasteTracking();
     setupFormSubmitTracking(); // NEW: Call the new setup function
     setupAllKeyPressesTracking(); // ADDED for all key presses
+    setupScrollTracking(); // ADDED for scroll events
+    setupDropdownTracking(); // ADDED for dropdown toggle events
     
     // Initial timer for sending events
     nonTransitionalSendTimer = setTimeout(() => {
@@ -1798,7 +1879,7 @@ function processMutations(mutations) {
         // Send to background with appropriate flags
         console.log(`[DOM Tracker][DUPLICATION DEBUG] Sending state to background with hash=${currentHash}, isDuplicate=${isDuplicate || isPreviouslySeen}`);
         sendToBackground('recordState', {
-            state: state,
+            state,
             isDuplicate: isDuplicate || isPreviouslySeen,
             reusedStateId: isPreviouslySeen ? previousStates[currentHash] : null
         })
@@ -2622,6 +2703,194 @@ function setupFormSubmitTracking() {
                 }
             }, 100); // Delay to allow blur events to process the flag
         }
+    }, true); // Use capture phase
+}
+
+// NEW FUNCTION for scroll tracking
+function setupScrollTracking() {
+    let lastScrollTime = 0;
+    const scrollDebounceTime = 200; // ms to wait after last scroll to record event
+
+    document.addEventListener('scroll', (event) => {
+        if (!isRecording) return;
+
+        const currentTime = Date.now();
+        // Debounce scroll events to avoid flooding
+        if (currentTime - lastScrollTime < scrollDebounceTime) {
+            return;
+        }
+        lastScrollTime = currentTime;
+
+        const scrollElement = event.target === document ? document.documentElement : event.target;
+        
+        // Get scroll position relative to the scrolled element or viewport
+        const scrollX = scrollElement.scrollLeft !== undefined ? scrollElement.scrollLeft : window.scrollX;
+        const scrollY = scrollElement.scrollTop !== undefined ? scrollElement.scrollTop : window.scrollY;
+        
+        // Get the dimensions of the scrolled content and viewport/element
+        const scrollHeight = scrollElement.scrollHeight;
+        const scrollWidth = scrollElement.scrollWidth;
+        const clientHeight = scrollElement.clientHeight;
+        const clientWidth = scrollElement.clientWidth;
+
+        // Calculate scroll depth percentages
+        const scrollDepthY = scrollHeight > clientHeight ? (scrollY / (scrollHeight - clientHeight)) * 100 : 0;
+        const scrollDepthX = scrollWidth > clientWidth ? (scrollX / (scrollWidth - clientWidth)) * 100 : 0;
+
+        const scrollData = {
+            timestamp: new Date(),
+            targetElementTag: scrollElement.tagName ? scrollElement.tagName.toLowerCase() : 'document',
+            targetElementId: scrollElement.id || 'N/A',
+            targetElementPath: getElementPath(scrollElement),
+            scrollX: Math.round(scrollX),
+            scrollY: Math.round(scrollY),
+            scrollDepthX: Math.round(scrollDepthX),
+            scrollDepthY: Math.round(scrollDepthY),
+            maxScrollX: scrollWidth,
+            maxScrollY: scrollHeight,
+            viewportWidth: clientWidth,
+            viewportHeight: clientHeight,
+            eventMeaning: "User scrolled the page or an element." // CORRECTED: Was an object, now a direct string
+        };
+
+        if (!nonTransitionalEvents.scrollEvents) { // Defensive init
+            nonTransitionalEvents.scrollEvents = [];
+        }
+        nonTransitionalEvents.scrollEvents.push(scrollData);
+        // console.log('Scroll Event recorded:', scrollData); 
+        scheduleNonTransitionalSend();
+
+        // Update global scrollPosition (used by heatmap in mousemove)
+        // This should ideally be distinct or mousemove should get its own live scroll data
+        // For now, maintaining this update:
+        window.scrollPosition = { x: window.scrollX, y: window.scrollY };
+
+
+    }, true); // Use capture phase to detect scrolls on any element
+}
+
+// NEW FUNCTION for dropdown toggle tracking
+function setupDropdownTracking() {
+    document.addEventListener('click', function(event) {
+        if (!isRecording) return;
+
+        let originalClickedElement = event.target; // CORRECTED: Added semicolon back / ensured let is correct
+        let currentTarget = event.target;          // CORRECTED: Added semicolon back / ensured let is correct
+        let isDropdownTrigger = false;
+        let identifiedTriggerElement = null;
+
+        // Check up to 3 parent levels OR if we hit a <select> directly
+        for (let i = 0; i < 3 && currentTarget && currentTarget !== document.body; i++) {
+            // CHECK 1: Is the currentTarget a <select> tag?
+            if (currentTarget.tagName.toLowerCase() === 'select') {
+                isDropdownTrigger = true;
+                identifiedTriggerElement = currentTarget;
+                break; 
+            }
+
+            // CHECK 2: ARIA patterns for custom dropdowns
+            const hasPopup = currentTarget.getAttribute('aria-haspopup');
+            if (hasPopup && (hasPopup === 'true' || hasPopup === 'menu' || hasPopup === 'listbox')) {
+                isDropdownTrigger = true;
+                identifiedTriggerElement = currentTarget;
+                break;
+            }
+            if (currentTarget.hasAttribute('aria-expanded')) {
+                isDropdownTrigger = true;
+                identifiedTriggerElement = currentTarget;
+                break;
+            }
+            
+            // CHECK 3: Heuristic for common menu classes (mostly for custom dropdowns)
+            // Check if currentTarget has a child that is a common menu, or if a sibling is.
+            const commonMenuClasses = ['dropdown-menu', 'select-menu', 'options-list', 'dropdown']; // Added 'dropdown' as a common wrapper
+            let foundMenuClass = false;
+            if (currentTarget.children.length > 0) {
+                for (const child of currentTarget.children) {
+                    if (commonMenuClasses.some(cls => child.classList.contains(cls))) {
+                        foundMenuClass = true; break;
+                    }
+                }
+            }
+            if (foundMenuClass) {
+                isDropdownTrigger = true;
+                identifiedTriggerElement = currentTarget;
+                break;
+            }
+
+            // Check siblings only if currentTarget itself is not a likely candidate from above checks
+            // This check is less reliable and more of a fallback for specific structures.
+            // Consider if the originalClickedElement is the one that should be logged if a sibling menu is found.
+            if (currentTarget.parentElement && currentTarget !== originalClickedElement) { // Avoid re-checking original if it has no specific attributes
+                for (const sibling of currentTarget.parentElement.children) {
+                    if (sibling !== currentTarget && commonMenuClasses.some(cls => sibling.classList.contains(cls))) {
+                        // This implies originalClickedElement might be the trigger for a sibling menu.
+                        // We should log originalClickedElement in this case.
+                        isDropdownTrigger = true;
+                        identifiedTriggerElement = originalClickedElement; // Log the element actually clicked
+                        break;
+                    }
+                }
+                if (foundMenuClass) break; // Break outer loop if found by sibling check
+            }
+            
+            if (isDropdownTrigger) break;
+
+            currentTarget = currentTarget.parentElement;
+        }
+
+        if (isDropdownTrigger && identifiedTriggerElement) {
+            const path = getElementPath(identifiedTriggerElement);
+            const friendlyName = getElementFriendlyName(identifiedTriggerElement); // Still needed for custom dropdowns
+            let currentState = identifiedTriggerElement.getAttribute('aria-expanded'); // For custom dropdowns
+
+            // Use setTimeout to allow the DOM to update after the click
+            setTimeout(() => {
+                let finalState = identifiedTriggerElement.getAttribute('aria-expanded'); // For custom dropdowns
+                const isSelectElement = identifiedTriggerElement.tagName.toLowerCase() === 'select';
+
+                const dropdownEvent = {
+                    timestamp: new Date(),
+                    elementTag: identifiedTriggerElement.tagName.toLowerCase(),
+                    elementId: identifiedTriggerElement.id || 'N/A',
+                    elementPath: path || 'N/A',
+                    // elementFriendlyName and newState are added conditionally below
+                };
+
+                if (isSelectElement) {
+                    dropdownEvent.eventMeaning = "Native select dropdown clicked.";
+                    // For select elements, newState and elementFriendlyName are intentionally omitted.
+                } else {
+                    // This is a custom dropdown, use existing logic for newState and elementFriendlyName
+                    let determinedNewState = "toggled"; 
+                    let specificEventMeaning = "Dropdown toggled.";
+
+                    if (currentState !== null && finalState !== null) { // Only if aria-expanded was present
+                        if (currentState !== finalState) {
+                            determinedNewState = finalState;
+                            specificEventMeaning = finalState === "true" ? "Dropdown opened." : "Dropdown closed.";
+                        } else {
+                            determinedNewState = finalState; 
+                            specificEventMeaning = finalState === "true" ? "Dropdown likely remained open." : "Dropdown likely remained closed.";
+                        }
+                    } else if (finalState !== null) {
+                        determinedNewState = finalState;
+                        specificEventMeaning = finalState === "true" ? "Dropdown became expanded." : "Dropdown became collapsed.";
+                    }
+                    dropdownEvent.newState = determinedNewState;
+                    dropdownEvent.elementFriendlyName = friendlyName || 'N/A'; 
+                    dropdownEvent.eventMeaning = specificEventMeaning;
+                }
+
+                if (!nonTransitionalEvents.dropdownToggle) { // Defensive init
+                    nonTransitionalEvents.dropdownToggle = [];
+                }
+                
+                nonTransitionalEvents.dropdownToggle.push(dropdownEvent);
+                console.log('Dropdown Toggle Event:', dropdownEvent); // For debugging
+                scheduleNonTransitionalSend();
+            }, 0); // Small delay to catch attribute change
+        } // This closes the if (isDropdownTrigger && identifiedTriggerElement)
     }, true); // Use capture phase
 }
 

@@ -24,10 +24,13 @@ const NonTransitionalEventsSchema = new mongoose.Schema({
   },
   events: {
     hover: [{
+      _id: false,
       element: String,
       selector: String,
+      name: String,
       duration: Number,
-      timestamp: Date
+      timestamp: Date,
+      eventMeaning: { type: String, default: "User hovered over element." }
     }],
     mousemove: {
       heatmap: {
@@ -44,37 +47,50 @@ const NonTransitionalEventsSchema = new mongoose.Schema({
       }
     },
     keyTypingCadence: [{
+      _id: false,
       field: String,
       key: String,
       timeSinceLast: Number,
-      timestamp: Date
+      timestamp: Date,
+      eventMeaning: { type: String, default: "Keystroke timing recorded." }
     }],
     keydownWithoutSubmit: [{
+      _id: false,
       field: String,
       value: String,
-      timestamp: Date
+      timestamp: Date,
+      eventMeaning: { type: String, default: "Typed input, field then left." }
     }],
     escapeBackspace: [{
+      _id: false,
       field: String,
       key: String,
-      timestamp: Date
+      timestamp: Date,
+      eventMeaning: { type: String, default: "Esc/Backspace key pressed." }
     }],
     tabNavigation: [{
+      _id: false,
       sequence: [String],
-      timestamp: Date
+      timestamp: Date,
+      eventMeaning: { type: String, default: "Tab key navigation sequence." }
     }],
     repeatedClicks: [{
+      _id: false,
       element: String,
       selector: String,
       count: Number,
-      timestamp: Date
+      timestamp: Date,
+      eventMeaning: { type: String, default: "Multiple rapid clicks detected." }
     }],
     repeatedInputs: [{
+      _id: false,
       field: String,
       pattern: String,
-      timestamp: Date
+      timestamp: Date,
+      eventMeaning: { type: String, default: "Repeated input pattern detected." }
     }],
     oscillatingHovers: [{
+      _id: false,
       elements: [{
         element: String,
         selector: String, 
@@ -83,14 +99,18 @@ const NonTransitionalEventsSchema = new mongoose.Schema({
       totalSwitches: Number,
       duration: Number,
       timestamp: Date,
-      hoverPattern: [String]
+      hoverPattern: [String],
+      eventMeaning: { type: String, default: "Rapid back-and-forth hovers." }
     }],
     inactivity: [{
+      _id: false,
       duration: Number,
       timestamp: Date,
-      trigger: String
+      trigger: String,
+      eventMeaning: { type: String, default: "User inactivity period detected." }
     }],
     inputFieldIdle: [{
+      _id: false,
       field: String,
       label: String,
       placeholder: String,
@@ -104,17 +124,33 @@ const NonTransitionalEventsSchema = new mongoose.Schema({
       valueChanged: Boolean,
       initialValue: String,
       currentValue: String,
-      timestamp: Date
+      timestamp: Date,
+      eventMeaning: { type: String, default: "No input in focused field." }
     }],
     pasteWithoutTyping: [{
+      _id: false,
       field: String,
       content: String,
-      timestamp: Date
+      timestamp: Date,
+      eventMeaning: { type: String, default: "Pasted content into field." }
     }],
     copyText: [{
+      _id: false,
       text: String,
       source: String,
-      timestamp: Date
+      timestamp: Date,
+      eventMeaning: { type: String, default: "Text copied from page." }
+    }],
+    allKeyPresses: [{
+      _id: false,
+      key: String,
+      timestamp: Date,
+      targetElementTag: String,
+      targetElementId: String,
+      targetElementPath: String,
+      isInputField: Boolean,
+      fieldIdentifier: String,
+      eventMeaning: { type: String, default: "Individual key press recorded." }
     }]
   },
   metrics: {

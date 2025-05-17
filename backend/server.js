@@ -292,8 +292,8 @@ app.post('/api/states', async (req, res) => {
             }
         }
         
-        // Emit the new DOM state itself (optional, if frontend needs it directly)
-        // io.to(`session:${sessionId}`).emit('newState', state);
+        // Emit the new DOM state itself for real-time graph updates
+        io.to(`session:${sessionId}`).emit('newState', state);
         
         return res.status(201).json({
             stateId: state.stateId,

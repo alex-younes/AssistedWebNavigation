@@ -21,6 +21,7 @@ import ReactFlow, {
 import 'reactflow/dist/style.css';
 import styled from 'styled-components';
 import LiveFeed from './LiveFeed';
+import { useSocket } from '../contexts/SocketContext';
 
 // Define a styled component for the edges with more prominent styling
 const StyledEdge = styled(BaseEdge)`
@@ -1056,7 +1057,8 @@ const Graph = () => {
   const { sessionId } = useParams<{ sessionId: string }>();
   const location = useLocation();
   const locationState = location.state as LocationState;
-
+  const { socket, isConnected, joinSession, leaveSession } = useSocket();
+  
   const [nodes, setNodes] = useState<Node<StateNodeData>[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1072,6 +1074,37 @@ const Graph = () => {
   const [showModal, setShowModal] = useState(false);
   const [modalData, setModalData] = useState<NonTransitionalAPIData | null>(null);
   const [isModalLoading, setIsModalLoading] = useState(false);
+  
+  // New state notification
+  const [showNewStateNotification, setShowNewStateNotification] = useState(false);
+  const [notificationMessage, setNotificationMessage] = useState('New state detected! Graph updated.');
+  
+  // Real-time updates toggle
+  const [realTimeUpdatesEnabled, setRealTimeUpdatesEnabled] = useState(true);
+
+  // Toggle real-time updates and show a notification
+  const toggleRealTimeUpdates = useCallback(() => {
+    const newState = !realTimeUpdatesEnabled;
+    setRealTimeUpdatesEnabled(newState);
+    
+    // Show notification for status change
+    if (!newState) {
+      // Leave the session when turning off
+      if (socket && isConnected) {
+        leaveSession();
+      }
+      
+      // Show temporary notification
+      setNotificationMessage('Real-time updates paused. Refresh manually to see new states.');
+      setShowNewStateNotification(true);
+      setTimeout(() => setShowNewStateNotification(false), 3000);
+    } else {
+      // Show temporary notification for enabling updates
+      setNotificationMessage('Real-time updates enabled. You will see new states automatically.');
+      setShowNewStateNotification(true);
+      setTimeout(() => setShowNewStateNotification(false), 3000);
+    }
+  }, [realTimeUpdatesEnabled, socket, isConnected, leaveSession]);
 
   // Get server details from location state
   const serverIp = locationState?.serverIp || 'localhost';
@@ -1228,7 +1261,108 @@ const Graph = () => {
     setNodes(newNodes);
     setEdges(newEdges);
     setLoading(false);
-  }, [createNode, createEdge]);
+    }, [createNode, createEdge]);
+
+  // Setup socket connection for real-time updates
+  useEffect(() => {
+    if (!sessionId || !socket || !isConnected || !realTimeUpdatesEnabled) return;
+    
+    console.log('[Socket] Joining session for real-time graph updates:', sessionId);
+    joinSession(sessionId);
+    
+    // Listen for new state events
+    const handleNewState = (newState: StateData) => {
+      console.log('[Socket] Received new state:', newState.stateId);
+      
+      // Show notification when new state arrives
+      setNotificationMessage(`New state detected: "${newState.title || 'Untitled'}"!`);
+      setShowNewStateNotification(true);
+      setTimeout(() => setShowNewStateNotification(false), 3000);
+      
+      // Update the nodes and edges with the new state
+      setNodes(prevNodes => {
+        // Check if we already have this state
+        const existingNodeIndex = prevNodes.findIndex(node => node.id === newState.stateId);
+        
+        if (existingNodeIndex >= 0) {
+          // Update existing node
+          const updatedNodes = [...prevNodes];
+          const nodeToUpdate = { ...updatedNodes[existingNodeIndex] };
+          
+          // Add the new state to history if not already present
+          const nodeData = nodeToUpdate.data;
+          const stateExists = nodeData.history.some(state => 
+            state.timestamp === newState.timestamp
+          );
+          
+          if (!stateExists) {
+            nodeData.history = [...nodeData.history, newState];
+            nodeData.instanceCount = nodeData.history.length;
+          }
+          
+          // Update the latest timestamp if needed
+          if (new Date(newState.timestamp) > new Date(nodeData.latestTimestamp)) {
+            nodeData.latestTimestamp = newState.timestamp;
+          }
+          
+          updatedNodes[existingNodeIndex] = { ...nodeToUpdate, data: nodeData };
+          return updatedNodes;
+        } else {
+          // It's a new state, add it to the graph
+          // Find the max position of existing nodes to place the new one
+          let maxX = 0;
+          let maxY = 0;
+          
+          prevNodes.forEach(node => {
+            if (node.position.x > maxX) maxX = node.position.x;
+            if (node.position.y > maxY) maxY = node.position.y;
+          });
+          
+          // Create a new node
+          const newNode = createNode(newState, prevNodes.length, [newState]);
+          
+          // Position it to the right of the last node
+          newNode.position = { x: maxX + 300, y: maxY + 100 };
+          
+          // Mark previous nodes as not latest
+          const updatedNodes = prevNodes.map(node => ({
+            ...node,
+            data: { ...node.data, isLatest: false }
+          }));
+          
+          // Mark the new node as latest
+          newNode.data.isLatest = true;
+          
+          return [...updatedNodes, newNode];
+        }
+      });
+      
+      // Add edge from the latest previous node if it exists
+      setEdges(prevEdges => {
+        if (prevEdges.length === 0 || !newState.previousStateId) return prevEdges;
+        
+        // Check if the edge already exists
+        const existingEdge = prevEdges.find(edge => 
+          edge.source === newState.previousStateId && edge.target === newState.stateId
+        );
+        
+        if (existingEdge) return prevEdges;
+        
+        // Create a new edge
+        const newEdge = createEdge(newState.previousStateId, newState.stateId);
+        return [...prevEdges, newEdge];
+      });
+    };
+    
+    socket.on('newState', handleNewState);
+    
+    // Cleanup on unmount
+    return () => {
+      console.log('[Socket] Leaving session:', sessionId);
+      socket.off('newState', handleNewState);
+      leaveSession();
+    };
+  }, [socket, isConnected, sessionId, joinSession, leaveSession, createNode, createEdge, realTimeUpdatesEnabled]);
 
   // Fetch states for the session
   const fetchSessionStates = useCallback(async () => {
@@ -1338,6 +1472,18 @@ const Graph = () => {
                 {currentSessionStatus || 'Unknown'}
               </span>
             </span>
+            {isConnected && currentSessionStatus === 'active' && realTimeUpdatesEnabled && (
+              <span className="ml-3 inline-flex items-center">
+                <span className="w-2 h-2 bg-green-500 rounded-full mr-1"></span>
+                <span className="text-green-600 font-semibold">Real-time updates enabled</span>
+              </span>
+            )}
+            {isConnected && currentSessionStatus === 'active' && !realTimeUpdatesEnabled && (
+              <span className="ml-3 inline-flex items-center">
+                <span className="w-2 h-2 bg-gray-400 rounded-full mr-1"></span>
+                <span className="text-gray-600 font-medium">Real-time updates paused</span>
+              </span>
+            )}
           </p>
         </div>
         
@@ -1364,11 +1510,55 @@ const Graph = () => {
               Live Feed
             </button>
           )}
+          {(!isSessionActive || (isSessionActive && !realTimeUpdatesEnabled)) && (
+            <button
+              onClick={fetchSessionStates}
+              className="px-4 py-2 rounded font-medium transition bg-gray-100 text-gray-800 hover:bg-gray-200 flex items-center"
+              title="Refresh graph to see latest states"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+              Refresh
+            </button>
+          )}
+          {isSessionActive && (
+            <div className="flex items-center bg-gray-100 hover:bg-gray-200 rounded px-3 py-1 transition-colors duration-200" title={realTimeUpdatesEnabled ? "Disable real-time updates" : "Enable real-time updates"}>
+              <span className="text-sm text-gray-700 mr-2">{realTimeUpdatesEnabled ? "Live" : "Paused"}</span>
+              <button
+                onClick={toggleRealTimeUpdates}
+                className={`relative inline-flex items-center h-6 rounded-full w-11 transition-colors ease-in-out duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 ${
+                  realTimeUpdatesEnabled ? 'bg-green-600 focus:ring-green-500' : 'bg-gray-400 focus:ring-gray-400'
+                }`}
+                role="switch"
+                aria-checked={realTimeUpdatesEnabled}
+                aria-label={realTimeUpdatesEnabled ? "Disable real-time updates" : "Enable real-time updates"}
+              >
+                <span className="sr-only">{realTimeUpdatesEnabled ? "Disable" : "Enable"} real-time updates</span>
+                <span 
+                  className={`inline-block w-4 h-4 transform bg-white rounded-full transition ease-in-out duration-200 ${
+                    realTimeUpdatesEnabled ? 'translate-x-6' : 'translate-x-1'
+                  }`} 
+                />
+              </button>
+            </div>
+          )}
         </div>
       </div>
       
       {/* Main content area - conditionally show Graph or LiveFeed */}
       <div className="flex-grow flex relative">
+        {/* New State Notification */}
+        {showNewStateNotification && (
+          <div className="absolute top-4 left-1/2 transform -translate-x-1/2 bg-green-100 border-l-4 border-green-500 text-green-700 p-4 rounded shadow-md z-50">
+            <div className="flex items-center">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+              </svg>
+              <p>{notificationMessage}</p>
+            </div>
+          </div>
+        )}
         <div className="flex-grow h-full relative">
           {(() => {
             console.log('[DEBUG] Rendering view:', view, 'nodes:', nodes.length, 'edges:', edges.length);

@@ -146,6 +146,11 @@ interface NonTransitionalEventsData {
   oscillatingHovers?: NonTransitionalEventBase[];
   keydownWithoutSubmit?: NonTransitionalEventBase[];
   inputFieldIdle?: NonTransitionalEventBase[];
+  // New event types based on the sample data
+  allKeyPresses?: NonTransitionalEventBase[];
+  deadClicks?: NonTransitionalEventBase[];
+  dropdownToggle?: NonTransitionalEventBase[];
+  scrollEvents?: NonTransitionalEventBase[];
 }
 
 interface NonTransitionalMetricsData {
@@ -170,7 +175,7 @@ interface NonTransitionalAPIData {
   __v?: number;
 }
 
-// Modal component for displaying Non-Transitional Interaction Details
+// Modal component for displaying Non-Transitional Events
 const InteractionDetailsModal = ({
   data,
   isLoading,
@@ -218,7 +223,7 @@ const InteractionDetailsModal = ({
         
         {/* Enhanced header with context */}
         <div className="bg-indigo-50 -m-8 mb-6 p-8 border-b border-indigo-100">
-          <h3 className="text-2xl font-bold text-indigo-800">Interaction Details</h3>
+          <h3 className="text-2xl font-bold text-indigo-800">Non-Transitional Events</h3>
           <div className="flex flex-wrap mt-2 gap-4">
             <div>
               <span className="text-xs text-indigo-500 font-semibold">STATE ID</span>
@@ -234,15 +239,14 @@ const InteractionDetailsModal = ({
             </div>
           </div>
           <p className="mt-3 text-sm text-indigo-700">
-            This panel shows detailed user interactions that occurred while viewing this state
+            This panel shows detailed user interactions that don't cause page navigation but provide insight into user behavior
           </p>
         </div>
         
         <div className="space-y-6 text-sm">
           {/* Metrics Display with enhanced visuals */}
           <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
-            <h4 className="font-semibold text-lg mb-3 text-gray-800">Interaction Metrics</h4>
-            <p className="text-gray-600 mb-3">Summary of quantitative measurements captured during this state</p>
+                                    <h4 className="font-semibold text-lg mb-3 text-gray-800">Non-Transitional Metrics</h4>            <p className="text-gray-600 mb-3">Summary of quantitative measurements of user behavior during this state</p>
             
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {/* Time metrics */}
@@ -355,8 +359,7 @@ const InteractionDetailsModal = ({
 
           {/* Events Display with enhanced structure */}
           <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
-            <h4 className="font-semibold text-lg mb-3 text-gray-800">Interaction Events</h4>
-            <p className="text-gray-600 mb-3">Detailed record of specific user interactions captured during this state</p>
+                                    <h4 className="font-semibold text-lg mb-3 text-gray-800">Non-Transitional Events</h4>            <p className="text-gray-600 mb-3">Detailed record of specific user interactions that don't cause page navigation</p>
             
             {/* No events case */}
             {(!data.events || Object.keys(data.events).length === 0 || 
@@ -368,8 +371,7 @@ const InteractionDetailsModal = ({
                 <svg className="w-16 h-16 mx-auto text-gray-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
                 </svg>
-                <p className="font-medium">No interaction events were recorded for this state</p>
-                <p className="mt-1">User may have viewed the page without interacting</p>
+                                <p className="font-medium">No non-transitional events were recorded for this state</p>                <p className="mt-1">User may have viewed the page without detailed interaction</p>
               </div>
             )}
 
@@ -613,6 +615,18 @@ const InteractionDetailsModal = ({
                   } else if (eventType.includes('Hover')) {
                     icon = "hand-pointer";
                     color = "orange";
+                  } else if (eventType.includes('Key') || eventType === 'allKeyPresses') {
+                    icon = "keyboard";
+                    color = "teal";
+                  } else if (eventType === 'deadClicks') {
+                    icon = "times-circle";
+                    color = "red";
+                  } else if (eventType === 'dropdownToggle') {
+                    icon = "caret-down";
+                    color = "blue";
+                  } else if (eventType === 'scrollEvents') {
+                    icon = "arrows-alt-v";
+                    color = "purple";
                   }
                   
                   return (
@@ -634,8 +648,7 @@ const InteractionDetailsModal = ({
                               <span>{new Date(event.timestamp).toLocaleTimeString()}</span>
                             </div>
                             {Object.entries(event)
-                              .filter(([key]) => key !== 'timestamp')
-                              .slice(0, 3)
+                              .filter(([key]) => key !== 'timestamp' && key !== '_id' && key !== '__v')
                               .map(([key, value]) => (
                                 <div key={key} className="flex justify-between text-xs">
                                   <span className="text-gray-500">{key.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase())}:</span>
@@ -662,7 +675,8 @@ const InteractionDetailsModal = ({
               {['keyTypingCadence', 'keydownWithoutSubmit', 'escapeBackspace', 
                 'tabNavigation', 'repeatedClicks', 'repeatedInputs', 
                 'oscillatingHovers', 'inactivity', 'inputFieldIdle', 
-                'pasteWithoutTyping', 'copyText'].map(eventType => {
+                'pasteWithoutTyping', 'copyText', 'allKeyPresses',
+                'deadClicks', 'dropdownToggle', 'scrollEvents'].map(eventType => {
                   // Only show if the array doesn't exist or is empty
                   if (!data.events?.[eventType as keyof NonTransitionalEventsData] || 
                       (Array.isArray(data.events[eventType as keyof NonTransitionalEventsData]) && 
@@ -789,11 +803,34 @@ const InteractionDetailsModal = ({
                   );
                 }
                 
+                // Add badges for new event types
+                if (data.events?.allKeyPresses && data.events.allKeyPresses.length > 0) {
+                  badges.push(
+                    renderEventBadge(data.events.allKeyPresses, "All Key Presses", "bg-teal-50", "text-teal-700")
+                  );
+                }
+                
+                if (data.events?.deadClicks && data.events.deadClicks.length > 0) {
+                  badges.push(
+                    renderEventBadge(data.events.deadClicks, "Dead Clicks", "bg-red-50", "text-red-700")
+                  );
+                }
+                
+                if (data.events?.dropdownToggle && data.events.dropdownToggle.length > 0) {
+                  badges.push(
+                    renderEventBadge(data.events.dropdownToggle, "Dropdown Toggles", "bg-blue-50", "text-blue-700")
+                  );
+                }
+                
+                if (data.events?.scrollEvents && data.events.scrollEvents.length > 0) {
+                  badges.push(
+                    renderEventBadge(data.events.scrollEvents, "Scroll Events", "bg-purple-50", "text-purple-700")
+                  );
+                }
+                
                 // Return all badges or a message if no events
                 return badges.length > 0 ? badges : (
-                  <div className="text-center py-3 text-gray-500 font-medium">
-                    No interaction events recorded
-                  </div>
+                                    <div className="text-center py-3 text-gray-500 font-medium">                    No non-transitional events recorded                  </div>
                 );
               })()}
             </div>
@@ -832,6 +869,18 @@ const InteractionDetailsModal = ({
               <div>
                 <span className="font-medium">Escape/Backspace:</span> User hitting escape or backspace, often indicating correction
               </div>
+              <div>
+                <span className="font-medium">All Key Presses:</span> Complete record of all keyboard inputs
+              </div>
+              <div>
+                <span className="font-medium">Dead Clicks:</span> Clicks on non-interactive elements
+              </div>
+              <div>
+                <span className="font-medium">Dropdown Toggle:</span> User opening and closing dropdown menus
+              </div>
+              <div>
+                <span className="font-medium">Scroll Events:</span> User scrolling behavior on the page
+              </div>
             </div>
           </div>
         </div>
@@ -850,7 +899,7 @@ const StateHistoryPanel = ({
 }) => {
   if (!state) return null;
 
-  // Function to handle click on View Interaction Details button
+  // Function to handle click on View Non-Transitional Events button
   const handleViewInteractionDetails = () => {
     if (state && state.history && state.history.length > 0) {
       // Call the openInteractionModal function that was passed down via state.openInteractionModal
@@ -923,14 +972,14 @@ const StateHistoryPanel = ({
           </div>
         </div>
 
-        {/* Button to open Interaction Details */}
+        {/* Button to open Non-Transitional Events */}
         <div className="border-t border-gray-200 pt-4 mt-4">
-          <h4 className="font-semibold mb-2">Interaction Details</h4>
+          <h4 className="font-semibold mb-2">Non-Transitional Events</h4>
           <button 
             onClick={handleViewInteractionDetails}
             className="w-full mt-2 px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
           >
-            View Interaction Details
+            View Non-Transitional Events
           </button>
         </div>
       </div>

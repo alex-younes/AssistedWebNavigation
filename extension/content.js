@@ -55,7 +55,7 @@ let nonTransitionalEvents = {
     allKeyPresses: [], // ADDED for all key presses
     deadClicks: [], // ADDED for dead clicks
     scrollEvents: [], // ADDED for scroll events
-    dropdownToggle: [] // ADDED for dropdown toggle events
+    dropdownToggle: [] // ADDED for dropdown toggle
     // Removed: interactionWithHiddenElement, rapidContextSwitch, pauseBeforeSubmit
 };
 
@@ -309,6 +309,9 @@ async function sendNonTransitionalEvents() {
               );
     
     // Reset the events and metrics
+    // First store any persistent values
+    const dwellTime = nonTransitionalMetrics.dwellTimeBeforeAction;
+    
     nonTransitionalEvents = {
         hover: [],
         mousemove: {
@@ -336,8 +339,19 @@ async function sendNonTransitionalEvents() {
         dropdownToggle: [] // ADDED for dropdown toggle
     };
     
-    nonTransitionalMetrics.totalMouseDistance = 0;
-    // Reset the batch-specific active mouse time
+    // Create new metrics object but preserve dwellTimeBeforeAction
+    nonTransitionalMetrics = {
+        totalIdleTime: 0,
+        longestIdlePeriod: 0,
+        dwellTimeBeforeAction: dwellTime, // Preserve this value
+        totalMouseDistance: 0,
+        totalKeystrokes: 0,
+        totalClicks: 0,
+        totalHoverTime: 0
+    };
+    
+    // Since we're completely resetting metrics now, we don't need the previous code
+    // that tried to selectively reset metrics
     currentBatchMouseActiveTime = 0;
     
     if (events.hover.length === 0 && 
@@ -704,6 +718,12 @@ function setupKeyboardTracking() {
 
         // Reset input idle timer when typing occurs
         if (isInputField && fieldId) {
+            // Make sure current focused element is set
+            if (!currentFocusedInput) {
+                currentFocusedInput = element;
+                inputFocusTime = Date.now();
+            }
+            
             // Update the last activity time
             lastInputActivityTime = Date.now();
             
@@ -732,6 +752,8 @@ function setupKeyboardTracking() {
                         const initialValue = element.dataset.initialValue || '';
                         const valueChanged = currentValue !== initialValue;
                         
+                        console.log(`[DOM Tracker] Input field idle threshold reached for ${fieldId}: ${idleDuration}ms`);
+                        
                         nonTransitionalEvents.inputFieldIdle.push({
                             field: fieldId,
                             label: fieldLabel,
@@ -741,16 +763,15 @@ function setupKeyboardTracking() {
                             formName: formName,
                             url: window.location.href,
                             page: document.title,
-                            eventType: 'threshold_reached',
+                            eventType: 'idle_after_typing',
                             duration: idleDuration,
                             valueChanged: valueChanged,
                             initialValue: initialValue,
-                            currentValue: currentValue,
+                            currentValue: element.type === 'password' ? '[password]' : currentValue,
                             timestamp: new Date(lastInputActivityTime)
                         });
                         
                         scheduleNonTransitionalSend();
-                        console.log(`[DOM Tracker] Input field idle threshold reached for ${fieldId}: ${idleDuration}ms`);
                     }
                 }
             }, inputIdleThreshold);
@@ -907,11 +928,65 @@ function setupKeyboardTracking() {
                 form: element.form // Store a reference to the parent form
             };
             
+            // Input field idle tracking - set up tracking variables
+            currentFocusedInput = element;
+            inputFocusTime = Date.now();
+            lastInputActivityTime = Date.now();
+            
+            // Store initial value for comparison when idle period ends
+            element.dataset.initialValue = element.type === 'password' ? '[password]' : element.value;
+            
+            // Clear any existing idle timer for this or other fields
+            if (inputIdleTimer) {
+                clearTimeout(inputIdleTimer);
+            }
+            
+            // Set a new idle timer
+            inputIdleTimer = setTimeout(() => {
+                if (currentFocusedInput === element) {
+                    const idleDuration = Date.now() - lastInputActivityTime;
+                    
+                    // Get enhanced field information
+                    const fieldLabel = getFieldLabel(element);
+                    const fieldType = element.type || 'text';
+                    const formId = element.form ? (element.form.id || element.form.name || getElementPath(element.form)) : 'standalone';
+                    const formName = element.form ? element.form.getAttribute('name') || 'unnamed-form' : 'standalone';
+                    
+                    // Get current value to compare with initial
+                    const currentValue = element.type === 'checkbox' || element.type === 'radio' 
+                        ? element.checked 
+                        : element.value;
+                    const initialValue = element.dataset.initialValue || '';
+                    const valueChanged = currentValue !== initialValue;
+                    
+                    console.log(`[DOM Tracker] Input field idle detected for ${fieldId}: ${idleDuration}ms`);
+                    
+                    nonTransitionalEvents.inputFieldIdle.push({
+                        field: fieldId,
+                        label: fieldLabel,
+                        placeholder: element.placeholder || '',
+                        fieldType: fieldType,
+                        formId: formId,
+                        formName: formName,
+                        url: window.location.href,
+                        page: document.title,
+                        eventType: 'idle_threshold_reached',
+                        duration: idleDuration,
+                        valueChanged: valueChanged,
+                        initialValue: initialValue,
+                        currentValue: element.type === 'password' ? '[password]' : currentValue,
+                        timestamp: new Date(lastInputActivityTime)
+                    });
+                    
+                    scheduleNonTransitionalSend();
+                }
+            }, inputIdleThreshold);
+            
             // Store current value as previous value (existing code for other features)
             // ... (rest of existing focus listener code) ...
         }
     }, true); // Use capture for focus
-    
+
     // Track blur events on input fields
     document.addEventListener('blur', event => {
         if (!isRecording) return;
@@ -929,7 +1004,6 @@ function setupKeyboardTracking() {
                     finalValue = element.value ? '[password]' : '';
                 }
                 fieldData.currentValue = finalValue;
-
 
                 if (fieldData.typedIn && fieldData.currentValue !== fieldData.initialValue) {
                     let formSubmitted = false;
@@ -953,7 +1027,58 @@ function setupKeyboardTracking() {
                 delete activeFormFields[fieldId]; 
             }
             
-            // ... (rest of existing blur listener code like clearing input idle timer) ...
+            // Handle input field idle tracking on blur
+            if (currentFocusedInput === element && lastInputActivityTime) {
+                // Clear the idle timer
+                if (inputIdleTimer) {
+                    clearTimeout(inputIdleTimer);
+                    inputIdleTimer = null;
+                }
+                
+                // Calculate how long the field has been idle before blur
+                const idleDuration = Date.now() - lastInputActivityTime;
+                
+                // If the field was idle for longer than our threshold, record it
+                if (idleDuration >= inputIdleThreshold) {
+                    // Get enhanced field information
+                    const fieldLabel = getFieldLabel(element);
+                    const fieldType = element.type || 'text';
+                    const formId = element.form ? (element.form.id || element.form.name || getElementPath(element.form)) : 'standalone';
+                    const formName = element.form ? element.form.getAttribute('name') || 'unnamed-form' : 'standalone';
+                    
+                    // Get current value to compare with initial
+                    const currentValue = element.type === 'checkbox' || element.type === 'radio' 
+                        ? element.checked 
+                        : element.value;
+                    const initialValue = element.dataset.initialValue || '';
+                    const valueChanged = currentValue !== initialValue;
+                    
+                    nonTransitionalEvents.inputFieldIdle.push({
+                        field: fieldId,
+                        label: fieldLabel,
+                        placeholder: element.placeholder || '',
+                        fieldType: fieldType,
+                        formId: formId,
+                        formName: formName,
+                        url: window.location.href,
+                        page: document.title,
+                        eventType: 'field_blur_after_idle',
+                        duration: idleDuration,
+                        valueChanged: valueChanged,
+                        initialValue: initialValue,
+                        currentValue: element.type === 'password' ? '[password]' : currentValue,
+                        timestamp: new Date(lastInputActivityTime)
+                    });
+                    
+                    console.log(`[DOM Tracker] Input field idle detected on blur for ${fieldId}: ${idleDuration}ms`);
+                    scheduleNonTransitionalSend();
+                }
+                
+                // Reset tracking variables
+                currentFocusedInput = null;
+                inputFocusTime = null;
+                lastInputActivityTime = null;
+            }
             
             // Existing code for clearing input history for repeated inputs
             if (fieldInputHistory[fieldId]) {
@@ -961,11 +1086,6 @@ function setupKeyboardTracking() {
             }
         }
     }, true); // Use capture for blur
-
-    // Add blur event listener to clear history when field loses focus - NEW (This was part of existing setupKeyboardTracking but belongs here conceptually)
-    // This seems to be a duplicate of the above blur listener in terms of trigger.
-    // The above blur listener already handles clearing fieldInputHistory for the repeated inputs feature.
-    // So, no need for a separate one here just for that. The one above is sufficient.
 }
 
 // Setup click tracking
@@ -2344,6 +2464,11 @@ function startRecording(newSessionId, newUserId) {
     previousStates = {};
     lastDomHash = null;
     
+    // Reset dwell time tracking
+    window.pageLoadTime = Date.now();
+    window.firstInteractionRecorded = false;
+    nonTransitionalMetrics.dwellTimeBeforeAction = 0;
+    
     // Set up DOM tracking
     setupMutationObserver();
     setupNavigationTracking();
@@ -2440,6 +2565,38 @@ function initialize() {
     // Create initial state when page is fully loaded
     window.addEventListener('load', () => {
         console.log('[DOM Tracker][DUPLICATION DEBUG] Page fully loaded event triggered');
+        
+        // Initialize dwell time tracking - measure time from page load until first interaction
+        if (isRecording) {
+            window.pageLoadTime = Date.now();
+            window.firstInteractionRecorded = false;
+            
+            // Add listener for first interaction
+            const firstInteractionHandler = () => {
+                if (!window.firstInteractionRecorded && window.pageLoadTime) {
+                    const dwellTime = Date.now() - window.pageLoadTime;
+                    window.firstInteractionRecorded = true;
+                    nonTransitionalMetrics.dwellTimeBeforeAction = dwellTime;
+                    console.log(`[DOM Tracker] First interaction detected after ${dwellTime}ms of dwell time`);
+                    
+                    // Schedule sending of metrics with the dwell time
+                    scheduleNonTransitionalSend();
+                    
+                    // Remove these event listeners since we only need the first interaction
+                    document.removeEventListener('click', firstInteractionHandler, true);
+                    document.removeEventListener('keydown', firstInteractionHandler, true);
+                    document.removeEventListener('input', firstInteractionHandler, true);
+                    document.removeEventListener('scroll', firstInteractionHandler, true);
+                }
+            };
+            
+            // Listen for first interactions
+            document.addEventListener('click', firstInteractionHandler, true);
+            document.addEventListener('keydown', firstInteractionHandler, true);
+            document.addEventListener('input', firstInteractionHandler, true);
+            document.addEventListener('scroll', firstInteractionHandler, true);
+        }
+        
         if (isRecording) {
             // For an actual page load event, this should always be considered a loading state
             isPageLoading = true;

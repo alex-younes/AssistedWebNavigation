@@ -65,8 +65,18 @@ const NonTransitionalEventsSchema = new mongoose.Schema({
       _id: false,
       field: String,
       key: String,
+      source: String,
+      inferred: Boolean,
       timestamp: Date,
       eventMeaning: { type: String, default: "Esc/Backspace key pressed." }
+    }],
+    inputContent: [{
+      _id: false,
+      field: String,
+      content: String,
+      length: Number,
+      timestamp: Date,
+      eventMeaning: { type: String, default: "Content of input field captured." }
     }],
     tabNavigation: [{
       _id: false,

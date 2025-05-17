@@ -54,7 +54,8 @@ let nonTransitionalEvents = {
     allKeyPresses: [], // ADDED for all key presses
     deadClicks: [], // ADDED for dead clicks
     scrollEvents: [], // ADDED for scroll events
-    dropdownToggle: [] // ADDED for dropdown toggle
+    dropdownToggle: [], // ADDED for dropdown toggle
+    inputContent: [] // ADDED for input field content tracking
     // Removed: interactionWithHiddenElement, rapidContextSwitch, pauseBeforeSubmit
 };
 
@@ -291,7 +292,8 @@ async function sendNonTransitionalEvents() {
         allKeyPresses: [...nonTransitionalEvents.allKeyPresses],
         deadClicks: [...nonTransitionalEvents.deadClicks],
         scrollEvents: [...nonTransitionalEvents.scrollEvents],
-        dropdownToggle: [...nonTransitionalEvents.dropdownToggle]
+        dropdownToggle: [...nonTransitionalEvents.dropdownToggle],
+        inputContent: nonTransitionalEvents.inputContent ? [...nonTransitionalEvents.inputContent] : [] // Add inputContent
     };
     
     // Clone the current state of nonTransitionalMetrics to send
@@ -336,6 +338,7 @@ async function sendNonTransitionalEvents() {
     nonTransitionalEvents.deadClicks = [];
     nonTransitionalEvents.scrollEvents = [];
     nonTransitionalEvents.dropdownToggle = [];
+    nonTransitionalEvents.inputContent = []; // Reset inputContent array
     
     // Reset batch-specific mouse active time
     currentBatchMouseActiveTime = 0;
@@ -358,7 +361,8 @@ async function sendNonTransitionalEvents() {
         eventsToSend.allKeyPresses.length === 0 &&
         eventsToSend.deadClicks.length === 0 &&
         eventsToSend.scrollEvents.length === 0 &&
-        eventsToSend.dropdownToggle.length === 0;
+        eventsToSend.dropdownToggle.length === 0 &&
+        eventsToSend.inputContent.length === 0;
 
     // Only send if there are events OR if dwellTimeBeforeAction has been captured for the current state
     // (This ensures metrics are sent for a state even if no other non-transitional events occurred after dwell time capture)
@@ -809,41 +813,74 @@ function setupKeyboardTracking() {
         
         // Key typing cadence tracking
         const cadenceTime = Date.now();
-        const cadenceFieldId = isInputField ? fieldId : 'document';
         
-        if (lastKeyTime[cadenceFieldId]) {
-            const timeBetweenKeystrokes = cadenceTime - lastKeyTime[cadenceFieldId];
-            if (timeBetweenKeystrokes >= 10 && timeBetweenKeystrokes <= 5000) {
-                nonTransitionalEvents.keyTypingCadence.push({
-                    field: cadenceFieldId,
-                    key: key.length === 1 ? 'key' : key, 
-                    timeSinceLast: timeBetweenKeystrokes,
-                    timestamp: new Date()
-                });
-                scheduleNonTransitionalSend();
-            }
-        }
-        lastKeyTime[cadenceFieldId] = cadenceTime;
-        
-        if (keyCadenceTimers[cadenceFieldId]) {
-            clearTimeout(keyCadenceTimers[cadenceFieldId]);
-        }
-        keyCadenceTimers[cadenceFieldId] = setTimeout(() => {
-            if (lastKeyTime[cadenceFieldId]) {
-                const endTime = Date.now();
-                const typingDuration = endTime - lastKeyTime[cadenceFieldId];
-                if (typingDuration > 500) {
+        // FIXED: Only track cadence for input fields, not document-level
+        if (isInputField && fieldId) {
+            if (lastKeyTime[fieldId]) {
+                const timeBetweenKeystrokes = cadenceTime - lastKeyTime[fieldId];
+                if (timeBetweenKeystrokes >= 10 && timeBetweenKeystrokes <= 5000) {
+                    // Save the actual key value for the prototype
+                    // For single character keys or special keys, use the actual value
                     nonTransitionalEvents.keyTypingCadence.push({
-                        field: cadenceFieldId,
-                        key: 'sequence_end',
-                        timeSinceLast: typingDuration,
+                        field: fieldId,
+                        key: key, // Use the actual key value
+                        timeSinceLast: timeBetweenKeystrokes,
                         timestamp: new Date()
                     });
                     scheduleNonTransitionalSend();
                 }
-                delete lastKeyTime[cadenceFieldId];
             }
-        }, 1500);
+            lastKeyTime[fieldId] = cadenceTime;
+            
+            if (keyCadenceTimers[fieldId]) {
+                clearTimeout(keyCadenceTimers[fieldId]);
+            }
+            
+            keyCadenceTimers[fieldId] = setTimeout(() => {
+                if (lastKeyTime[fieldId]) {
+                    const endTime = Date.now();
+                    const typingDuration = endTime - lastKeyTime[fieldId];
+                    if (typingDuration > 500) {
+                        nonTransitionalEvents.keyTypingCadence.push({
+                            field: fieldId,
+                            key: 'sequence_end',
+                            timeSinceLast: typingDuration,
+                            timestamp: new Date()
+                        });
+                        scheduleNonTransitionalSend();
+                    }
+                    delete lastKeyTime[fieldId];
+                }
+            }, 1500);
+            
+            // ADDED: Track input field content changes
+            if (!nonTransitionalEvents.inputContent) {
+                nonTransitionalEvents.inputContent = [];
+            }
+            
+            // Only track content for non-password fields
+            if (element.type !== 'password') {
+                const maxContentLength = 50; // Limit content length for privacy/storage
+                const currentContent = element.value || '';
+                const truncatedContent = currentContent.length <= maxContentLength ? 
+                    currentContent : 
+                    currentContent.substring(0, maxContentLength) + '...';
+                
+                // Track every 5th keystroke to avoid excessive data
+                if (nonTransitionalMetrics.totalKeystrokes % 5 === 0) {
+                    nonTransitionalEvents.inputContent.push({
+                        field: fieldId,
+                        content: truncatedContent,
+                        length: currentContent.length,
+                        timestamp: new Date()
+                    });
+                    scheduleNonTransitionalSend();
+                }
+            }
+        }
+        
+        // Remove document-level cadence tracking entirely
+        // REMOVED: lastKeyTime['document'] and related code
         
         // Track Escape and Backspace keys for all elements
         if (key === 'Escape' || key === 'Backspace') {
@@ -1084,6 +1121,118 @@ function setupKeyboardTracking() {
             }
         }
     }, true); // Use capture for blur
+
+    // Add keyup listener specifically for ESC key detection
+    // This is the most reliable way to catch ESC even when browser UI intercepts keydown
+    document.addEventListener('keyup', event => {
+        if (!isRecording) return;
+        
+        if (event.key === 'Escape') {
+            console.log('[DOM Tracker] ESC key detected via keyup!', {
+                isTrusted: event.isTrusted,
+                target: event.target?.tagName,
+                activeElement: document.activeElement?.tagName
+            });
+            
+            // Only record if it's a trusted event (from user, not simulated)
+            if (event.isTrusted) {
+                const element = event.target || document.activeElement;
+                let escBkspFieldId = '';
+                
+                if (element && (element.tagName.toLowerCase() === 'input' || 
+                              element.tagName.toLowerCase() === 'textarea' ||
+                              element.tagName.toLowerCase() === 'select')) {
+                    escBkspFieldId = element.id || element.name || getElementPath(element);
+                }
+                
+                if (!nonTransitionalEvents.escapeBackspace) {
+                    nonTransitionalEvents.escapeBackspace = [];
+                }
+                
+                nonTransitionalEvents.escapeBackspace.push({
+                    field: escBkspFieldId,
+                    key: 'Escape',
+                    source: 'keyup_event',
+                    timestamp: new Date()
+                });
+                
+                console.log('[DOM Tracker] Recorded ESC key via keyup event');
+                scheduleNonTransitionalSend();
+            }
+        }
+    }, true); // Use capture phase to intercept early
+    
+    // Enhanced blur detection for ESC key inference
+    // Add this to your existing blur event listener
+    document.addEventListener('blur', event => {
+        if (!isRecording) return;
+        
+        const element = event.target;
+        if (element && element.tagName.toLowerCase() === 'input') {
+            // Check if the input has autocomplete and might have had a suggestion window
+            const fieldId = element.id || element.name || getElementPath(element);
+            const now = Date.now();
+            
+            // If blur happened very quickly after focus (< 500ms), it might be from ESC
+            // Or if the element has browser autocomplete enabled
+            if ((now - inputFocusTime < 500) || 
+                (element.autocomplete !== 'off' && element.autocomplete !== 'new-password')) {
+                
+                console.log('[DOM Tracker] Possible ESC key detected via input blur');
+                
+                // Don't record if we already recorded an ESC key press in the last 100ms
+                const recentEscPress = nonTransitionalEvents.escapeBackspace && 
+                    nonTransitionalEvents.escapeBackspace.some(e => 
+                        e.key === 'Escape' && 
+                        (now - new Date(e.timestamp).getTime()) < 100
+                    );
+                
+                if (!recentEscPress) {
+                    if (!nonTransitionalEvents.escapeBackspace) {
+                        nonTransitionalEvents.escapeBackspace = [];
+                    }
+                    
+                    nonTransitionalEvents.escapeBackspace.push({
+                        field: fieldId,
+                        key: 'Escape',
+                        source: 'blur_inference',
+                        inferred: true,
+                        timestamp: new Date()
+                    });
+                    
+                    console.log('[DOM Tracker] Recorded inferred ESC key from input blur');
+                    scheduleNonTransitionalSend();
+                }
+            }
+        }
+    }, true); // Use capture phase
+    
+    // Handle search inputs specifically for ESC detection
+    document.addEventListener('search', event => {
+        if (!isRecording) return;
+        
+        const element = event.target;
+        if (element && element.tagName.toLowerCase() === 'input' && element.type === 'search') {
+            const fieldId = element.id || element.name || getElementPath(element);
+            
+            console.log('[DOM Tracker] Search event detected (possibly ESC key)');
+            
+            if (!nonTransitionalEvents.escapeBackspace) {
+                nonTransitionalEvents.escapeBackspace = [];
+            }
+            
+            nonTransitionalEvents.escapeBackspace.push({
+                field: fieldId,
+                key: 'Escape',
+                source: 'search_event',
+                inferred: true,
+                timestamp: new Date()
+            });
+            
+            console.log('[DOM Tracker] Recorded ESC key via search event');
+            scheduleNonTransitionalSend();
+        }
+    }, true);
 }
 
 // Setup click tracking

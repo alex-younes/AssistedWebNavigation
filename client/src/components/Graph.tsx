@@ -20,7 +20,7 @@ import ReactFlow, {
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import styled from 'styled-components';
-import LLMAnalysisPanel from './LLMAnalysisPanel';
+import LiveFeed from './LiveFeed';
 
 // Define a styled component for the edges with more prominent styling
 const StyledEdge = styled(BaseEdge)`
@@ -68,6 +68,10 @@ interface StateData {
 interface LocationState {
   serverIp?: string;
   serverPort?: string;
+  sessionData?: {
+    id: string;
+    status: string;
+  };
 }
 
 // Define state node data type with history
@@ -1057,7 +1061,12 @@ const Graph = () => {
   const [edges, setEdges] = useState<Edge[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [showAnalysisPanel, setShowAnalysisPanel] = useState(false);
+  const [view, setView] = useState<'graph' | 'feed'>('graph');
+  
+  // Session status tracking
+  const [currentSessionStatus, setCurrentSessionStatus] = useState<string | null>(
+    locationState?.sessionData?.status || null
+  );
   
   // Global modal state
   const [showModal, setShowModal] = useState(false);
@@ -1140,6 +1149,8 @@ const Graph = () => {
   }, []);
 
   const processStatesData = useCallback((states: StateData[]) => {
+    console.log('[DEBUG] Processing states data:', states);
+    
     if (!states || states.length === 0) {
       setError('No states found for this session');
       setLoading(false);
@@ -1211,6 +1222,9 @@ const Graph = () => {
       newEdges.push(createEdge(previousState.stateId, currentState.stateId));
     }
 
+    console.log('[DEBUG] Generated nodes:', newNodes.length, newNodes);
+    console.log('[DEBUG] Generated edges:', newEdges.length, newEdges);
+    
     setNodes(newNodes);
     setEdges(newEdges);
     setLoading(false);
@@ -1261,6 +1275,27 @@ const Graph = () => {
     []
   );
 
+  // Fetch session details if we don't have status information
+  useEffect(() => {
+    if (sessionId && !currentSessionStatus) {
+      axios.get(`${baseUrl}/extension/recorder/session/${sessionId}`)
+        .then(response => {
+          if (response.data.success && response.data.session) {
+            setCurrentSessionStatus(response.data.session.status);
+          } else {
+            setCurrentSessionStatus('unknown');
+          }
+        })
+        .catch(error => {
+          console.error('Error fetching session details:', error);
+          setCurrentSessionStatus('error');
+        });
+    }
+  }, [sessionId, baseUrl, currentSessionStatus]);
+
+  // Derived value for determining if the session is active
+  const isSessionActive = currentSessionStatus === 'active';
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-screen bg-gray-50">
@@ -1290,77 +1325,101 @@ const Graph = () => {
     );
   }
 
-  const toggleAnalysisPanel = () => {
-    setShowAnalysisPanel(!showAnalysisPanel);
-  };
-
   return (
-    <div className="w-full h-screen bg-gray-50 relative">
-      <div className="absolute top-4 left-4 z-10 bg-white p-4 rounded-md shadow-md max-w-md">
-        <h2 className="font-bold text-gray-800 break-all">
-          Session: {sessionId}
-        </h2>
-        <p className="text-sm text-gray-600 mt-1">
-          {nodes.length} states • {edges.length} transitions
-        </p>
-        <button
-          onClick={toggleAnalysisPanel}
-          className="mt-2 px-4 py-2 bg-indigo-600 text-white text-sm rounded hover:bg-indigo-700 transition"
-        >
-          {showAnalysisPanel ? 'Hide LLM Analysis' : 'Show LLM Analysis'}
-        </button>
+    <div className="w-full h-full bg-gray-50 relative flex flex-col">
+      {/* Navigation Bar */}
+      <div className="bg-white w-full shadow-md p-4 mb-4 flex items-center justify-between">
+        <div>
+          <h2 className="font-bold text-lg">Session: {sessionId}</h2>
+          <p className="text-sm text-gray-600">
+            {nodes.length} states • {edges.length} transitions
+            <span className="ml-3">
+              Status: <span className={currentSessionStatus === 'active' ? 'text-green-600 font-semibold' : 'text-red-600 font-semibold'}>
+                {currentSessionStatus || 'Unknown'}
+              </span>
+            </span>
+          </p>
+        </div>
+        
+        <div className="flex space-x-2">
+          <button
+            onClick={() => setView('graph')}
+            className={`px-4 py-2 rounded font-medium transition ${
+              view === 'graph' 
+                ? 'bg-blue-600 text-white hover:bg-blue-700'
+                : 'bg-blue-100 text-blue-800 hover:bg-blue-200'
+            }`}
+          >
+            Graph View
+          </button>
+          {isSessionActive && (
+            <button
+              onClick={() => setView('feed')}
+              className={`px-4 py-2 rounded font-medium transition ${
+                view === 'feed' 
+                  ? 'bg-green-600 text-white hover:bg-green-700'
+                  : 'bg-green-100 text-green-800 hover:bg-green-200'
+              }`}
+            >
+              Live Feed
+            </button>
+          )}
+        </div>
       </div>
       
-      {showAnalysisPanel && (
-        <div className="absolute top-4 right-4 z-10 bg-white p-4 rounded-md shadow-xl max-w-lg w-full max-h-[90vh] overflow-y-auto">
-          <button 
-            onClick={() => setShowAnalysisPanel(false)}
-            className="absolute top-2 right-2 text-gray-500 hover:text-gray-700"
-            aria-label="Close panel"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-          <LLMAnalysisPanel sessionId={sessionId} />
+      {/* Main content area - conditionally show Graph or LiveFeed */}
+      <div className="flex-grow flex relative">
+        <div className="flex-grow h-full relative">
+          {(() => {
+            console.log('[DEBUG] Rendering view:', view, 'nodes:', nodes.length, 'edges:', edges.length);
+            return view === 'graph' ? (
+              <ReactFlowProvider>
+                <div style={{ width: '100%', height: '85vh' }}>
+                  <ReactFlow
+                    nodes={nodes}
+                    edges={edges}
+                    onNodesChange={onNodesChange}
+                    onEdgesChange={onEdgesChange}
+                    nodeTypes={nodeTypes}
+                    edgeTypes={edgeTypes}
+                    fitView
+                    connectionMode={ConnectionMode.Loose}
+                    className="bg-gradient-to-br from-gray-100 to-gray-200"
+                  >
+                    <Background variant={BackgroundVariant.Dots} gap={12} size={1} color="#ccc" />
+                    <Controls className="react-flow__controls-custom" />
+                  </ReactFlow>
+                </div>
+              </ReactFlowProvider>
+            ) : (
+              <div className="p-6 h-full">
+                <LiveFeed sessionId={sessionId || null} isActiveSession={isSessionActive} />
+              </div>
+            );
+          })()}
         </div>
-      )}
-      
-      <ReactFlowProvider>
-        <ReactFlow
-          nodes={nodes}
-          edges={edges}
-          onNodesChange={onNodesChange}
-          onEdgesChange={onEdgesChange}
-          nodeTypes={nodeTypes}
-          edgeTypes={edgeTypes}
-          defaultEdgeOptions={{
-            type: 'default',
-            animated: true,
-            style: { 
-              stroke: '#333',
-              strokeWidth: 3,
-            }
-          }}
-          fitView
-          fitViewOptions={{ padding: 0.8 }}
-          minZoom={0.3}
-          maxZoom={1.5}
-          attributionPosition="bottom-right"
-          connectionMode={ConnectionMode.Loose}
-          snapToGrid={true}
-          snapGrid={[20, 20]}
-          defaultViewport={{ x: 0, y: 0, zoom: 0.8 }}
-          nodesDraggable={false}
-          nodesConnectable={false}
-          elementsSelectable={true}
+      </div>
+
+      {/* Mobile floating action buttons for toggling views */}
+      <div className="md:hidden fixed bottom-4 right-4 flex flex-col space-y-2 z-30">
+        <button
+          onClick={() => setView(view === 'graph' ? 'feed' : 'graph')}
+          className="w-12 h-12 rounded-full bg-blue-600 text-white shadow-lg flex items-center justify-center"
+          title={view === 'graph' ? 'Switch to Feed View' : 'Switch to Graph View'}
         >
-          <Background variant={BackgroundVariant.Dots} gap={12} size={1} />
-          <Controls />
-        </ReactFlow>
-      </ReactFlowProvider>
-      
-      {/* Render InteractionDetailsModal at the Graph level, outside of ReactFlow */}
+          {view === 'graph' ? (
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+            </svg>
+          ) : (
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zm0 8a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zm12 0a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z" />
+            </svg>
+          )}
+        </button>
+      </div>
+
+      {/* Modals */}
       {showModal && (
         <InteractionDetailsModal
           data={modalData}

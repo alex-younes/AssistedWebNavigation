@@ -7,6 +7,7 @@ const debug = require('../utils/debug');
 const db = require('../database');
 const serviceManager = require('../services/ServiceManager');
 const DOMState = require('../models/DOMState');
+const UserActivityFeed = require('../models/UserActivityFeed');
 
 // NEW: Ping endpoint for connection testing
 router.get('/ping', (req, res) => {
@@ -153,7 +154,8 @@ router.post('/recorder/saveInteractions', async (req, res) => {
         }
         
         // Use ServiceManager to save interactions
-        const result = await serviceManager.saveInteractions(interactions, sessionId, userId);
+        const emitAndSaveActivity = req.app.get('emitAndSaveActivity');
+        const result = await serviceManager.saveInteractions(interactions, sessionId, userId, emitAndSaveActivity);
         
         return res.json({
             success: true,
@@ -527,6 +529,90 @@ router.patch('/states/:id', async (req, res) => {
     console.error('[Backend] Error updating state:', error);
     res.status(500).json({ error: error.message });
   }
+});
+
+// Endpoint to get activity feed for a session
+router.get('/recorder/session/:sessionId/activity', async (req, res) => {
+    try {
+        const { sessionId } = req.params;
+        const { limit = 50, since = 0 } = req.query;
+        
+        if (!sessionId) {
+            return res.status(400).json({
+                success: false,
+                error: 'Missing session ID'
+            });
+        }
+        
+        // Parse query parameters
+        const parsedLimit = parseInt(limit) || 50;
+        const sinceTimestamp = since ? new Date(parseInt(since)) : new Date(0);
+        
+        // Find activities for the session, newer than the 'since' timestamp
+        const activities = await UserActivityFeed.find({ 
+            sessionId,
+            timestamp: { $gt: sinceTimestamp }
+        })
+        .sort({ timestamp: 1 })
+        .limit(parsedLimit);
+        
+        return res.json({
+            success: true,
+            activities
+        });
+    } catch (error) {
+        console.error(`[Backend] Error fetching activity feed for session ${req.params.sessionId}:`, error);
+        return res.status(500).json({
+            success: false,
+            error: 'Error fetching activity feed'
+        });
+    }
+});
+
+// Endpoint to manually add an activity to a session's feed
+router.post('/recorder/session/:sessionId/activity', async (req, res) => {
+    try {
+        const { sessionId } = req.params;
+        const { userId, eventType, interaction, details } = req.body;
+        
+        if (!sessionId || !userId || !eventType || !interaction) {
+            return res.status(400).json({
+                success: false,
+                error: 'Missing required fields: sessionId, userId, eventType, and interaction are required'
+            });
+        }
+        
+        // Get the emitAndSaveActivity function
+        const emitAndSaveActivity = req.app.get('emitAndSaveActivity');
+        if (!emitAndSaveActivity) {
+            throw new Error('emitAndSaveActivity function not available');
+        }
+        
+        // Use the helper function to save and emit the activity
+        const activity = await emitAndSaveActivity(
+            sessionId,
+            userId,
+            eventType,
+            interaction,
+            details || {}
+        );
+        
+        if (!activity) {
+            throw new Error('Failed to save activity');
+        }
+        
+        return res.status(201).json({
+            success: true,
+            message: 'Activity added to feed',
+            activity
+        });
+    } catch (error) {
+        console.error(`[Backend] Error adding activity to session ${req.params.sessionId}:`, error);
+        return res.status(500).json({
+            success: false,
+            error: 'Error adding activity to feed'
+        });
+    }
 });
 
 module.exports = router; 

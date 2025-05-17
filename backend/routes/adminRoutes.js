@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const User = require('../models/User');
 const mongoose = require('mongoose'); // Import mongoose to access models
+const UserActivityFeed = require('../models/UserActivityFeed'); // Import the UserActivityFeed model
 // const authMiddleware = require('../middleware/authMiddleware'); // Assuming you might have or create this
 
 // ### Placeholder for Authentication and Authorization Middleware ###
@@ -147,6 +148,95 @@ router.get('/analysis/session/:sessionId', DUMMY_ensureAdmin, async (req, res) =
   } catch (error) {
     console.error(`[Backend] Error analyzing session ${req.params.sessionId}:`, error);
     res.status(500).json({ error: 'Server error while analyzing session' });
+  }
+});
+
+/**
+ * @route   GET /api/admin/sessions/:sessionId/activity
+ * @desc    Get activity feed for a specific session
+ * @access  Private (Admin)
+ */
+router.get('/sessions/:sessionId/activity', DUMMY_ensureAdmin, async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const { limit = 100, skip = 0, sort = 'desc' } = req.query;
+    
+    if (!sessionId) {
+      return res.status(400).json({ error: 'Session ID is required' });
+    }
+
+    // Parse query parameters
+    const parsedLimit = parseInt(limit) || 100;
+    const parsedSkip = parseInt(skip) || 0;
+    const sortDirection = sort === 'asc' ? 1 : -1;
+
+    // Find activities for the session
+    const activities = await UserActivityFeed.find({ sessionId })
+      .sort({ timestamp: sortDirection })
+      .skip(parsedSkip)
+      .limit(parsedLimit);
+
+    // Count total activities for pagination
+    const totalActivities = await UserActivityFeed.countDocuments({ sessionId });
+
+    res.json({
+      activities,
+      pagination: {
+        total: totalActivities,
+        limit: parsedLimit,
+        skip: parsedSkip,
+        sort: sort === 'asc' ? 'asc' : 'desc'
+      }
+    });
+  } catch (error) {
+    console.error(`[Backend] Error fetching activity feed for session ${req.params.sessionId}:`, error);
+    res.status(500).json({ error: 'Server error while fetching activity feed' });
+  }
+});
+
+/**
+ * @route   POST /api/admin/sessions/:sessionId/activity
+ * @desc    Add a manual activity entry to a session's feed
+ * @access  Private (Admin)
+ */
+router.post('/sessions/:sessionId/activity', DUMMY_ensureAdmin, async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const { userId, eventType, interaction, details } = req.body;
+    
+    if (!sessionId || !userId || !eventType || !interaction) {
+      return res.status(400).json({ 
+        error: 'Session ID, user ID, event type, and interaction text are required' 
+      });
+    }
+
+    // Create new activity entry
+    const activity = new UserActivityFeed({
+      sessionId,
+      userId,
+      eventType,
+      interaction,
+      details: details || {},
+      timestamp: new Date()
+    });
+
+    // Save the activity
+    await activity.save();
+
+    // Emit the activity to connected clients
+    const io = req.app.get('io');
+    if (io) {
+      io.to(`session:${sessionId}`).emit('activity', activity);
+    }
+
+    res.status(201).json({
+      success: true,
+      message: 'Activity added to feed',
+      activity
+    });
+  } catch (error) {
+    console.error(`[Backend] Error adding activity to session ${req.params.sessionId}:`, error);
+    res.status(500).json({ error: 'Server error while adding activity' });
   }
 });
 

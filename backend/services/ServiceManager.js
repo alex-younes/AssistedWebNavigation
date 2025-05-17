@@ -201,12 +201,13 @@ class ServiceManager {
   }
 
   /**
-   * Save interactions to database
+   * Save interactions to database and emit them to the live feed
    * @param {Array} interactions - Array of interaction objects
    * @param {string} sessionId - Session ID
    * @param {string} userId - User ID
+   * @param {Function} emitAndSaveActivity - Function to emit and save activities
    */
-  async saveInteractions(interactions, sessionId, userId) {
+  async saveInteractions(interactions, sessionId, userId, emitAndSaveActivity) {
     if (!interactions || interactions.length === 0) {
       return { success: true, count: 0 };
     }
@@ -214,29 +215,84 @@ class ServiceManager {
     if (!sessionId || !userId) {
       throw new Error('Session ID and User ID are required');
     }
+
+    if (typeof emitAndSaveActivity !== 'function') {
+      console.warn('[ServiceManager] emitAndSaveActivity function was not provided to saveInteractions. Live feed updates will be skipped for these interactions.');
+      // Optionally, throw an error if it's critical: throw new Error('emitAndSaveActivity function is required');
+    }
     
     try {
       // Check if session is active
       const isActive = await this.isSessionActive(sessionId);
       if (!isActive) {
-        console.log(`[ServiceManager] Session ${sessionId} is not active, not saving interactions`);
-        return { success: false, error: 'Session not active' };
+        console.log(`[ServiceManager] Session ${sessionId} is not active, not saving or emitting interactions`);
+        return { success: false, error: 'Session not active', count: 0 };
       }
       
-      // Make sure each interaction has session and user IDs
+      // Make sure each interaction has session and user IDs (already done by caller in some cases, but good to ensure)
       const processedInteractions = interactions.map(interaction => ({
         ...interaction,
         sessionId,
         userId
       }));
       
-      // Save to database
-      await db.saveInteractions(processedInteractions);
+      // Save to database (original functionality)
+      // This might be a custom DB function that saves NonTransitionalEvents or individual Interaction models
+      // For this example, let's assume db.saveInteractions handles saving the batch as NonTransitionalEvents document
+      // or individual Interaction documents as appropriate based on your db layer.
+      // For the live feed, we need to process individual events from the `interactions` array.
       
-      console.log(`[ServiceManager] Saved ${processedInteractions.length} interactions for session ${sessionId}`);
+      // Let's assume `db.saveRecordedInteractions` is the method that actually saves these specific types of events.
+      // This might be equivalent to your `db.updateNonTransitionalEvents` if the `interactions` array
+      // is the `eventsData.events` object from your earlier example, or a part of it.
+      // For now, we'll proceed assuming `interactions` contains the events to be emitted.
+      await db.saveRecordedInteractions(processedInteractions, sessionId, userId); // Placeholder for actual DB save
+      
+      console.log(`[ServiceManager] Saved ${processedInteractions.length} interactions to DB for session ${sessionId}`);
+
+      // Now, iterate and emit each individual interaction for the live feed
+      if (emitAndSaveActivity) {
+        for (const interaction of processedInteractions) {
+          // Determine eventType, interaction string, and details
+          const eventType = interaction.type || interaction.eventType || 'user_interaction'; // e.g., 'hover', 'click', 'input', 'dropdownToggle'
+          let interactionMessage = interaction.eventMeaning || eventType;
+
+          if (interaction.element || interaction.selector || interaction.name) {
+            interactionMessage = `${eventType} on ${interaction.name || interaction.element || interaction.selector}`;
+          }
+          if (interaction.value && typeof interaction.value === 'string' && interaction.value.length < 100) {
+            interactionMessage += ` (value: "${interaction.value}")`;
+          }
+          if (interaction.key && eventType.toLowerCase().includes('key')){
+            interactionMessage = `Key press: ${interaction.key}`;
+          }
+          if (eventType === 'dropdownToggle') {
+            interactionMessage = `Toggled dropdown: ${interaction.elementId || interaction.elementPath}`;
+          }
+          if (eventType === 'deadClick') {
+            interactionMessage = `Dead click on: ${interaction.element || interaction.selector}`;
+          }
+
+          const details = { ...interaction }; // Send the whole interaction object as details
+          delete details.sessionId; // Already top-level
+          delete details.userId;    // Already top-level
+
+          await emitAndSaveActivity(
+            sessionId,
+            userId,
+            eventType,
+            interactionMessage,
+            details,
+            interaction.timestamp || new Date() // Use interaction specific timestamp if available
+          );
+        }
+        console.log(`[ServiceManager] Emitted ${processedInteractions.length} individual interaction activities for session ${sessionId}`);
+      }
+      
       return { success: true, count: processedInteractions.length };
     } catch (error) {
-      console.error(`[ServiceManager] Error saving interactions for ${sessionId}:`, error);
+      console.error(`[ServiceManager] Error saving/emitting interactions for ${sessionId}:`, error);
+      // Ensure emitAndSaveActivity is not called again if it was part of the error source.
       throw error;
     }
   }

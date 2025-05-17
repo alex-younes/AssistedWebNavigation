@@ -5,7 +5,7 @@
 let isRecording = false;
 let sessionId = null;
 let userId = null;
-let currentStateId = null;
+let lastStateId = null; // USE THIS consistently for the last recorded state ID
 let stateCounter = 0;
 let lastDomHash = null;
 let mutationObserver = null;
@@ -17,7 +17,6 @@ let isPageLoading = false; // Track if page is in loading state
 let loadingStartTime = 0; // When loading started
 let loadingCheckInterval = null; // Interval for checking loading state
 let lastDomSnapshot = ''; // Last DOM snapshot for comparison
-let lastStateId = null; // Track the last state ID
 let lastStateHash = null; // Track the last state hash
 let stateSequenceNumber = 0; // Track the sequence of state captures
 let pendingStateSaves = {}; // Track in-progress state saves
@@ -265,13 +264,13 @@ function getFieldLabel(element) {
 async function sendNonTransitionalEvents() {
     if (!isRecording || !lastStateId) return;
     
-    // Clone the events and metrics to avoid race conditions
-    const events = {
+    // Clone the events to send
+    const eventsToSend = {
         hover: [...nonTransitionalEvents.hover],
         mousemove: {
             heatmap: nonTransitionalEvents.mousemove.heatmap.map(row => [...row]),
-            totalDistance: nonTransitionalEvents.mousemove.totalDistance,
-            averageSpeed: nonTransitionalEvents.mousemove.averageSpeed
+            totalDistance: nonTransitionalEvents.mousemove.totalDistance, // This is event-specific distance for the batch
+            averageSpeed: 0 // Will be calculated below
         },
         keyTyping: { 
             fields: (nonTransitionalEvents.keyTyping && nonTransitionalEvents.keyTyping.fields) ? 
@@ -292,85 +291,84 @@ async function sendNonTransitionalEvents() {
         allKeyPresses: [...nonTransitionalEvents.allKeyPresses],
         deadClicks: [...nonTransitionalEvents.deadClicks],
         scrollEvents: [...nonTransitionalEvents.scrollEvents],
-        dropdownToggle: [...nonTransitionalEvents.dropdownToggle] // ADDED for dropdown toggle
+        dropdownToggle: [...nonTransitionalEvents.dropdownToggle]
     };
     
-    const metrics = {...nonTransitionalMetrics};
+    // Clone the current state of nonTransitionalMetrics to send
+    const metricsToSend = {...nonTransitionalMetrics};
+    // Ensure the scope is explicitly set for this send operation, if not already
+    if (!metricsToSend.metricsScope) {
+        metricsToSend.metricsScope = "per_state_reset"; // Default if somehow missed
+    }
     
-    // Calculate averageSpeed before sending
-    if (events.mousemove.totalDistance > 0 && currentBatchMouseActiveTime > 0) {
-        events.mousemove.averageSpeed = events.mousemove.totalDistance / (currentBatchMouseActiveTime / 1000); // pixels per second
+    // Calculate averageSpeed for the events batch
+    if (eventsToSend.mousemove.totalDistance > 0 && currentBatchMouseActiveTime > 0) {
+        eventsToSend.mousemove.averageSpeed = eventsToSend.mousemove.totalDistance / (currentBatchMouseActiveTime / 1000); // pixels per second
     } else {
-        events.mousemove.averageSpeed = 0; // Default to 0 if no distance or no active time
+        eventsToSend.mousemove.averageSpeed = 0; // Default to 0 if no distance or no active time
     }
 
     console.log('[DOM Tracker] Preparing to send non-transitional data:', 
-                { stateId: lastStateId, eventsToLog: JSON.parse(JSON.stringify(events)), metricsToLog: JSON.parse(JSON.stringify(metrics)) }
+                { stateId: lastStateId, eventsToLog: JSON.parse(JSON.stringify(eventsToSend)), metricsToLog: JSON.parse(JSON.stringify(metricsToSend)) }
               );
     
-    // Reset the events and metrics
-    // First store any persistent values
-    const dwellTime = nonTransitionalMetrics.dwellTimeBeforeAction;
-    
-    nonTransitionalEvents = {
-        hover: [],
-        mousemove: {
-            heatmap: initializeHeatmap(),
-            totalDistance: 0,
-            averageSpeed: 0
-        },
-        keyTyping: {
-            fields: {}
-        },
-        inactivity: [],
-        escapeBackspace: [],
-        keyTypingCadence: [],
-        tabNavigation: [],
-        repeatedClicks: [],
-        copyText: [],
-        pasteWithoutTyping: [],
-        repeatedInputs: [],
-        oscillatingHovers: [],
-        keydownWithoutSubmit: [],
-        inputFieldIdle: [],
-        allKeyPresses: [],
-        deadClicks: [],
-        scrollEvents: [],
-        dropdownToggle: [] // ADDED for dropdown toggle
+    // Reset ONLY the event arrays and batch-specific data in nonTransitionalEvents.
+    // The counters in nonTransitionalMetrics are NOT reset here.
+    nonTransitionalEvents.hover = [];
+    nonTransitionalEvents.mousemove = {
+        heatmap: initializeHeatmap(), // Reset heatmap for next batch
+        totalDistance: 0, // Reset batch-specific distance
+        averageSpeed: 0
     };
+    nonTransitionalEvents.keyTyping = { fields: {} };
+    nonTransitionalEvents.inactivity = [];
+    nonTransitionalEvents.escapeBackspace = [];
+    nonTransitionalEvents.keyTypingCadence = [];
+    nonTransitionalEvents.tabNavigation = [];
+    nonTransitionalEvents.repeatedClicks = [];
+    nonTransitionalEvents.copyText = [];
+    nonTransitionalEvents.pasteWithoutTyping = [];
+    nonTransitionalEvents.repeatedInputs = [];
+    nonTransitionalEvents.oscillatingHovers = [];
+    nonTransitionalEvents.keydownWithoutSubmit = [];
+    nonTransitionalEvents.inputFieldIdle = [];
+    nonTransitionalEvents.allKeyPresses = [];
+    nonTransitionalEvents.deadClicks = [];
+    nonTransitionalEvents.scrollEvents = [];
+    nonTransitionalEvents.dropdownToggle = [];
     
-    // Create new metrics object but preserve dwellTimeBeforeAction
-    nonTransitionalMetrics = {
-        totalIdleTime: 0,
-        longestIdlePeriod: 0,
-        dwellTimeBeforeAction: dwellTime, // Preserve this value
-        totalMouseDistance: 0,
-        totalKeystrokes: 0,
-        totalClicks: 0,
-        totalHoverTime: 0
-    };
-    
-    // Since we're completely resetting metrics now, we don't need the previous code
-    // that tried to selectively reset metrics
+    // Reset batch-specific mouse active time
     currentBatchMouseActiveTime = 0;
     
-    if (events.hover.length === 0 && 
-        (!events.keyTyping || Object.keys(events.keyTyping.fields).length === 0) &&
-        events.inactivity.length === 0 &&
-        events.escapeBackspace.length === 0 &&
-        events.keyTypingCadence.length === 0 &&
-        events.tabNavigation.length === 0 &&
-        events.repeatedClicks.length === 0 &&
-        events.copyText.length === 0 &&
-        events.pasteWithoutTyping.length === 0 &&
-        events.repeatedInputs.length === 0 &&
-        events.oscillatingHovers.length === 0 &&
-        events.inputFieldIdle.length === 0 &&
-        events.allKeyPresses.length === 0 &&
-        events.deadClicks.length === 0 && // ADDED for dead clicks
-        events.scrollEvents.length === 0 && // ADDED for scroll events
-        events.dropdownToggle.length === 0) { // ADDED for dropdown toggle
-        return;
+    // Check if there are any actual events to send (metrics will always be sent if a state exists)
+    const noEvents = eventsToSend.hover.length === 0 &&
+        eventsToSend.mousemove.totalDistance === 0 && // Check actual distance, not just heatmap
+        Object.keys(eventsToSend.keyTyping.fields).length === 0 &&
+        eventsToSend.inactivity.length === 0 &&
+        eventsToSend.escapeBackspace.length === 0 &&
+        eventsToSend.keyTypingCadence.length === 0 &&
+        eventsToSend.tabNavigation.length === 0 &&
+        eventsToSend.repeatedClicks.length === 0 &&
+        eventsToSend.copyText.length === 0 &&
+        eventsToSend.pasteWithoutTyping.length === 0 &&
+        eventsToSend.repeatedInputs.length === 0 &&
+        eventsToSend.oscillatingHovers.length === 0 &&
+        eventsToSend.keydownWithoutSubmit.length === 0 &&
+        eventsToSend.inputFieldIdle.length === 0 &&
+        eventsToSend.allKeyPresses.length === 0 &&
+        eventsToSend.deadClicks.length === 0 &&
+        eventsToSend.scrollEvents.length === 0 &&
+        eventsToSend.dropdownToggle.length === 0;
+
+    // Only send if there are events OR if dwellTimeBeforeAction has been captured for the current state
+    // (This ensures metrics are sent for a state even if no other non-transitional events occurred after dwell time capture)
+    if (noEvents && metricsToSend.dwellTimeBeforeAction === 0) {
+         // If also no dwell time captured yet for this state's metrics, and no other events, then maybe skip.
+         // However, metrics like idle time might still be relevant. For now, send if metrics object has stateStartTime.
+        if (!metricsToSend.stateStartTime) {
+            console.log("[DOM Tracker] No events to send and no state start time in metrics, skipping non-transitional send.");
+            return;
+        }
     }
     
     try {
@@ -380,26 +378,8 @@ async function sendNonTransitionalEvents() {
             stateId: lastStateId,
             sessionId: sessionId,
             userId: userId,
-            events: {
-                hover: events.hover,
-                mousemove: events.mousemove,
-                inactivity: events.inactivity,
-                escapeBackspace: events.escapeBackspace,
-                keyTypingCadence: events.keyTypingCadence,
-                tabNavigation: events.tabNavigation,
-                repeatedClicks: events.repeatedClicks,
-                copyText: events.copyText,
-                pasteWithoutTyping: events.pasteWithoutTyping,
-                repeatedInputs: events.repeatedInputs,
-                oscillatingHovers: events.oscillatingHovers,
-                keydownWithoutSubmit: events.keydownWithoutSubmit,
-                inputFieldIdle: events.inputFieldIdle,
-                allKeyPresses: events.allKeyPresses, // ADDED for all key presses
-                deadClicks: events.deadClicks, // ADDED for dead clicks
-                scrollEvents: events.scrollEvents, // ADDED for scroll events
-                dropdownToggle: events.dropdownToggle // ADDED for dropdown toggle
-            }, 
-            metrics: metrics
+            events: eventsToSend, 
+            metrics: metricsToSend
         });
         
         console.log(`[DOM Tracker] Non-transitional events sent result:`, result);
@@ -715,6 +695,17 @@ function setupKeyboardTracking() {
         const key = event.key;
         const isInputField = element && (element.tagName.toLowerCase() === 'input' || element.tagName.toLowerCase() === 'textarea');
         const fieldId = isInputField ? (element.id || element.name || getElementPath(element)) : null;
+        
+        // Prevent double counting by checking if we've counted this keystroke recently
+        const keyTime = Date.now();
+        if (keyTime - lastRecordedKeyTime > DUPLICATE_THRESHOLD) {
+            // Increment the total keystrokes counter for ALL keys, not just in input fields
+            nonTransitionalMetrics.totalKeystrokes++;
+            lastRecordedKeyTime = keyTime;
+            console.log(`[DOM Tracker] Keystroke recorded: ${key}, total: ${nonTransitionalMetrics.totalKeystrokes}`);
+        } else {
+            console.log(`[DOM Tracker] Prevented duplicate keystroke: ${key}, time diff: ${keyTime - lastRecordedKeyTime}ms`);
+        }
 
         // Reset input idle timer when typing occurs
         if (isInputField && fieldId) {
@@ -816,12 +807,12 @@ function setupKeyboardTracking() {
         }
         // --- End Repeated Inputs Tracking ---
         
-        // Key typing cadence tracking (existing logic)
-        const now = Date.now();
+        // Key typing cadence tracking
+        const cadenceTime = Date.now();
         const cadenceFieldId = isInputField ? fieldId : 'document';
         
         if (lastKeyTime[cadenceFieldId]) {
-            const timeBetweenKeystrokes = now - lastKeyTime[cadenceFieldId];
+            const timeBetweenKeystrokes = cadenceTime - lastKeyTime[cadenceFieldId];
             if (timeBetweenKeystrokes >= 10 && timeBetweenKeystrokes <= 5000) {
                 nonTransitionalEvents.keyTypingCadence.push({
                     field: cadenceFieldId,
@@ -832,7 +823,8 @@ function setupKeyboardTracking() {
                 scheduleNonTransitionalSend();
             }
         }
-        lastKeyTime[cadenceFieldId] = now;
+        lastKeyTime[cadenceFieldId] = cadenceTime;
+        
         if (keyCadenceTimers[cadenceFieldId]) {
             clearTimeout(keyCadenceTimers[cadenceFieldId]);
         }
@@ -853,7 +845,7 @@ function setupKeyboardTracking() {
             }
         }, 1500);
         
-        // Track Escape and Backspace keys for all elements (existing logic for escapeBackspace event)
+        // Track Escape and Backspace keys for all elements
         if (key === 'Escape' || key === 'Backspace') {
             let escBkspFieldId = '';
             if (element && (element.tagName.toLowerCase() === 'input' || 
@@ -869,7 +861,10 @@ function setupKeyboardTracking() {
                 key: key,
                 timestamp: new Date()
             });
-            nonTransitionalMetrics.totalKeystrokes++;
+            
+            // Remove double counting here since we already increment above
+            // nonTransitionalMetrics.totalKeystrokes++;
+            
             scheduleNonTransitionalSend();
             // Do not return here if it's backspace and an input field, 
             // as repeatedInput logic needs to handle backspace too.
@@ -900,9 +895,12 @@ function setupKeyboardTracking() {
         }
         nonTransitionalEvents.keyTyping.fields[inputFieldId].keystrokes++;
         nonTransitionalEvents.keyTyping.fields[inputFieldId].lastUpdated = new Date();
-        if (key !== 'Escape' && key !== 'Backspace') {
-            nonTransitionalMetrics.totalKeystrokes++;
-        }
+        
+        // Remove double counting
+        // if (key !== 'Escape' && key !== 'Backspace') {
+        //    nonTransitionalMetrics.totalKeystrokes++;
+        // }
+        
         scheduleNonTransitionalSend();
     });
 
@@ -1006,14 +1004,14 @@ function setupKeyboardTracking() {
                 fieldData.currentValue = finalValue;
 
                 if (fieldData.typedIn && fieldData.currentValue !== fieldData.initialValue) {
-                    let formSubmitted = false;
+                    let formLikelySubmitted = false;
                     if (fieldData.form && fieldData.form.dataset.submitted === 'true') {
-                        formSubmitted = true;
+                        formLikelySubmitted = true;
                         // Important: Reset the flag for this form for future interactions
                         // Do this in the submit handler to ensure it's clean for any field from that form
                     }
 
-                    if (!formSubmitted) {
+                    if (!formLikelySubmitted) {
                         console.log(`[DOM Tracker] Logging keydownWithoutSubmit for field: ${fieldId}`);
                         nonTransitionalEvents.keydownWithoutSubmit.push({
                             field: fieldId,
@@ -1093,8 +1091,16 @@ function setupClickTracking() {
     document.addEventListener('click', event => {
         if (!isRecording) return;
         
-        // Existing metric update - keep this
-        nonTransitionalMetrics.totalClicks++;
+        // Prevent double counting by checking if we've counted this click recently
+        const clickNow = Date.now();
+        if (clickNow - lastRecordedClickTime > DUPLICATE_THRESHOLD) {
+            // Make sure we increment the total click counter for ALL clicks
+            nonTransitionalMetrics.totalClicks++;
+            lastRecordedClickTime = clickNow;
+            console.log(`[DOM Tracker] Click recorded. Total clicks: ${nonTransitionalMetrics.totalClicks}`);
+        } else {
+            console.log(`[DOM Tracker] Prevented duplicate click, time diff: ${clickNow - lastRecordedClickTime}ms`);
+        }
 
         const element = event.target;
 
@@ -1142,10 +1148,9 @@ function setupClickTracking() {
                 nonTransitionalEvents.deadClicks = [];
             }
             nonTransitionalEvents.deadClicks.push(deadClickData);
-            // console.log('Dead Click recorded:', deadClickData);
         }
         
-        scheduleNonTransitionalSend(); // This is already called in your original setupClickTracking
+        scheduleNonTransitionalSend(); // Schedule sending of non-transitional events
     }, true); // Use capture phase to get all clicks
 }
 
@@ -1202,6 +1207,80 @@ function setupInactivityTracking() {
     });
 }
 
+// Track additional dwell periods (idle times after activity)
+function setupExtendedDwellTimeTracking() {
+    console.log('[DOM Tracker] Setting up extended dwell time tracking');
+    
+    // Variables to track user activity state
+    let isUserActive = true;
+    let lastActivityTime = Date.now();
+    const activityResetThreshold = 10000; // 10 seconds of no activity to count as a dwell period
+    let dwellTimeMonitorInterval = null;
+    
+    // Function to handle user activity
+    const handleUserActivity = () => {
+        if (!isRecording) return;
+        
+        const now = Date.now();
+        
+        // If user was idle and is now active, calculate dwell time
+        if (!isUserActive) {
+            const dwellTime = now - lastActivityTime;
+            console.log(`[DOM Tracker] User returned after ${dwellTime}ms of dwell time`);
+            
+            // Only record significant dwell periods (longer than threshold)
+            if (dwellTime >= activityResetThreshold) {
+                nonTransitionalEvents.inactivity.push({
+                    duration: dwellTime,
+                    timestamp: new Date(lastActivityTime),
+                    trigger: "dwell_period_ended"
+                });
+                
+                // Update total idle time metrics
+                nonTransitionalMetrics.totalIdleTime += dwellTime;
+                if (dwellTime > nonTransitionalMetrics.longestIdlePeriod) {
+                    nonTransitionalMetrics.longestIdlePeriod = dwellTime;
+                }
+                
+                scheduleNonTransitionalSend();
+            }
+            
+            isUserActive = true;
+        }
+        
+        // Reset the activity timer
+        lastActivityTime = now;
+        
+        // Clear any existing timer
+        if (dwellTimeMonitorInterval) {
+            clearInterval(dwellTimeMonitorInterval);
+        }
+        
+        // Set a new timer to check for inactivity
+        dwellTimeMonitorInterval = setInterval(() => {
+            const currentTime = Date.now();
+            const timeSinceActivity = currentTime - lastActivityTime;
+            
+            // If inactive for the threshold period, mark as idle
+            if (timeSinceActivity >= activityResetThreshold && isUserActive) {
+                isUserActive = false;
+                console.log(`[DOM Tracker] User became idle after ${activityResetThreshold}ms of inactivity`);
+            }
+        }, 1000); // Check every second
+    };
+    
+    // Track activity events for dwell time monitoring
+    const activityEvents = ['mousedown', 'keydown', 'scroll', 'click', 'mousemove', 'touchstart'];
+    
+    // Add listeners for all activity events
+    activityEvents.forEach(eventType => {
+        document.addEventListener(eventType, handleUserActivity, { passive: true });
+    });
+    
+    // Initialize the monitoring
+    handleUserActivity();
+}
+
 // Setup all non-transitional event tracking
 function setupNonTransitionalTracking() {
     setupHoverTracking();
@@ -1217,6 +1296,7 @@ function setupNonTransitionalTracking() {
     setupAllKeyPressesTracking(); // ADDED for all key presses
     setupScrollTracking(); // ADDED for scroll events
     setupDropdownTracking(); // ADDED for dropdown toggle events
+    setupExtendedDwellTimeTracking(); // ADDED for better dwell time tracking
     
     // Initial timer for sending events
     nonTransitionalSendTimer = setTimeout(() => {
@@ -1891,6 +1971,59 @@ const updateStateTracking = (state) => {
     }
 };
 
+// New function to reset dwell time tracking for new states
+function resetDwellTimeTracking() {
+    // Only reset if we're recording
+    if (!isRecording) return;
+    
+    // Reset the tracking variables
+    window.stateLoadTime = Date.now();
+    window.stateInteractionRecorded = false;
+    
+    // Remove previous event listeners if they exist
+    if (window.stateInteractionHandlers) {
+        for (const handler of window.stateInteractionHandlers) {
+            document.removeEventListener(handler.event, handler.function, true);
+        }
+    }
+    
+    // Create new event handlers array
+    window.stateInteractionHandlers = [];
+    
+    const stateInteractionHandler = () => {
+        if (!window.stateInteractionRecorded && window.stateLoadTime) {
+            const stateDwellTime = Date.now() - window.stateLoadTime;
+            window.stateInteractionRecorded = true;
+            
+            // Log the dwell time for debugging
+            console.log(`[DOM Tracker] First interaction with new state detected after ${stateDwellTime}ms of dwell time`);
+            
+            // Store dwell time in non-transitional metrics
+            nonTransitionalMetrics.dwellTimeBeforeAction = stateDwellTime;
+            
+            // Schedule sending of metrics with the dwell time
+            scheduleNonTransitionalSend();
+            
+            // Remove these event listeners since we only need the first interaction per state
+            for (const handler of window.stateInteractionHandlers) {
+                document.removeEventListener(handler.event, handler.function, true);
+            }
+        }
+    };
+    
+    // Add event listeners for the first interaction with the new state
+    const events = ['click', 'keydown', 'input', 'scroll'];
+    for (const event of events) {
+        document.addEventListener(event, stateInteractionHandler, true);
+        window.stateInteractionHandlers.push({
+            event: event,
+            function: stateInteractionHandler
+        });
+    }
+    
+    console.log(`[DOM Tracker] Dwell time tracking reset for new state`);
+}
+
 // Process mutations and create a new state with debouncing
 function processMutations(mutations) {
     if (!isRecording) return;
@@ -1972,69 +2105,59 @@ function processMutations(mutations) {
             return;
         }
         
-        // Create a state regardless of whether it's a duplicate
-        const { state, isNewState } = createDomState();
-        state.hash = currentHash; // Ensure hash is consistent
+        const { state, isNewState: isNewHash } = createDomState(); // isNewHash indicates if the hash is new, not necessarily if the state is new to the session
+        state.hash = currentHash;
         
-        console.log(`[DOM Tracker][DUPLICATION DEBUG] Created state object with stateId=${state.stateId}, hash=${state.hash}, isNewState=${state.isNewState}`);
-        
-        // If it's a duplicate or previously seen state, mark it appropriately
+        let isTrulyNewStateForSession = false; // Flag to determine if we reset metrics
+
         if (isDuplicate || isPreviouslySeen) {
-            state.isNewState = false;
-            state.originalStateId = isPreviouslySeen ? previousStates[currentHash] : currentStateId;
-            console.log(`[DOM Tracker][DUPLICATION DEBUG] Marked state as duplicate, originalStateId=${state.originalStateId}`);
+            state.isNewState = false; // This flag tells the backend not to create a new unique state entry if it can find the original by hash
+            state.originalStateId = isPreviouslySeen ? previousStates[currentHash] : lastStateId;
+        } else {
+            state.isNewState = true; // This is a new hash, so it's a new state for the session
+            isTrulyNewStateForSession = true;
         }
         
-        // Add information about what changed
         state.mutationInfo = {
             count: significantMutations.length,
             types: [...new Set(significantMutations.map(m => m.type))],
             timestamp: now
         };
         
-        // Mark this hash as pending to prevent duplicate sends
         pendingStateSends[currentHash] = true;
-        console.log(`[DOM Tracker][DUPLICATION DEBUG] Added hash ${currentHash} to pendingStateSends to prevent duplicates`);
         
-        // Send to background with appropriate flags
-        console.log(`[DOM Tracker][DUPLICATION DEBUG] Sending state to background with hash=${currentHash}, isDuplicate=${isDuplicate || isPreviouslySeen}`);
         sendToBackground('recordState', {
             state,
-            isDuplicate: isDuplicate || isPreviouslySeen,
+            isDuplicate: isDuplicate || isPreviouslySeen, // For background logic
             reusedStateId: isPreviouslySeen ? previousStates[currentHash] : null
         })
         .then(response => {
-            console.log(`[DOM Tracker][DUPLICATION DEBUG] Background response for recordState:`, response);
-            
             if (response && response.stateId) {
-                // Update our map with the real stateId from the server
                 previousStates[currentHash] = response.stateId;
-                currentStateId = response.stateId;
-                console.log(`[DOM Tracker][DUPLICATION DEBUG] Added/updated state in previousStates: ${currentHash} -> ${response.stateId}`);
+                lastStateId = response.stateId; // CRITICAL: Update lastStateId to the ID of the *just recorded* state
+                
+                console.log(`[DOM Tracker][DUPLICATION DEBUG] State processed: ${response.stateId}, currentHash: ${currentHash}`);
+
+                // If background confirms it's a new, final (non-loading, non-duplicate) state, reset metrics.
+                if (!response.isDuplicate && response.stateId && !response.stateId.startsWith('loading_')) {
+                    console.log(`[DOM Tracker] Calling resetAllMetricsForNewState based on background response for new final state in processMutations: ${response.stateId}`);
+                    resetAllMetricsForNewState();
+                }
             } else {
                 console.warn('[DOM Tracker][DUPLICATION DEBUG] Did not receive valid stateId from background script');
             }
-            
-            // Always update lastDomHash to the current hash
             lastDomHash = currentHash;
         })
         .catch(error => {
             console.error('[DOM Tracker][DUPLICATION DEBUG] Error getting stateId from background:', error);
         })
         .finally(() => {
-            // Increase the delay before clearing pending sends to prevent rapid duplicates
-            console.log(`[DOM Tracker][DUPLICATION DEBUG] Setting timeout to clear pendingStateSends for hash ${currentHash}`);
-            setTimeout(() => {
-                delete pendingStateSends[currentHash];
-                console.log(`[DOM Tracker][DUPLICATION DEBUG] Removed hash ${currentHash} from pendingStateSends`);
-            }, 350); // Adjusted from 500ms to 350ms to better balance responsiveness
+            setTimeout(() => { delete pendingStateSends[currentHash]; }, 350);
         });
         
-        console.log(`[DOM Tracker][DUPLICATION DEBUG] Created state for DOM change with hash: ${currentHash}`);
     } catch (error) {
         console.error('[DOM Tracker][DUPLICATION DEBUG] Error processing mutations:', error);
     } finally {
-        // Clear debounce flag
         processingMutations = false;
     }
 }
@@ -2336,6 +2459,12 @@ function forceCaptureState(trigger, element, additionalDetails = {}) {
                 if (response.stateId) {
                     lastStateId = response.stateId;
                     if (state.hash) lastStateHash = state.hash;
+
+                    // Reset metrics if background confirms it's a new, final (non-loading, non-duplicate) state.
+                    if (!response.isDuplicate && response.stateId && !response.stateId.startsWith('loading_')) {
+                         console.log(`[DOM Tracker] Calling resetAllMetricsForNewState for forced capture state: ${response.stateId}`);
+                         resetAllMetricsForNewState();
+                    }
                 }
             }
         })
@@ -2453,6 +2582,11 @@ function setupFormChangeDetection() {
     });
 }
 
+// Variables for debugging double counting
+let lastRecordedKeyTime = 0;
+let lastRecordedClickTime = 0;
+const DUPLICATE_THRESHOLD = 10; // ms
+
 // Start recording
 function startRecording(newSessionId, newUserId) {
     if (isRecording) return;
@@ -2468,6 +2602,21 @@ function startRecording(newSessionId, newUserId) {
     window.pageLoadTime = Date.now();
     window.firstInteractionRecorded = false;
     nonTransitionalMetrics.dwellTimeBeforeAction = 0;
+    
+    // Reset debugging variables
+    lastRecordedKeyTime = 0;
+    lastRecordedClickTime = 0;
+    
+    // Reset all metrics to ensure a clean start
+    nonTransitionalMetrics = {
+        totalIdleTime: 0,
+        longestIdlePeriod: 0,
+        dwellTimeBeforeAction: 0,
+        totalMouseDistance: 0,
+        totalKeystrokes: 0,
+        totalClicks: 0,
+        totalHoverTime: 0
+    };
     
     // Set up DOM tracking
     setupMutationObserver();
@@ -2632,7 +2781,7 @@ function initialize() {
             }
             
             // Capture page state
-            const { state, isNewState } = createDomState();
+            const { state, isNewState } = createDomState(); // isNewState from createDomState refers to hash comparison locally
             state.hash = currentHash;
             
             // Set appropriate flags based on the type of page load
@@ -2685,12 +2834,18 @@ function initialize() {
                 if (response && response.stateId) {
                     // Update our map with the real stateId from the server
                     previousStates[currentHash] = response.stateId;
-                    currentStateId = response.stateId;
+                    lastStateId = response.stateId; // Use lastStateId consistently
                     console.log(`[DOM Tracker][DUPLICATION DEBUG] Updated page load state tracking with server-assigned ID: ${response.stateId}`);
                     
                     // Always update lastDomHash to the current hash
                     lastDomHash = currentHash;
                     
+                    // Reset metrics if background confirms it's a new, final (non-loading, non-duplicate) state.
+                    if (!response.isDuplicate && response.stateId && !response.stateId.startsWith('loading_')) {
+                        console.log(`[DOM Tracker] Calling resetAllMetricsForNewState for page load state: ${response.stateId}`);
+                        resetAllMetricsForNewState();
+                    }
+
                     // Reset the reload flag now that we've handled it
                     if (isReload) {
                         sessionStorage.setItem('isReload', 'false');
@@ -3086,5 +3241,58 @@ function setupDropdownTracking() {
             }, 0); // Small delay to catch attribute change
         } // This closes the if (isDropdownTrigger && identifiedTriggerElement)
     }, true); // Use capture phase
+}
+
+// NEW FUNCTION: To reset all metrics and set up dwell time for a new state
+function resetAllMetricsForNewState() {
+    if (!isRecording || !lastStateId) {
+        console.log("[DOM Tracker] Cannot reset metrics - not recording or no lastStateId");
+        return;
+    }
+
+    console.log(`[DOM Tracker] Resetting all metrics for new state: ${lastStateId}`);
+
+    // Reset all counters in nonTransitionalMetrics
+    nonTransitionalMetrics.totalIdleTime = 0;
+    nonTransitionalMetrics.longestIdlePeriod = 0;
+    nonTransitionalMetrics.dwellTimeBeforeAction = 0;
+    nonTransitionalMetrics.totalMouseDistance = 0;
+    nonTransitionalMetrics.totalKeystrokes = 0;
+    nonTransitionalMetrics.totalClicks = 0;
+    nonTransitionalMetrics.totalHoverTime = 0;
+    // Add a note for the backend/DB that these metrics are for the current state
+    nonTransitionalMetrics.metricsScope = "per_state_reset"; 
+    nonTransitionalMetrics.stateStartTime = Date.now();
+
+    // Clear previous dwell time listeners if any (use a more robust clearing mechanism)
+    if (window.currentDwellTimeAbortController) {
+        window.currentDwellTimeAbortController.abort();
+    }
+    window.currentDwellTimeAbortController = new AbortController();
+    const { signal } = window.currentDwellTimeAbortController;
+
+    // Set up dwell time for the current state (lastStateId)
+    const stateStartTime = Date.now(); // Time this specific state became active
+    let stateInteractionRecorded = false;
+
+    const dwellTimeHandler = (event) => {
+        if (!stateInteractionRecorded) {
+            stateInteractionRecorded = true;
+            const dwellTime = Date.now() - stateStartTime;
+            nonTransitionalMetrics.dwellTimeBeforeAction = dwellTime;
+            console.log(`[DOM Tracker] Dwell time for state ${lastStateId}: ${dwellTime}ms (Interaction: ${event.type})`);
+            
+            // Listeners are auto-removed due to AbortController signal
+            // Schedule send after dwell time is captured
+            scheduleNonTransitionalSend();
+        }
+    };
+
+    const dwellEvents = ['click', 'keydown', 'input', 'scroll'];
+    dwellEvents.forEach(eventType => {
+        document.addEventListener(eventType, dwellTimeHandler, { capture: true, once: true, signal });
+    });
+
+    console.log(`[DOM Tracker] Dwell time listeners set up for state ${lastStateId}`);
 }
 

@@ -290,6 +290,8 @@ const LiveFeed: React.FC<LiveFeedProps> = ({
     
     // Extract detailed information
     let detailText = '';
+    let overrideInteraction = null;
+    
     if (activity.eventType === 'keyTyping' && activity.details) {
       const keyCount = activity.details.keyCount || 0;
       const field = activity.details.field || 'field';
@@ -299,6 +301,59 @@ const LiveFeed: React.FC<LiveFeedProps> = ({
       const url = activity.details.url;
       detailText = text ? `Text: "${text}"${url ? ` • URL: ${url}` : ''}` : 
                    url ? `URL: ${url}` : '';
+    } else if (activity.eventType === 'scroll' && activity.details) {
+      // Calculate direction and magnitude from the available scroll data
+      let direction = 'unknown';
+      let magnitude = 'unknown';
+      let depthText = '';
+      
+      // Use the explicit direction data from the extension if available
+      if (activity.details.direction) {
+        direction = String(activity.details.direction);
+      } 
+      // Fallback to directionY if primary direction isn't available
+      else if (activity.details.directionY) {
+        direction = String(activity.details.directionY);
+      }
+      // Last fallback - use our previous calculation method
+      else if (typeof activity.details.scrollX === 'number' && typeof activity.details.scrollY === 'number') {
+        const scrollX = activity.details.scrollX as number;
+        const scrollY = activity.details.scrollY as number;
+        
+        if (Math.abs(scrollX) > Math.abs(scrollY)) {
+          direction = scrollX > 0 ? 'right' : 'left';
+        } else {
+          direction = scrollY > 0 ? 'down' : 'up';
+        }
+      }
+      
+      // Use the explicit magnitude if available
+      if (typeof activity.details.magnitude === 'number') {
+        magnitude = `${activity.details.magnitude}px`;
+      } 
+      // Otherwise calculate from scrollX/Y if available
+      else if (typeof activity.details.scrollX === 'number' && typeof activity.details.scrollY === 'number') {
+        const magnitudeValue = Math.max(
+          Math.abs(activity.details.scrollX as number), 
+          Math.abs(activity.details.scrollY as number)
+        );
+        magnitude = `${magnitudeValue}px`;
+      }
+      
+      // Include scroll depth if available
+      const scrollDepthY = activity.details.scrollDepthY;
+      if (typeof scrollDepthY === 'number') {
+        depthText = `, Depth: ${scrollDepthY.toFixed(0)}%`;
+        detailText = `Direction: ${direction}, Magnitude: ${magnitude}${depthText}`;
+      } else {
+        detailText = `Direction: ${direction}, Magnitude: ${magnitude}`;
+      }
+      
+      // Override the interaction message to replace the N/A values
+      overrideInteraction = `Scrolled on page (direction: ${direction}, magnitude: ${magnitude})`;
+    } else if (activity.eventType === 'click' && activity.details) {
+      // Handle click events (existing code)
+      // ... (add back any click handling code here if needed)
     }
     
     return (
@@ -311,7 +366,7 @@ const LiveFeed: React.FC<LiveFeedProps> = ({
             {icon}
           </div>
           <div className="flex-grow min-w-0">
-            <div className="font-medium">{activity.interaction}</div>
+            <div className="font-medium">{overrideInteraction || activity.interaction}</div>
             {detailText && (
               <div className="text-xs text-gray-600 mt-1">
                 {detailText}
@@ -486,7 +541,7 @@ const LiveFeed: React.FC<LiveFeedProps> = ({
                 
                 {(selectedItem as Activity).details && (
                   <div className="mt-4">
-                    <h4 className="font-semibold text-gray-700 mb-2">Details</h4>
+                    <h4 className="font-semibold text-gray-700 mb-2">All Details</h4>
                     <div className="bg-gray-50 p-3 rounded">
                       <pre className="text-xs overflow-auto max-h-64">{JSON.stringify((selectedItem as Activity).details, null, 2)}</pre>
                     </div>

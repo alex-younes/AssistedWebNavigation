@@ -2710,6 +2710,9 @@ function setupFormSubmitTracking() {
 function setupScrollTracking() {
     let lastScrollTime = 0;
     const scrollDebounceTime = 200; // ms to wait after last scroll to record event
+    // Store the previous scroll position to determine direction
+    let previousScrollX = window.scrollX;
+    let previousScrollY = window.scrollY;
 
     document.addEventListener('scroll', (event) => {
         if (!isRecording) return;
@@ -2726,6 +2729,32 @@ function setupScrollTracking() {
         // Get scroll position relative to the scrolled element or viewport
         const scrollX = scrollElement.scrollLeft !== undefined ? scrollElement.scrollLeft : window.scrollX;
         const scrollY = scrollElement.scrollTop !== undefined ? scrollElement.scrollTop : window.scrollY;
+        
+        // Determine scroll direction by comparing with previous values
+        let directionX = 'none';
+        let directionY = 'none';
+        
+        if (scrollX > previousScrollX) {
+            directionX = 'right';
+        } else if (scrollX < previousScrollX) {
+            directionX = 'left';
+        }
+        
+        if (scrollY > previousScrollY) {
+            directionY = 'down';
+        } else if (scrollY < previousScrollY) {
+            directionY = 'up';
+        }
+        
+        // Pick the primary direction based on which axis had more movement
+        const deltaX = Math.abs(scrollX - previousScrollX);
+        const deltaY = Math.abs(scrollY - previousScrollY);
+        const primaryDirection = deltaX > deltaY ? directionX : directionY;
+        
+        // Calculate magnitude of the scroll
+        const magnitudeX = Math.abs(scrollX - previousScrollX);
+        const magnitudeY = Math.abs(scrollY - previousScrollY);
+        const magnitude = Math.max(magnitudeX, magnitudeY);
         
         // Get the dimensions of the scrolled content and viewport/element
         const scrollHeight = scrollElement.scrollHeight;
@@ -2750,8 +2779,16 @@ function setupScrollTracking() {
             maxScrollY: scrollHeight,
             viewportWidth: clientWidth,
             viewportHeight: clientHeight,
-            eventMeaning: "User scrolled the page or an element." // CORRECTED: Was an object, now a direct string
+            direction: primaryDirection,
+            magnitude: magnitude,
+            directionX: directionX,
+            directionY: directionY,
+            eventMeaning: `User scrolled ${primaryDirection} by ${magnitude}px.` 
         };
+
+        // Update previous scroll positions for next event
+        previousScrollX = scrollX;
+        previousScrollY = scrollY;
 
         if (!nonTransitionalEvents.scrollEvents) { // Defensive init
             nonTransitionalEvents.scrollEvents = [];

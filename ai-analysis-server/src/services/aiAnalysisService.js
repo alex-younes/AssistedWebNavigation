@@ -1,4 +1,4 @@
-const { GroqClient } = require('@groq/groq-sdk');
+const { GroqClient } = require('groq-sdk');
 
 // Initialize the Groq client
 const groq = new GroqClient({

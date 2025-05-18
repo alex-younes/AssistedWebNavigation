@@ -86,7 +86,7 @@ router.post('/user/:userId', async (req, res) => {
       stageResults: {
         metrics: result.stageResults?.stage1,
         behavioral: result.stageResults?.stage2,
-        form: result.stageResults?.stage3,
+        progression: result.stageResults?.stage3,
         temporal: result.stageResults?.stage4
       },
       analysisTime,

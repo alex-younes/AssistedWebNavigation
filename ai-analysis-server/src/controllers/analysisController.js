@@ -1,4 +1,4 @@
-const aiAnalysisService = require('../services/aiAnalysisService');
+const { performComprehensiveAnalysis } = require('../services/analysisOrchestrator');
 
 /**
  * Analyze a single user session
@@ -14,7 +14,8 @@ exports.analyzeSession = async (req, res) => {
       return res.status(400).json({ error: 'Session data is required' });
     }
     
-    const result = await aiAnalysisService.analyzeSession(session, analysisType);
+    // For now, we only support comprehensive analysis through the orchestrator
+    const result = await performComprehensiveAnalysis(session.id || session.sessionId);
     return res.status(200).json(result);
   } catch (error) {
     console.error('Error in analyzeSession controller:', error);
@@ -38,11 +39,16 @@ exports.analyzeBatchSessions = async (req, res) => {
       return res.status(400).json({ error: 'Sessions array is required' });
     }
     
-    const result = await aiAnalysisService.analyzeBatchSessions(sessions, {
-      analysisType,
-      maxSessionsToAnalyze
+    // For now, we'll analyze just the first session as batch processing isn't implemented yet
+    const sessionToAnalyze = sessions[0];
+    const result = await performComprehensiveAnalysis(sessionToAnalyze.id || sessionToAnalyze.sessionId);
+    
+    return res.status(200).json({
+      success: true,
+      results: [result],
+      analyzedSessions: 1,
+      totalSessions: sessions.length
     });
-    return res.status(200).json(result);
   } catch (error) {
     console.error('Error in analyzeBatchSessions controller:', error);
     return res.status(500).json({ 
@@ -67,8 +73,11 @@ exports.compareSessions = async (req, res) => {
       });
     }
     
-    const result = await aiAnalysisService.compareSessions(sessionGroups, specializedPrompt);
-    return res.status(200).json(result);
+    // This functionality is not yet implemented in the new orchestrator
+    return res.status(501).json({
+      error: 'Session comparison is not yet implemented in the new multi-model orchestrator',
+      status: 'coming soon'
+    });
   } catch (error) {
     console.error('Error in compareSessions controller:', error);
     return res.status(500).json({ 
@@ -86,23 +95,23 @@ exports.compareSessions = async (req, res) => {
  */
 exports.handleUserSessionsComparison = async (req, res) => {
   try {
-    const { userId } = req.body;
+    const { userId } = req.params || req.body;
 
     // Basic validation
     if (!userId) {
       return res.status(400).json({ error: 'userId is required' });
     }
 
-    console.log(`[Controller] Received request for user sessions comparison for userId: ${userId}`);
+    console.log(`[Controller] Received request for user sessions analysis for userId: ${userId}`);
 
-    // Call the updated service function which now fetches session data itself
-    const analysisResult = await aiAnalysisService.performUserSessionsComparison(userId);
+    // Call the comprehensive analysis function from the orchestrator
+    const analysisResult = await performComprehensiveAnalysis(userId);
     
     return res.status(200).json(analysisResult);
   } catch (error) {
     console.error('Error in handleUserSessionsComparison controller:', error);
     return res.status(500).json({
-      error: 'Failed to perform user sessions comparison analysis',
+      error: 'Failed to perform user sessions analysis',
       details: error.message
     });
   }

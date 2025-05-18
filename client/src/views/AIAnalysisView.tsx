@@ -40,7 +40,7 @@ interface AnalysisResult {
   stageResults?: {
     metrics?: string;
     behavioral?: string;
-    form?: string;
+    progression?: string;
     temporal?: string;
   };
 }
@@ -383,8 +383,8 @@ const AIAnalysisView: React.FC = () => {
                   {analysisResult.stageResults?.behavioral && (
                     <Tab label="Behavioral Analysis" value="behavioral" />
                   )}
-                  {analysisResult.stageResults?.form && (
-                    <Tab label="Form Interactions" value="form" />
+                  {analysisResult.stageResults?.progression && (
+                    <Tab label="Progression Analysis" value="progression" />
                   )}
                   {analysisResult.stageResults?.temporal && (
                     <Tab label="Temporal Analysis" value="temporal" />
@@ -424,7 +424,7 @@ const AIAnalysisView: React.FC = () => {
                       {selectedTab === 'synthesis' ? analysisResult.report : 
                        selectedTab === 'metrics' && analysisResult.stageResults?.metrics ? analysisResult.stageResults.metrics :
                        selectedTab === 'behavioral' && analysisResult.stageResults?.behavioral ? analysisResult.stageResults.behavioral :
-                       selectedTab === 'form' && analysisResult.stageResults?.form ? analysisResult.stageResults.form :
+                       selectedTab === 'progression' && analysisResult.stageResults?.progression ? analysisResult.stageResults.progression :
                        selectedTab === 'temporal' && analysisResult.stageResults?.temporal ? analysisResult.stageResults.temporal :
                        "No data available for this analysis stage."}
                     </ReactMarkdown>

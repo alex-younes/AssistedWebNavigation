@@ -2,7 +2,6 @@ import React, { useEffect, useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { getAllUsers, AdminUser, getUserSessions, UserSession } from '../services/adminService'; // Import service and types
 import { useNavigate } from 'react-router-dom'; // Import useNavigate
-import LLMAnalysisPanel from '../components/LLMAnalysisPanel';
 
 const AdminDashboardView: React.FC = () => {
   const { user, logout } = useAuth();
@@ -117,7 +116,7 @@ const AdminDashboardView: React.FC = () => {
       </div>
 
       {selectedUser && (
-        <div className="mt-8 grid grid-cols-1 lg:grid-cols-2 gap-8">
+        <div className="mt-8 grid grid-cols-1 gap-8">
           <div className="bg-white shadow-xl rounded-lg p-6">
             <h2 className="text-xl font-semibold mb-4 text-gray-700">Sessions for {selectedUser.username}</h2>
             {isLoadingSessions && <p className="text-blue-500">Loading sessions...</p>}
@@ -143,9 +142,6 @@ const AdminDashboardView: React.FC = () => {
               )
             )}
           </div>
-          
-          {/* LLM Analysis Panel */}
-          <LLMAnalysisPanel userId={selectedUser.userId} />
         </div>
       )}
     </div>

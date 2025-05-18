@@ -1,0 +1,38 @@
+/* AIAnalysisView.css */
+.ai-report-markdown table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 1rem;
+  border: 1px solid #ccc;
+  table-layout: fixed;
+}
+
+.ai-report-markdown th,
+.ai-report-markdown td {
+  border: 1px solid #ccc;
+  padding: 8px 12px;
+  text-align: left;
+  word-wrap: break-word;
+}
+
+.ai-report-markdown th {
+  background-color: #f5f5f5;
+  font-weight: bold;
+}
+
+.ai-report-markdown tr:nth-of-type(even) {
+  background-color: #f9f9f9;
+}
+
+/* Fix for markdown table rendering */
+.markdown-body {
+  overflow-x: auto;
+}
+
+/* For better mobile display */
+@media (max-width: 768px) {
+  .ai-report-markdown table {
+    display: block;
+    overflow-x: auto;
+  }
+} 

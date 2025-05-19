@@ -464,6 +464,7 @@ Your report should read like a professional data analyst's findings about user b
  * @returns {Promise<object>} Basic analysis results
  */
 async function performBasicAnalysis(userId) {
+  const analysisStartTime = Date.now(); // Add start time
   console.log(`[Orchestrator] Starting basic analysis (Stage 1) for userId: ${userId}`);
   try {
     // Step 1: Fetch and prepare raw session data
@@ -516,6 +517,9 @@ async function performBasicAnalysis(userId) {
     const htmlTables = processedSessions.map(session => session.sessionAnalysis?.htmlTables || {});
     console.log(`[Orchestrator] Extracted ${Object.keys(htmlTables).length} HTML tables from processed sessions`);
       
+    const analysisEndTime = Date.now();
+    const analysisDuration = ((analysisEndTime - analysisStartTime) / 1000).toFixed(2);
+      
     return {
       success: true,
       report: analysisResult,
@@ -527,7 +531,9 @@ async function performBasicAnalysis(userId) {
       sessionAnalysisSummary: processedSessions.map(session => ({
         sessionId: session.id || session.sessionId,
         summary: session.sessionAnalysis?.summary || {}
-      }))
+      })),
+      modelsUsed: [{ stage: 'Stage1', model: model }],
+      analysisTime: analysisDuration
     };
   } catch (error) {
     console.error(`[Orchestrator] Error in analysis pipeline: ${error.message}`);
@@ -547,6 +553,7 @@ async function performBasicAnalysis(userId) {
  * @returns {Promise<object>} Stage 2 analysis results
  */
 async function performStage2Analysis(userId) {
+  const analysisStartTime = Date.now(); // Add start time
   console.log(`[Orchestrator] Starting Stage 2 analysis for userId: ${userId}`);
   try {
     // Step 1: Fetch and prepare raw session data again (as Stage 2 is called separately)
@@ -608,6 +615,9 @@ async function performStage2Analysis(userId) {
     const stage2AnalysisResult = await executeModelRequest(stage2SummaryPrompt, model);
     console.log(`[Orchestrator] Stage 2 AI analysis complete. Response length: ${stage2AnalysisResult.length} characters`);
     
+    const analysisEndTime = Date.now();
+    const analysisDuration = ((analysisEndTime - analysisStartTime) / 1000).toFixed(2);
+
     return {
       success: true,
       report: stage2AnalysisResult,
@@ -618,7 +628,9 @@ async function performStage2Analysis(userId) {
       nonTransitionalData: stage2ProcessedSessions.map(session => ({
         sessionId: session.id || session.sessionId,
         nonTransitionalAnalysis: session.nonTransitionalAnalysis || {}
-      }))
+      })),
+      modelsUsed: [{ stage: 'Stage2', model: model }],
+      analysisTime: analysisDuration
     };
   } catch (error) {
     console.error(`[Orchestrator] Error in Stage 2 analysis pipeline: ${error.message}`);
@@ -1200,10 +1212,117 @@ function extractSessionFeatures(session) {
   }
 }
 
+async function performFullAnalysis(userId) {
+  console.log(`[Orchestrator] Starting FULL analysis (Stage 1 + Stage 2) for userId: ${userId}`);
+  const fullAnalysisStartTime = Date.now();
+  let stage1ResultData = null;
+  let stage2ResultData = null;
+  let sessionCountForResponse = 0;
+
+  try {
+    // --- Stage 1 Analysis ---    
+    console.log(`[Orchestrator] FULL Analysis: Running Stage 1 for ${userId}`);
+    stage1ResultData = await performBasicAnalysis(userId);
+    sessionCountForResponse = stage1ResultData.sessionCount || 0;
+
+    if (!stage1ResultData.success) {
+      console.error(`[Orchestrator] FULL Analysis: Stage 1 failed for ${userId}.`);
+      // Even if stage 1 fails, we might want to convey this to the client specifically.
+      return {
+        success: false,
+        message: `Stage 1 analysis failed: ${stage1ResultData.message || 'Unknown error'}`, 
+        userId,
+        stage1Error: stage1ResultData.error || stage1ResultData.message,
+        analysisStagesCompleted: stage1ResultData.analysisStagesCompleted || [],
+        modelsUsed: stage1ResultData.modelsUsed || [],
+        analysisTime: ((Date.now() - fullAnalysisStartTime) / 1000).toFixed(2),
+      };
+    }
+    console.log(`[Orchestrator] FULL Analysis: Stage 1 completed successfully for ${userId}.`);
+
+    // --- Stage 2 Analysis ---    
+    console.log(`[Orchestrator] FULL Analysis: Running Stage 2 for ${userId}`);
+    stage2ResultData = await performStage2Analysis(userId);
+    // Update session count if it was somehow missed or different (should be same)
+    if (stage2ResultData.sessionCount) sessionCountForResponse = stage2ResultData.sessionCount; 
+
+    if (!stage2ResultData.success) {
+      console.error(`[Orchestrator] FULL Analysis: Stage 2 failed for ${userId}.`);
+      return {
+        success: true, // Stage 1 succeeded
+        message: `Stage 1 completed, but Stage 2 analysis failed: ${stage2ResultData.message || 'Unknown error'}`, 
+        userId,
+        sessionCount: sessionCountForResponse,
+        stage1Report: stage1ResultData.report,
+        stage1ModelsUsed: stage1ResultData.modelsUsed,
+        stage1AnalysisTime: stage1ResultData.analysisTime,
+        stage2Error: stage2ResultData.error || stage2ResultData.message,
+        analysisStagesCompleted: [...(stage1ResultData.analysisStagesCompleted || []), ...(stage2ResultData.analysisStagesCompletedBeforeError || [])].filter((v, i, a) => a.indexOf(v) === i),
+        modelsUsed: stage1ResultData.modelsUsed || [], // Only stage 1 models if stage 2 failed
+        analysisTime: ((Date.now() - fullAnalysisStartTime) / 1000).toFixed(2),
+      };
+    }
+    console.log(`[Orchestrator] FULL Analysis: Stage 2 completed successfully for ${userId}.`);
+
+    const fullAnalysisEndTime = Date.now();
+    const totalAnalysisTime = ((fullAnalysisEndTime - fullAnalysisStartTime) / 1000).toFixed(2);
+
+    const combinedModels = [];
+    const modelSignature = new Set();
+    (stage1ResultData.modelsUsed || []).forEach(m => {
+        if(!modelSignature.has(m.model + m.stage)) {
+            combinedModels.push(m); modelSignature.add(m.model + m.stage);
+        }
+    });
+    (stage2ResultData.modelsUsed || []).forEach(m => {
+        if(!modelSignature.has(m.model + m.stage)) {
+            combinedModels.push(m); modelSignature.add(m.model + m.stage);
+        }
+    });
+
+    return {
+      success: true,
+      message: "Full analysis complete. Reports for Stage 1 and Stage 2 are available.",
+      stage1Report: stage1ResultData.report,
+      stage2Report: stage2ResultData.report,
+      userId,
+      sessionCount: sessionCountForResponse,
+      modelsUsed: combinedModels,
+      analysisTime: totalAnalysisTime,
+      analysisStagesCompleted: [...(stage1ResultData.analysisStagesCompleted || []), ...(stage2ResultData.analysisStagesCompleted || [])].filter((v, i, a) => a.indexOf(v) === i),
+      _meta: {
+          stage1Meta: stage1ResultData._meta, // Assuming _meta is populated by individual stages
+          stage2Meta: stage2ResultData._meta,
+          rateLimitStatus: stage2ResultData._meta?.rateLimitStatus || stage1ResultData._meta?.rateLimitStatus,
+          stageResultSizes: {
+            ...(stage1ResultData._meta?.stageResultSizes || {}),
+            ...(stage2ResultData._meta?.stageResultSizes || {}),
+          }
+      }
+    };
+
+  } catch (error) {
+    console.error(`[Orchestrator] Critical error in performFullAnalysis for userId ${userId}: ${error.message}`);
+    console.error(error.stack);
+    return {
+      success: false,
+      message: `Critical error during full analysis: ${error.message}`, 
+      userId,
+      error: error.message,
+      stage1Report: stage1ResultData?.success ? stage1ResultData.report : null,
+      stage1Error: !stage1ResultData?.success ? (stage1ResultData?.message || error.message) : null,
+      stage2Report: stage2ResultData?.success ? stage2ResultData.report : null,
+      stage2Error: !stage2ResultData?.success ? (stage2ResultData?.message || (stage1ResultData?.success ? error.message : null)) : null,
+      analysisTime: ((Date.now() - fullAnalysisStartTime) / 1000).toFixed(2),
+    };
+  }
+}
+
 // Export the analysis functions
 module.exports = {
   performBasicAnalysis,
   performStage2Analysis,
+  performFullAnalysis,
   fetchAndPrepareSessionData,
   executeModelRequest,
   extractSessionFeatures

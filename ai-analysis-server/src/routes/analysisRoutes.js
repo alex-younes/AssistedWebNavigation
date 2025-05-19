@@ -1,6 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const { performBasicAnalysis, performStage2Analysis } = require('../services/analysisOrchestrator');
+const analysisController = require('../controllers/analysisController');
+const analysisOrchestrator = require('../services/analysisOrchestrator');
 
 /**
  * @route POST /api/analysis/user/:userId
@@ -56,7 +58,7 @@ router.post('/user/:userId', async (req, res) => {
  */
 router.post('/user/:userId/stage2', async (req, res) => {
   try {
-    const { userId } = req.params;
+    const userId = req.params.userId;
     
     if (!userId) {
       return res.status(400).json({ success: false, message: 'User ID is required' });
@@ -67,7 +69,7 @@ router.post('/user/:userId/stage2', async (req, res) => {
     const startTime = Date.now();
     
     // Perform Stage 2 analysis
-    const result = await performStage2Analysis(userId);
+    const result = await analysisOrchestrator.performStage2Analysis(userId);
     
     if (!result.report) {
       return res.status(500).json({ 
@@ -89,12 +91,39 @@ router.post('/user/:userId/stage2', async (req, res) => {
     });
     
   } catch (error) {
-    console.error('Error analyzing user sessions (Stage 2):', error);
-    return res.status(500).json({
-      success: false,
-      message: 'Failed to perform Stage 2 analysis',
-      error: error.message
-    });
+    console.error(`[Routes] Error in Stage 2 analysis route for userId ${req.params.userId}:`, error);
+    res.status(500).json({ success: false, error: error.message || 'Failed to perform Stage 2 analysis' });
+  }
+});
+
+// NEW ROUTE for Full (Stage 1 + Stage 2) analysis for a user
+router.post('/user/:userId/full', async (req, res) => {
+  try {
+    const userId = req.params.userId;
+    if (!userId) {
+      return res.status(400).json({ success: false, error: 'User ID is required' });
+    }
+
+    console.log(`[Routes] Received request for full analysis for userId: ${userId}`);
+    const result = await analysisOrchestrator.performFullAnalysis(userId);
+
+    // The success flag in the result now indicates overall success of the full flow
+    // or partial success if, for example, stage 1 passed but stage 2 failed.
+    if (result.success || (result.stage1Report && !result.stage2Error)) { // Consider it a client-side success if stage 1 data is present
+      res.json(result);
+    } else {
+      // Determine appropriate status code based on errors
+      let statusCode = 500;
+      if (result.stage1Error && !result.stage2Report) statusCode = 500; // Stage 1 failed outright
+      else if (result.stage2Error) statusCode = 500; // Stage 2 specifically failed after Stage 1 success
+      else if (result.error) statusCode = 500; // Generic error
+      else if (!result.success) statusCode = 400; // General failure if not success
+
+      res.status(statusCode).json(result);
+    }
+  } catch (error) {
+    console.error(`[Routes] Error in full analysis route for userId ${req.params.userId}:`, error);
+    res.status(500).json({ success: false, error: error.message || 'Failed to perform full analysis' });
   }
 });
 

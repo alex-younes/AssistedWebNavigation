@@ -17,6 +17,7 @@ interface AnalysisResult {
   reportLength?: number;
   modelsUsed?: Array<{stage: string, model: string, fallback?: boolean}>;
   analysisTime?: string;
+  analysisStagesCompleted?: string[];
   _meta?: {
     rateLimitStatus?: {
       [provider: string]: {
@@ -109,18 +110,14 @@ const AIAnalysisView: React.FC = () => {
       interval = window.setInterval(() => {
         setAnalysisProgress(prev => {
           // Define stages based on progress percentage
-          const newProgress = Math.min(prev + (Math.random() * 2), 99);
+          const newProgress = Math.min(prev + (Math.random() * 3), 99);
           
-          if (newProgress < 25) {
-            setAnalysisStage('Gathering session data...');
-          } else if (newProgress < 45) {
-            setAnalysisStage('Analyzing metrics and navigation patterns...');
-          } else if (newProgress < 65) {
-            setAnalysisStage('Performing behavioral analysis...');
-          } else if (newProgress < 85) {
-            setAnalysisStage('Analyzing temporal patterns...');
+          if (newProgress < 33) {
+            setAnalysisStage('Gathering raw session data...');
+          } else if (newProgress < 66) {
+            setAnalysisStage('Processing detailed events (Stage 1)...');
           } else {
-            setAnalysisStage('Synthesizing comprehensive report...');
+            setAnalysisStage('Generating AI analysis report...');
           }
           
           return newProgress;
@@ -327,9 +324,9 @@ const AIAnalysisView: React.FC = () => {
                 }}
               />
               <p className="mt-4 text-gray-600 text-center">
-                {analysisProgress < 30 ? 'Each analysis stage uses a specialized AI model for optimal results' : 
-                 analysisProgress < 60 ? 'Deep behavioral analysis uses advanced reasoning capabilities' : 
-                 'Generating comprehensive synthesis of all analysis stages'}
+                {analysisProgress < 33 ? 'Fetching all user session records and event data.' : 
+                 analysisProgress < 66 ? 'Stage 1: Programmatically extracting detailed features from events...' : 
+                 'Generating comprehensive AI synthesis based on processed data...'}
               </p>
             </div>
           )}
@@ -365,6 +362,31 @@ const AIAnalysisView: React.FC = () => {
                       Models used in this analysis:
                     </Typography>
                     {renderModelChips(analysisResult.modelsUsed)}
+                  </div>
+                )}
+
+                {/* MODIFIED: Display analysis stages completed - NEW SECTION */}
+                {analysisResult.analysisStagesCompleted && analysisResult.analysisStagesCompleted.length > 0 && (
+                  <div className="mb-4">
+                    <Typography variant="subtitle2" component="div" sx={{ mb: 1, color: 'text.secondary' }}>
+                      Analysis Stages Run:
+                    </Typography>
+                    <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', gap: 1 }}>
+                      {analysisResult.analysisStagesCompleted.map((stage, index) => (
+                        <Chip 
+                          key={index} 
+                          label={stage.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())} // Format stage name (e.g., Stage1 DetailedEventProcessor)
+                          variant="outlined" 
+                          size="small"
+                          sx={{ 
+                            backgroundColor: `${theme.palette.info.main}20`, // Using info color palette
+                            borderColor: `${theme.palette.info.main}80`,
+                            color: theme.palette.info.dark,
+                            fontWeight: 'medium'
+                          }}
+                        />
+                      ))}
+                    </Stack>
                   </div>
                 )}
                 

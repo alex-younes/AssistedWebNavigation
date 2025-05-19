@@ -5,7 +5,7 @@ import ReactMarkdown from 'react-markdown';
 import rehypeRaw from 'rehype-raw';
 import remarkGfm from 'remark-gfm';
 // import { useParams } from 'react-router-dom'; // Commented out or remove this line
-import { Typography, Box, Paper, LinearProgress, Chip, Stack, Tooltip, Tabs, Tab, Divider } from '@mui/material'; // Added LinearProgress, Chip, Tabs, Tab, and Divider
+import { Typography, Box, Paper, LinearProgress, Chip, Stack, Tooltip, Divider } from '@mui/material';
 import { useTheme } from '@mui/material/styles';
 import './AIAnalysisView.css'; // Import custom CSS for tables
 
@@ -53,21 +53,29 @@ const AIAnalysisView: React.FC = () => {
   const [usersError, setUsersError] = useState<string | null>(null);
   const [selectedUser, setSelectedUser] = useState<AdminUser | null>(null);
 
-  // Analysis state
-  const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
-  const [analysisProgress, setAnalysisProgress] = useState<number>(0);
-  const [analysisStage, setAnalysisStage] = useState<string>('');
-  const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
-  const [analysisError, setAnalysisError] = useState<string | null>(null);
+  // Stage 1 analysis state
+  const [isAnalyzingStage1, setIsAnalyzingStage1] = useState<boolean>(false);
+  const [stage1Progress, setStage1Progress] = useState<number>(0);
+  const [stage1ProgressText, setStage1ProgressText] = useState<string>('');
+  const [stage1Result, setStage1Result] = useState<AnalysisResult | null>(null);
+  const [stage1Error, setStage1Error] = useState<string | null>(null);
 
-  // Tab state
-  const [selectedTab, setSelectedTab] = useState<string>('synthesis');
+  // Stage 2 analysis state
+  const [isAnalyzingStage2, setIsAnalyzingStage2] = useState<boolean>(false);
+  const [stage2Progress, setStage2Progress] = useState<number>(0);
+  const [stage2ProgressText, setStage2ProgressText] = useState<string>('');
+  const [stage2Result, setStage2Result] = useState<AnalysisResult | null>(null);
+  const [stage2Error, setStage2Error] = useState<string | null>(null);
+  
+  // View state
+  const [activeReport, setActiveReport] = useState<'none' | 'stage1' | 'stage2'>('none');
 
   // Get the analysis server URL from environment variables
   const ANALYSIS_API_URL = import.meta.env.VITE_ANALYSIS_API_URL || 'http://localhost:3100';
 
   // State for progress simulation
-  let interval: number | null = null;
+  let stage1Interval: number | null = null;
+  let stage2Interval: number | null = null;
 
   useEffect(() => {
     const fetchUsers = async () => {
@@ -92,67 +100,108 @@ const AIAnalysisView: React.FC = () => {
 
   const handleUserClick = (clickedUser: AdminUser) => {
     if (selectedUser?.userId === clickedUser.userId) {
-      setSelectedUser(null); 
-      setAnalysisResult(null);
-      setAnalysisError(null);
+      setSelectedUser(null);
+      setStage1Result(null);
+      setStage2Result(null);
+      setStage1Error(null);
+      setStage2Error(null);
+      setActiveReport('none');
     } else {
       setSelectedUser(clickedUser);
-      setAnalysisResult(null);
-      setAnalysisError(null);
+      setStage1Result(null);
+      setStage2Result(null);
+      setStage1Error(null);
+      setStage2Error(null);
+      setActiveReport('none');
     }
   };
 
-  // Simulation of progress updates during analysis
+  // Simulation of Stage 1 progress updates
   useEffect(() => {
-    if (isAnalyzing && !analysisResult) {
-      setAnalysisProgress(0);
+    if (isAnalyzingStage1 && !stage1Result) {
+      setStage1Progress(0);
       // Use window.setInterval for browser environment
-      interval = window.setInterval(() => {
-        setAnalysisProgress(prev => {
-          // Define stages based on progress percentage
-          const newProgress = Math.min(prev + (Math.random() * 5), 95); // Increased increment and max to 95%
+      stage1Interval = window.setInterval(() => {
+        setStage1Progress(prev => {
+          const newProgress = Math.min(prev + (Math.random() * 5), 95);
           
           if (newProgress < 30) {
-            setAnalysisStage('Gathering raw session data...');
+            setStage1ProgressText('Gathering raw session data...');
           } else if (newProgress < 60) {
-            setAnalysisStage('Processing detailed events (Stage 1)...');
+            setStage1ProgressText('Processing detailed events...');
           } else {
-            setAnalysisStage('Generating AI analysis report...');
+            setStage1ProgressText('Generating Stage 1 analysis report...');
           }
           
           return newProgress;
         });
-      }, 600); // Slightly faster updates
+      }, 600);
       
       return () => {
-        if (interval) {
-          clearInterval(interval);
+        if (stage1Interval) {
+          clearInterval(stage1Interval);
         }
       };
-    } else if (analysisResult) {
-      setAnalysisProgress(100);
-      setAnalysisStage('Analysis complete');
-      if (interval) {
-        clearInterval(interval);
+    } else if (stage1Result) {
+      setStage1Progress(100);
+      setStage1ProgressText('Stage 1 analysis complete');
+      if (stage1Interval) {
+        clearInterval(stage1Interval);
       }
     }
-  }, [isAnalyzing, analysisResult]);
+  }, [isAnalyzingStage1, stage1Result]);
 
-  const handleAnalyzeClick = async () => {
+  // Simulation of Stage 2 progress updates
+  useEffect(() => {
+    if (isAnalyzingStage2 && !stage2Result) {
+      setStage2Progress(0);
+      // Use window.setInterval for browser environment
+      stage2Interval = window.setInterval(() => {
+        setStage2Progress(prev => {
+          const newProgress = Math.min(prev + (Math.random() * 5), 95);
+          
+          if (newProgress < 30) {
+            setStage2ProgressText('Preparing for non-transitional analysis...');
+          } else if (newProgress < 60) {
+            setStage2ProgressText('Processing mouse, keyboard, idle events...');
+          } else {
+            setStage2ProgressText('Generating Stage 2 behavior report...');
+          }
+          
+          return newProgress;
+        });
+      }, 600);
+      
+      return () => {
+        if (stage2Interval) {
+          clearInterval(stage2Interval);
+        }
+      };
+    } else if (stage2Result) {
+      setStage2Progress(100);
+      setStage2ProgressText('Stage 2 analysis complete');
+      if (stage2Interval) {
+        clearInterval(stage2Interval);
+      }
+    }
+  }, [isAnalyzingStage2, stage2Result]);
+
+  const handleStage1AnalyzeClick = async () => {
     if (!selectedUser) return;
     
     try {
-      setIsAnalyzing(true);
-      setAnalysisError(null);
-      setAnalysisResult(null);
+      setIsAnalyzingStage1(true);
+      setStage1Error(null);
+      setStage1Result(null);
+      setActiveReport('none');
       
-      // Updated to use the correct API endpoint
+      // Stage 1 API endpoint
       const response = await axios.post(`${ANALYSIS_API_URL}/api/analysis/user/${selectedUser.userId}`);
       
-      setAnalysisResult(response.data);
-      setAnalysisProgress(100);
+      setStage1Result(response.data);
+      setStage1Progress(100);
     } catch (error) {
-      let errorMessage = 'An unknown error occurred during analysis.';
+      let errorMessage = 'An unknown error occurred during Stage 1 analysis.';
       
       if (axios.isAxiosError(error) && error.response?.data?.error) {
         errorMessage = error.response.data.error;
@@ -160,10 +209,47 @@ const AIAnalysisView: React.FC = () => {
         errorMessage = error.message;
       }
       
-      setAnalysisError(errorMessage);
+      setStage1Error(errorMessage);
     } finally {
-      setIsAnalyzing(false);
+      setIsAnalyzingStage1(false);
     }
+  };
+
+  const handleStage2AnalyzeClick = async () => {
+    if (!selectedUser) return;
+    
+    try {
+      setIsAnalyzingStage2(true);
+      setStage2Error(null);
+      setStage2Result(null);
+      setActiveReport('none');
+      
+      // Stage 2 API endpoint - note the different endpoint for Stage 2
+      const response = await axios.post(`${ANALYSIS_API_URL}/api/analysis/user/${selectedUser.userId}/stage2`);
+      
+      setStage2Result(response.data);
+      setStage2Progress(100);
+    } catch (error) {
+      let errorMessage = 'An unknown error occurred during Stage 2 analysis.';
+      
+      if (axios.isAxiosError(error) && error.response?.data?.error) {
+        errorMessage = error.response.data.error;
+      } else if (error instanceof Error) {
+        errorMessage = error.message;
+      }
+      
+      setStage2Error(errorMessage);
+    } finally {
+      setIsAnalyzingStage2(false);
+    }
+  };
+
+  const handleViewStage1 = () => {
+    setActiveReport('stage1');
+  };
+
+  const handleViewStage2 = () => {
+    setActiveReport('stage2');
   };
 
   const theme = useTheme();
@@ -240,6 +326,10 @@ const AIAnalysisView: React.FC = () => {
     return 'AI model for specialized analysis tasks';
   };
 
+  // Determine which report to show
+  const currentResult = activeReport === 'stage1' ? stage1Result : 
+                         activeReport === 'stage2' ? stage2Result : null;
+
   return (
     <div className="space-y-8">
       {/* User Selection Section */}
@@ -284,35 +374,77 @@ const AIAnalysisView: React.FC = () => {
       {selectedUser && (
         <div className="bg-white shadow-xl rounded-lg p-6">
           <h2 className="text-xl font-semibold text-gray-800 mb-6">
-            Multi-Model AI Analysis for {selectedUser.username} (ID: {selectedUser.userId})
+            AI Analysis for {selectedUser.username} (ID: {selectedUser.userId})
           </h2>
           
-          <div className="mb-6">
-            <button
-              onClick={handleAnalyzeClick}
-              disabled={isAnalyzing}
-              className={`px-4 py-2 rounded-md text-white font-medium ${
-                isAnalyzing ? 'bg-indigo-300' : 'bg-indigo-600 hover:bg-indigo-700'
-              }`}
-            >
-              {isAnalyzing ? 'Analyzing...' : 'Run Multi-Stage User Analysis'}
-            </button>
+          {/* Analysis Buttons */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+            {/* Stage 1 Button */}
+            <div className="p-4 border rounded-md bg-gray-50">
+              <h3 className="text-lg font-medium mb-2">Stage 1: Detailed Event Analysis</h3>
+              <p className="text-sm text-gray-600 mb-4">
+                Analyzes page transitions, form interactions, DOM changes, and navigation patterns.
+              </p>
+              <div className="flex flex-col md:flex-row gap-2">
+                <button
+                  onClick={handleStage1AnalyzeClick}
+                  disabled={isAnalyzingStage1}
+                  className={`px-4 py-2 rounded-md text-white font-medium ${
+                    isAnalyzingStage1 ? 'bg-indigo-300' : 'bg-indigo-600 hover:bg-indigo-700'
+                  }`}
+                >
+                  {isAnalyzingStage1 ? 'Running...' : 'Run Stage 1 Analysis'}
+                </button>
+                {stage1Result && (
+                  <button
+                    onClick={handleViewStage1}
+                    className="px-4 py-2 rounded-md bg-green-600 hover:bg-green-700 text-white font-medium"
+                  >
+                    View Results
+                  </button>
+                )}
+              </div>
+            </div>
             
-            <p className="mt-2 text-sm text-gray-600">
-              Uses specialized AI models for each stage of analysis, optimized for different aspects of user behavior.
-            </p>
+            {/* Stage 2 Button */}
+            <div className="p-4 border rounded-md bg-gray-50">
+              <h3 className="text-lg font-medium mb-2">Stage 2: Non-Transitional Behavior</h3>
+              <p className="text-sm text-gray-600 mb-4">
+                Analyzes mouse movements, keyboard patterns, idle times, clicks, and scrolling.
+              </p>
+              <div className="flex flex-col md:flex-row gap-2">
+                <button
+                  onClick={handleStage2AnalyzeClick}
+                  disabled={isAnalyzingStage2}
+                  className={`px-4 py-2 rounded-md text-white font-medium ${
+                    isAnalyzingStage2 ? 'bg-purple-300' : 'bg-purple-600 hover:bg-purple-700'
+                  }`}
+                >
+                  {isAnalyzingStage2 ? 'Running...' : 'Run Stage 2 Analysis'}
+                </button>
+                {stage2Result && (
+                  <button
+                    onClick={handleViewStage2}
+                    className="px-4 py-2 rounded-md bg-green-600 hover:bg-green-700 text-white font-medium"
+                  >
+                    View Results
+                  </button>
+                )}
+              </div>
+            </div>
           </div>
           
-          {/* Analysis Progress */}
-          {isAnalyzing && (
-            <div className="mb-8">
+          {/* Stage 1 Progress */}
+          {isAnalyzingStage1 && (
+            <div className="mb-8 p-4 border rounded-md bg-blue-50">
+              <h3 className="text-lg font-medium mb-2">Stage 1: Detailed Event Analysis</h3>
               <div className="mb-2 flex justify-between">
-                <span className="text-sm font-medium text-gray-700">{analysisStage}</span>
-                <span className="text-sm font-medium text-gray-700">{Math.round(analysisProgress)}%</span>
+                <span className="text-sm font-medium text-gray-700">{stage1ProgressText}</span>
+                <span className="text-sm font-medium text-gray-700">{Math.round(stage1Progress)}%</span>
               </div>
               <LinearProgress 
                 variant="determinate" 
-                value={analysisProgress} 
+                value={stage1Progress} 
                 sx={{ 
                   height: 8, 
                   borderRadius: 4,
@@ -323,59 +455,86 @@ const AIAnalysisView: React.FC = () => {
                   }
                 }}
               />
-              <p className="mt-4 text-gray-600 text-center">
-                {analysisProgress < 30 ? 'Gathering raw session data...' : 
-                 analysisProgress < 60 ? 'Processing detailed events (Stage 1)...' : 
-                 'Generating AI analysis report...'}
-              </p>
             </div>
           )}
           
-          {/* Analysis Error */}
-          {analysisError && (
+          {/* Stage 1 Error */}
+          {stage1Error && (
             <div className="p-4 mb-6 text-red-700 bg-red-100 rounded-md">
-              <h3 className="font-semibold">Analysis Error</h3>
-              <p>{analysisError}</p>
+              <h3 className="font-semibold">Stage 1 Analysis Error</h3>
+              <p>{stage1Error}</p>
+            </div>
+          )}
+          
+          {/* Stage 2 Progress */}
+          {isAnalyzingStage2 && (
+            <div className="mb-8 p-4 border rounded-md bg-purple-50">
+              <h3 className="text-lg font-medium mb-2">Stage 2: Non-Transitional Behavior Analysis</h3>
+              <div className="mb-2 flex justify-between">
+                <span className="text-sm font-medium text-gray-700">{stage2ProgressText}</span>
+                <span className="text-sm font-medium text-gray-700">{Math.round(stage2Progress)}%</span>
+              </div>
+              <LinearProgress 
+                variant="determinate" 
+                value={stage2Progress} 
+                sx={{ 
+                  height: 8, 
+                  borderRadius: 4,
+                  backgroundColor: `${theme.palette.secondary.main}30`,
+                  '& .MuiLinearProgress-bar': {
+                    borderRadius: 4,
+                    backgroundColor: theme.palette.secondary.main
+                  }
+                }}
+              />
+            </div>
+          )}
+          
+          {/* Stage 2 Error */}
+          {stage2Error && (
+            <div className="p-4 mb-6 text-red-700 bg-red-100 rounded-md">
+              <h3 className="font-semibold">Stage 2 Analysis Error</h3>
+              <p>{stage2Error}</p>
             </div>
           )}
           
           {/* Analysis Results */}
-          {analysisResult && analysisResult.success && (
+          {currentResult && currentResult.success && (
             <div className="mt-8 mb-4">
               <Paper elevation={3} sx={{ p: 3, mt: 2 }}>
                 <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-4">
                   <Typography variant="h5" gutterBottom component="div" sx={{ color: theme.palette.primary.main, fontWeight: 'bold', mb: 0 }}>
-                    Multi-Model Analysis Report
+                    {activeReport === 'stage1' ? 'Stage 1: Detailed Event Analysis' : 'Stage 2: Non-Transitional Behavior Analysis'}
                   </Typography>
                   
-                  {analysisResult.analysisTime && (
+                  {currentResult.analysisTime && (
                     <Typography variant="body2" component="div" sx={{ color: 'text.secondary' }}>
-                      Generated in {analysisResult.analysisTime} seconds
+                      Generated in {currentResult.analysisTime} seconds
                     </Typography>
                   )}
                 </div>
                 
                 {/* Display models used for analysis */}
-                {analysisResult.modelsUsed && analysisResult.modelsUsed.length > 0 && (
+                {currentResult.modelsUsed && currentResult.modelsUsed.length > 0 && (
                   <div className="mb-4">
                     <Typography variant="subtitle2" component="div" sx={{ mb: 1, color: 'text.secondary' }}>
                       Models used in this analysis:
                     </Typography>
-                    {renderModelChips(analysisResult.modelsUsed)}
+                    {renderModelChips(currentResult.modelsUsed)}
                   </div>
                 )}
 
-                {/* MODIFIED: Display analysis stages completed - NEW SECTION */}
-                {analysisResult.analysisStagesCompleted && analysisResult.analysisStagesCompleted.length > 0 && (
+                {/* Display analysis stages completed */}
+                {currentResult.analysisStagesCompleted && currentResult.analysisStagesCompleted.length > 0 && (
                   <div className="mb-4">
                     <Typography variant="subtitle2" component="div" sx={{ mb: 1, color: 'text.secondary' }}>
                       Analysis Stages Run:
                     </Typography>
                     <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', gap: 1 }}>
-                      {analysisResult.analysisStagesCompleted.map((stage, index) => (
+                      {currentResult.analysisStagesCompleted.map((stage, index) => (
                         <Chip 
                           key={index} 
-                          label={stage.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())} // Format stage name (e.g., Stage1 DetailedEventProcessor)
+                          label={stage.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())} // Format stage name
                           variant="outlined" 
                           size="small"
                           sx={{ 
@@ -390,32 +549,9 @@ const AIAnalysisView: React.FC = () => {
                   </div>
                 )}
                 
-                {/* Tabs for different stages */}
-                <Tabs
-                  value={selectedTab}
-                  onChange={(e, newValue) => setSelectedTab(newValue)}
-                  variant="scrollable"
-                  scrollButtons="auto"
-                  sx={{ mb: 2, borderBottom: 1, borderColor: 'divider' }}
-                >
-                  <Tab label="Complete Analysis" value="synthesis" />
-                  {analysisResult.stageResults?.metrics && (
-                    <Tab label="Metrics & Navigation" value="metrics" />
-                  )}
-                  {analysisResult.stageResults?.behavioral && (
-                    <Tab label="Behavioral Analysis" value="behavioral" />
-                  )}
-                  {analysisResult.stageResults?.progression && (
-                    <Tab label="Progression Analysis" value="progression" />
-                  )}
-                  {analysisResult.stageResults?.temporal && (
-                    <Tab label="Temporal Analysis" value="temporal" />
-                  )}
-                </Tabs>
-                
                 <Divider sx={{ mb: 3 }} />
                 
-                {/* Content for selected tab */}
+                {/* Content for the report */}
                 <Box sx={{ mt: 2, typography: 'body1', 
                   '& h1': { fontSize: '2.2rem', fontWeight: 'bold', color: theme.palette.secondary.main, borderBottom: `2px solid ${theme.palette.primary.light}`, pb: 1, mb: 2 },
                   '& h2': { fontSize: '1.8rem', fontWeight: 'bold', color: theme.palette.secondary.dark, mt: 3, mb: 1.5, borderBottom: `1px solid ${theme.palette.grey[400]}`, pb: 0.5 },
@@ -443,42 +579,19 @@ const AIAnalysisView: React.FC = () => {
                       rehypePlugins={[rehypeRaw]}
                       remarkPlugins={[remarkGfm]}
                     >
-                      {selectedTab === 'synthesis' ? analysisResult.report : 
-                       selectedTab === 'metrics' && analysisResult.stageResults?.metrics ? analysisResult.stageResults.metrics :
-                       selectedTab === 'behavioral' && analysisResult.stageResults?.behavioral ? analysisResult.stageResults.behavioral :
-                       selectedTab === 'progression' && analysisResult.stageResults?.progression ? analysisResult.stageResults.progression :
-                       selectedTab === 'temporal' && analysisResult.stageResults?.temporal ? analysisResult.stageResults.temporal :
-                       "No data available for this analysis stage."}
+                      {currentResult.report || "No analysis data available."}
                     </ReactMarkdown>
                   </div>
                 </Box>
               </Paper>
-              
-              {/* Display metadata if available */}
-              {analysisResult._meta?.stageResultSizes && (
-                <div className="mt-4 text-xs text-gray-500">
-                  <details>
-                    <summary className="cursor-pointer font-medium">Analysis Stage Details</summary>
-                    <div className="mt-2 pl-4">
-                      <p>Stage 1 (Metrics): {analysisResult._meta.stageResultSizes.stage1 || 0} characters</p>
-                      <p>Stage 2 (Behavioral): {analysisResult._meta.stageResultSizes.stage2 || 0} characters</p>
-                      {analysisResult._meta.stageResultSizes.stage3 && analysisResult._meta.stageResultSizes.stage3 > 0 && 
-                        <p>Stage 3 (Form): {analysisResult._meta.stageResultSizes.stage3} characters</p>}
-                      {analysisResult._meta.stageResultSizes.stage4 && analysisResult._meta.stageResultSizes.stage4 > 0 && 
-                        <p>Stage 4 (Temporal): {analysisResult._meta.stageResultSizes.stage4} characters</p>}
-                      <p>Final Report: {analysisResult._meta.stageResultSizes.final || 0} characters</p>
-                    </div>
-                  </details>
-                </div>
-              )}
             </div>
           )}
           
           {/* No Analysis Results */}
-          {analysisResult && !analysisResult.success && (
+          {currentResult && !currentResult.success && (
             <div className="p-4 mb-6 text-amber-700 bg-amber-100 rounded-md">
               <h3 className="font-semibold">Analysis Unavailable</h3>
-              <p>{analysisResult.message || "No analysis could be performed. Please try again."}</p>
+              <p>{currentResult.message || "No analysis could be performed. Please try again."}</p>
             </div>
           )}
         </div>

@@ -11,8 +11,8 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const cors = require('cors');
 
-// Import controllers or routes
-const analysisController = require('./controllers/analysisController');
+// Import routes
+const analysisRoutes = require('./routes/analysisRoutes');
 
 // Initialize Express app
 const app = express();
@@ -27,8 +27,8 @@ app.get('/health', (req, res) => {
   res.status(200).json({ status: 'OK', message: 'AI Analysis Server is running' });
 });
 
-// Analysis routes
-app.post('/api/analysis/user/:userId', analysisController.analyzeUserSessions);
+// Mount analysis routes
+app.use('/api/analysis', analysisRoutes);
 
 // Test route for backend connectivity
 app.get('/test-connectivity', async (req, res) => {

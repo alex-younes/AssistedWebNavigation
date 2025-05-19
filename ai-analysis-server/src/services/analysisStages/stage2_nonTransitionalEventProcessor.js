@@ -37,10 +37,8 @@ async function processSessionForNonTransitionalEvents(session) {
         
         console.log(`[Stage 2] Processing non-transitional events for session: ${session.id || session.sessionId}`);
         
-        // Clone the session to avoid modifying the original
         const enhancedSession = { ...session };
         
-        // Initialize nonTransitionalAnalysis if it doesn't exist
         if (!enhancedSession.nonTransitionalAnalysis) {
             enhancedSession.nonTransitionalAnalysis = {
                 summary: {},
@@ -52,39 +50,69 @@ async function processSessionForNonTransitionalEvents(session) {
             };
         }
         
-        // Get all non-transitional event batches for this session
-        const nonTransitionalEvents = session.nonTransitionalEvents || [];
+        const aggregatedEventBatches = [];
+        if (session.states && Array.isArray(session.states)) {
+            session.states.forEach(state => {
+                // Assuming state.nonTransitionalEvents is already the actual events object 
+                // (e.g., { mousemove: ..., hover:... }) or an empty object {},
+                // as prepared by prepare-session-for-analysis.js or fetchSessionDetails.
+                if (state.nonTransitionalEvents && typeof state.nonTransitionalEvents === 'object' && Object.keys(state.nonTransitionalEvents).length > 0) {
+                    aggregatedEventBatches.push({ events: state.nonTransitionalEvents });
+                }
+            });
+        }
         
-        if (nonTransitionalEvents.length === 0) {
-            console.log(`[Stage 2] No non-transitional events found for session: ${session.id || session.sessionId}`);
+        if (aggregatedEventBatches.length === 0) {
+            console.log(`[Stage 2] No non-transitional event batches found for session: ${session.id || session.sessionId}`);
             enhancedSession.nonTransitionalAnalysis.summary = {
-                eventCount: 0,
+                totalEvents: 0,
                 hasData: false,
-                message: "No non-transitional events recorded for this session"
+                pointerEvents: 0,
+                keyboardEvents: 0,
+                idleEvents: 0,
+                clickEvents: 0,
+                scrollEvents: 0,
+                totalMouseDistance: 0,
+                hoverCount: 0,
+                oscillatingHoverCount: 0,
+                deadClickCount: 0,
+                repeatedClickCount: 0,
+                totalKeyPresses: 0,
+                escapeBackspaceCount: 0,
+                totalInactiveTime: 0,
+                fieldIdleEvents: 0,
+                totalScrollDistance: 0,
+                scrollEventCount: 0,
+                message: "No non-transitional events found in any states for this session."
             };
+            // Also ensure other analysis parts are empty objects if no data
+            enhancedSession.nonTransitionalAnalysis.pointerAnalysis = {};
+            enhancedSession.nonTransitionalAnalysis.keyboardAnalysis = {};
+            enhancedSession.nonTransitionalAnalysis.idleAnalysis = {};
+            enhancedSession.nonTransitionalAnalysis.clickAnalysis = {};
+            enhancedSession.nonTransitionalAnalysis.scrollAnalysis = {};
+            enhancedSession.nonTransitionalAnalysis.raw = { eventCount: 0, sampleBatch: null };
             return enhancedSession;
         }
         
-        console.log(`[Stage 2] Found ${nonTransitionalEvents.length} non-transitional event batches`);
+        console.log(`[Stage 2] Found ${aggregatedEventBatches.length} non-transitional event batches to process from states.`);
         
-        // Process different types of non-transitional events
-        const pointerAnalysis = analyzePointerBehavior(nonTransitionalEvents);
-        const keyboardAnalysis = analyzeKeyboardBehavior(nonTransitionalEvents);
-        const idleAnalysis = analyzeIdleBehavior(nonTransitionalEvents);
-        const clickAnalysis = analyzeClickBehavior(nonTransitionalEvents);
-        const scrollAnalysis = analyzeScrollBehavior(nonTransitionalEvents);
+        const pointerAnalysis = analyzePointerBehavior(aggregatedEventBatches);
+        const keyboardAnalysis = analyzeKeyboardBehavior(aggregatedEventBatches);
+        const idleAnalysis = analyzeIdleBehavior(aggregatedEventBatches);
+        const clickAnalysis = analyzeClickBehavior(aggregatedEventBatches);
+        const scrollAnalysis = analyzeScrollBehavior(aggregatedEventBatches);
         
-        // Store the analyses in the session object
         enhancedSession.nonTransitionalAnalysis = {
-            summary: generateSummary(nonTransitionalEvents, pointerAnalysis, keyboardAnalysis, idleAnalysis, clickAnalysis, scrollAnalysis),
+            summary: generateSummary(aggregatedEventBatches, pointerAnalysis, keyboardAnalysis, idleAnalysis, clickAnalysis, scrollAnalysis),
             pointerAnalysis,
             keyboardAnalysis,
             idleAnalysis,
             clickAnalysis,
             scrollAnalysis,
             raw: {
-                eventCount: nonTransitionalEvents.length,
-                sampleBatch: nonTransitionalEvents.length > 0 ? nonTransitionalEvents[0] : null
+                eventCount: aggregatedEventBatches.length,
+                sampleBatch: aggregatedEventBatches.length > 0 ? aggregatedEventBatches[0] : null
             }
         };
         
@@ -94,7 +122,15 @@ async function processSessionForNonTransitionalEvents(session) {
     } catch (error) {
         console.error(`[Stage 2] Error processing non-transitional events: ${error.message}`);
         console.error(error);
-        return session; // Return original session on error
+        // Return original session but with an error flag in summary
+        const erroredSession = { ...session };
+        if (!erroredSession.nonTransitionalAnalysis) erroredSession.nonTransitionalAnalysis = {};
+        erroredSession.nonTransitionalAnalysis.summary = {
+            totalEvents: 0, hasData: false, error: error.message, pointerEvents: 0, keyboardEvents: 0, idleEvents: 0, clickEvents: 0, scrollEvents: 0,
+            totalMouseDistance: 0, hoverCount: 0, oscillatingHoverCount: 0, deadClickCount: 0, repeatedClickCount: 0,
+            totalKeyPresses: 0, escapeBackspaceCount: 0, totalInactiveTime: 0, fieldIdleEvents: 0, totalScrollDistance: 0, scrollEventCount: 0
+        };
+        return erroredSession; 
     }
 }
 
@@ -859,7 +895,7 @@ function analyzeScrollBehavior(events) {
 
 /**
  * Generates a summary object from all analyses
- * @param {Object} events - Array of non-transitional event batches
+ * @param {Object} events - Array of non-transitional event batches, each batch is { events: { actual_event_data } }
  * @param {Object} pointerAnalysis - Analysis of pointer behavior
  * @param {Object} keyboardAnalysis - Analysis of keyboard behavior
  * @param {Object} idleAnalysis - Analysis of idle behavior
@@ -868,7 +904,78 @@ function analyzeScrollBehavior(events) {
  * @returns {Object} Summary object
  */
 function generateSummary(events, pointerAnalysis, keyboardAnalysis, idleAnalysis, clickAnalysis, scrollAnalysis) {
-    // Implementation of generateSummary function
+    try {
+        if (!events || events.length === 0) {
+            return {
+                totalEvents: 0,
+                hasData: false,
+                pointerEvents: 0,
+                keyboardEvents: 0,
+                idleEvents: 0,
+                clickEvents: 0,
+                scrollEvents: 0,
+                totalMouseDistance: 0,
+                hoverCount: 0,
+                oscillatingHoverCount: 0,
+                deadClickCount: 0,
+                repeatedClickCount: 0,
+                totalKeyPresses: 0,
+                escapeBackspaceCount: 0,
+                totalInactiveTime: 0,
+                fieldIdleEvents: 0,
+                totalScrollDistance: 0,
+                scrollEventCount: 0,
+                message: "No event batches processed for summary generation."
+            };
+        }
+
+        let pointerEventsCount = 0;
+        let keyboardEventsCount = 0;
+        let idleEventsCount = 0;
+        let clickEventsCount = 0;
+        let scrollEventsCount = 0;
+        
+        events.forEach(batch => {
+            const batchEvents = batch.events || {};
+            if (batchEvents.mousemove || batchEvents.hover || batchEvents.oscillatingHovers) pointerEventsCount++;
+            if (batchEvents.allKeyPresses || batchEvents.keyTypingCadence || batchEvents.escapeBackspace || batchEvents.repeatedInputs) keyboardEventsCount++;
+            if (batchEvents.inactivity || batchEvents.inputFieldIdle) idleEventsCount++;
+            if (batchEvents.deadClicks || batchEvents.repeatedClicks || batchEvents.dropdownToggle) clickEventsCount++;
+            if (batchEvents.scrollEvents) scrollEventsCount++;
+        });
+                
+        const summary = {
+            totalEvents: events.length, // Number of batches that had *some* events
+            hasData: events.length > 0,
+            pointerEvents: pointerEventsCount,
+            keyboardEvents: keyboardEventsCount,
+            idleEvents: idleEventsCount,
+            clickEvents: clickEventsCount, 
+            scrollEvents: scrollEventsCount,
+            
+            totalMouseDistance: pointerAnalysis?.mousemoveSummary?.totalDistance || 0,
+            hoverCount: pointerAnalysis?.hoverSummary?.totalHovers || 0,
+            oscillatingHoverCount: pointerAnalysis?.oscillatingSummary?.totalOscillations || 0,
+            deadClickCount: clickAnalysis?.deadClickSummary?.totalDeadClicks || 0,
+            repeatedClickCount: clickAnalysis?.repeatedClickSummary?.totalRepeatedClickBursts || 0,
+            totalKeyPresses: keyboardAnalysis?.keyPressSummary?.totalKeyPresses || 0,
+            escapeBackspaceCount: (keyboardAnalysis?.escapeBackspaceSummary?.totalEscapes || 0) + (keyboardAnalysis?.escapeBackspaceSummary?.totalBackspaces || 0),
+            totalInactiveTime: idleAnalysis?.inactivitySummary?.totalInactivityTime || 0,
+            fieldIdleEvents: idleAnalysis?.fieldIdleSummary?.totalFieldIdleEvents || 0,
+            totalScrollDistance: scrollAnalysis?.scrollSummary?.totalScrollDistance || 0,
+            scrollEventCount: scrollAnalysis?.scrollSummary?.totalScrollEvents || 0
+        };
+        
+        return summary;
+    } catch (error) {
+        console.error(`[Stage 2] Error in generateSummary: ${error.message}`);
+        return {
+            totalEvents: 0, hasData: false, error: `Summary generation error: ${error.message}`,
+            pointerEvents: 0, keyboardEvents: 0, idleEvents: 0, clickEvents: 0, scrollEvents: 0,
+            totalMouseDistance: 0, hoverCount: 0, oscillatingHoverCount: 0, deadClickCount: 0, repeatedClickCount: 0,
+            totalKeyPresses: 0, escapeBackspaceCount: 0, totalInactiveTime: 0, fieldIdleEvents: 0, totalScrollDistance: 0, scrollEventCount: 0
+        };
+    }
 }
 
 // Export the main processing function and any utilities that might be useful elsewhere

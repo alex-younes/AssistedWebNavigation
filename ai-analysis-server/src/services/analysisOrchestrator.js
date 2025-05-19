@@ -20,7 +20,7 @@ const groq = (process.env.USE_GEMINI === 'true' || !process.env.GROQ_API_KEY) ? 
 
 // Google Gemini API settings
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
+const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
 
 // Determine which AI service to use
 const USE_GEMINI = process.env.USE_GEMINI === 'true' || !!GEMINI_API_KEY || !process.env.GROQ_API_KEY;
@@ -28,7 +28,7 @@ const USE_GEMINI = process.env.USE_GEMINI === 'true' || !!GEMINI_API_KEY || !pro
 // Basic model selection
 function selectModel() {
   if (USE_GEMINI) {
-    return process.env.DEFAULT_MODEL || 'gemini-1.5-flash';
+    return process.env.DEFAULT_MODEL || 'gemini-2.0-flash';
   }
   return process.env.DEFAULT_MODEL || 'llama-3.1-8b-instant';
 }
@@ -245,6 +245,94 @@ Sessions Analyzed: ${sessionData.sessionCount}
             prompt += `| ${row.join(' | ')} |\n`;
           });
         }
+        
+        // NEW: Add Form Behavior Analysis Table
+        if (analysis.htmlTables.formBehaviors) {
+          const table = analysis.htmlTables.formBehaviors;
+          prompt += `\n#### ${table.title}\n`;
+          prompt += `| ${table.headers.join(' | ')} |\n`;
+          prompt += `| ${table.headers.map(() => '---').join(' | ')} |\n`;
+          table.rows.forEach(row => {
+            prompt += `| ${row.join(' | ')} |\n`;
+          });
+        }
+        
+        // NEW: Add Form Sequence Table if available
+        if (analysis.htmlTables.formSequence) {
+          const table = analysis.htmlTables.formSequence;
+          prompt += `\n#### ${table.title}\n`;
+          prompt += `| ${table.headers.join(' | ')} |\n`;
+          prompt += `| ${table.headers.map(() => '---').join(' | ')} |\n`;
+          table.rows.forEach(row => {
+            prompt += `| ${row.join(' | ')} |\n`;
+          });
+        }
+        
+        // NEW: Add Network Performance Table
+        if (analysis.htmlTables.networkPerformance) {
+          const table = analysis.htmlTables.networkPerformance;
+          prompt += `\n#### ${table.title}\n`;
+          prompt += `| ${table.headers.join(' | ')} |\n`;
+          prompt += `| ${table.headers.map(() => '---').join(' | ')} |\n`;
+          table.rows.forEach(row => {
+            prompt += `| ${row.join(' | ')} |\n`;
+          });
+        }
+        
+        // NEW: Add DOM Fingerprint Table
+        if (analysis.htmlTables.domFingerprints) {
+          const table = analysis.htmlTables.domFingerprints;
+          prompt += `\n#### ${table.title}\n`;
+          prompt += `| ${table.headers.join(' | ')} |\n`;
+          prompt += `| ${table.headers.map(() => '---').join(' | ')} |\n`;
+          table.rows.forEach(row => {
+            prompt += `| ${row.join(' | ')} |\n`;
+          });
+        }
+        
+        // NEW: Add State Flag Analysis Table
+        if (analysis.htmlTables.stateFlags) {
+          const table = analysis.htmlTables.stateFlags;
+          prompt += `\n#### ${table.title}\n`;
+          prompt += `| ${table.headers.join(' | ')} |\n`;
+          prompt += `| ${table.headers.map(() => '---').join(' | ')} |\n`;
+          table.rows.forEach(row => {
+            prompt += `| ${row.join(' | ')} |\n`;
+          });
+        }
+        
+        // NEW: Add Loading Sequences Table
+        if (analysis.htmlTables.loadingSequences && analysis.htmlTables.loadingSequences.rows && analysis.htmlTables.loadingSequences.rows.length > 0) {
+          const table = analysis.htmlTables.loadingSequences;
+          prompt += `\n#### ${table.title}\n`;
+          prompt += `| ${table.headers.join(' | ')} |\n`;
+          prompt += `| ${table.headers.map(() => '---').join(' | ')} |\n`;
+          table.rows.forEach(row => {
+            prompt += `| ${row.join(' | ')} |\n`;
+          });
+        }
+        
+        // NEW: Add Form Transition Analysis Table
+        if (analysis.htmlTables.formTransitions && analysis.htmlTables.formTransitions.rows && analysis.htmlTables.formTransitions.rows.length > 0) {
+          const table = analysis.htmlTables.formTransitions;
+          prompt += `\n#### ${table.title}\n`;
+          prompt += `| ${table.headers.join(' | ')} |\n`;
+          prompt += `| ${table.headers.map(() => '---').join(' | ')} |\n`;
+          table.rows.forEach(row => {
+            prompt += `| ${row.join(' | ')} |\n`;
+          });
+        }
+        
+        // NEW: Add Form Interaction Timing Table
+        if (analysis.htmlTables.formTimings && analysis.htmlTables.formTimings.rows && analysis.htmlTables.formTimings.rows.length > 0) {
+          const table = analysis.htmlTables.formTimings;
+          prompt += `\n#### ${table.title}\n`;
+          prompt += `| ${table.headers.join(' | ')} |\n`;
+          prompt += `| ${table.headers.map(() => '---').join(' | ')} |\n`;
+          table.rows.forEach(row => {
+            prompt += `| ${row.join(' | ')} |\n`;
+          });
+        }
       }
     }
     
@@ -297,11 +385,44 @@ Based on the data provided above, create a comprehensive analysis report that:
    - How many states did it take them to accomplish tasks?
    - What was their primary navigation flow?
 
-4. Provides concrete, data-backed observations about user behavior:
+4. Analyzes form interaction behavior:
+   - How did users interact with form fields?
+   - Were there fields that required multiple corrections?
+   - What was the sequence of form field completion?
+   - Were there delays between field interactions?
+   - IMPORTANT: Use the form transitions and form timings tables to identify correction patterns and struggles
+
+5. Considers network performance impact:
+   - Did network conditions correlate with user behavior?
+   - Were there performance issues that affected interaction timing?
+   - How did page loading times compare across different states?
+
+6. Examines DOM state changes:
+   - How did the page state change during user interactions?
+   - Were there recurring patterns in DOM fingerprints?
+   - What transitions happened within the same URL?
+
+7. NEW: Analyzes state flag transitions for better state change understanding:
+   - What percentage of states were loading vs. stable states?
+   - How many loading sequences occurred and what was their duration?
+   - Did navigation state changes correlate with user activity?
+   - What is the relationship between DOM changes and loading states?
+
+8. NEW: Detects form field transition patterns:
+   - How did users correct their inputs?
+   - What was the timing between field interactions? 
+   - Which fields took the longest to complete?
+   - Were there fields where users struggled or made repeated changes?
+   - Can you identify "thinking time" between key interactions?
+
+9. Provides concrete, data-backed observations about user behavior:
    - Example: "The user spent an average of 45 seconds on the homepage before navigating to other pages via user interactions."
    - Example: "The user showed a navigation loop pattern, returning to the homepage 5 times during the session."
+   - Example: "The user made 3 corrections to the email field, suggesting possible confusion or validation issues."
+   - Example: "The loading sequences averaged 2.5 seconds, with network conditions impacting page transitions."
+   - Example: "Form completion showed a pattern of quick initial entries followed by multiple corrections on validation fields."
 
-Your report should read like a professional data analyst's findings about user behavior - factual, detailed, and based entirely on the data provided.
+Your report should read like a professional data analyst's findings about user behavior - factual, detailed, and based entirely on the data provided. Focus especially on the transitions between states and what they reveal about user patterns.
 `;
 
   return prompt;

@@ -35,4 +35,119 @@
     display: block;
     overflow-x: auto;
   }
+}
+
+/* Enhanced table formatting */
+.markdown-body table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 20px 0;
+  font-size: 0.9em;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 0 20px rgba(0, 0, 0, 0.1);
+}
+
+.markdown-body table thead tr {
+  background-color: #3f51b5; /* Primary color */
+  color: white;
+  text-align: left;
+  font-weight: bold;
+}
+
+.markdown-body table th,
+.markdown-body table td {
+  padding: 12px 15px;
+  border: 1px solid #ddd;
+}
+
+.markdown-body table tbody tr {
+  border-bottom: 1px solid #dddddd;
+}
+
+.markdown-body table tbody tr:nth-of-type(even) {
+  background-color: #f3f4f6;
+}
+
+.markdown-body table tbody tr:last-of-type {
+  border-bottom: 2px solid #3f51b5;
+}
+
+/* Headings */
+.markdown-body h1 {
+  color: #2c3e50;
+  font-size: 2rem;
+  margin-top: 2rem;
+  margin-bottom: 1rem;
+  font-weight: 700;
+  border-bottom: 2px solid #3f51b5;
+  padding-bottom: 0.5rem;
+}
+
+.markdown-body h2 {
+  color: #3f51b5;
+  font-size: 1.5rem;
+  margin-top: 1.5rem;
+  margin-bottom: 0.75rem;
+  font-weight: 600;
+}
+
+.markdown-body h3 {
+  color: #546e7a;
+  font-size: 1.25rem;
+  margin-top: 1.25rem;
+  margin-bottom: 0.75rem;
+  font-weight: 600;
+}
+
+/* Code blocks */
+.markdown-body pre {
+  background-color: #f6f8fa;
+  border-radius: 6px;
+  padding: 16px;
+  overflow: auto;
+}
+
+.markdown-body code {
+  background-color: #f6f8fa;
+  padding: 0.2em 0.4em;
+  margin: 0;
+  font-size: 85%;
+  border-radius: 3px;
+}
+
+/* Lists */
+.markdown-body ul, 
+.markdown-body ol {
+  padding-left: 2em;
+  margin-bottom: 1em;
+}
+
+.markdown-body li {
+  margin-bottom: 0.5em;
+}
+
+/* Blockquotes */
+.markdown-body blockquote {
+  border-left: 4px solid #3f51b5;
+  padding-left: 1em;
+  margin-left: 0;
+  color: #666;
+  font-style: italic;
+}
+
+/* Links */
+.markdown-body a {
+  color: #3f51b5;
+  text-decoration: none;
+}
+
+.markdown-body a:hover {
+  text-decoration: underline;
+}
+
+/* General text */
+.markdown-body p {
+  margin-bottom: 1em;
+  line-height: 1.6;
 } 

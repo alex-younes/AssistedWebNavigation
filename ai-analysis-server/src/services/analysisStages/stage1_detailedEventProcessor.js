@@ -377,23 +377,46 @@ function generateHtmlTableStructures(analysisData) {
                 const stableStates = statesForUrl.length - loadingStates;
                 const avgTime = analysisData.transitionPatterns.averageTimePerUrl[url] || 0;
                 
+                // Get actual navigation counts for this URL from the transitions data
+                let navigationVisitsCount = 0;
+                
+                // Count URL transitions where this URL is the destination
+                if (analysisData.transitionPatterns.urlTransitions) {
+                    // Count all transitions to this URL, regardless of type
+                    // Since any URL change represents a meaningful navigation for the user
+                    navigationVisitsCount = analysisData.transitionPatterns.urlTransitions
+                        .filter(t => t.toUrl === url)
+                        .length;
+                }
+                
+                // If this is the first URL and we have an initial state, count it as a visit too
+                const isFirstUrl = statesForUrl.some(s => s.stateNumber === 1);
+                
+                if (isFirstUrl) {
+                    navigationVisitsCount++;
+                }
+                
+                // Ensure at least 1 visit per URL
+                const trueVisitsCount = Math.max(1, navigationVisitsCount);
+                
                 return {
                     url,
-                    count,
+                    stateCount: count,
+                    navigationVisits: trueVisitsCount,
                     totalStates: statesForUrl.length,
                     loadingStates,
                     stableStates,
                     avgTime
                 };
             })
-            .sort((a, b) => b.count - a.count);
+            .sort((a, b) => b.stateCount - a.stateCount);
         
         tables.urlVisitSummary = {
             title: "URL Visit & State Summary",
-            headers: ["URL", "Visit Count", "Total States", "Loading States", "Stable States", "Avg Time (sec)"],
+            headers: ["URL", "Navigation Visits", "Total States", "Loading States", "Stable States", "Avg Time (sec)"],
             rows: urlData.map(data => [
                 data.url,
-                data.count,
+                data.navigationVisits,
                 data.totalStates,
                 data.loadingStates,
                 data.stableStates,
@@ -451,6 +474,93 @@ function generateHtmlTableStructures(analysisData) {
                 ["Final", flags.isFinalState.length, flags.isFinalState.length > 0 ? 
                     flags.isFinalState.slice(0, 5).join(', ') + (flags.isFinalState.length > 5 ? '...' : '') : 'None']
             ]
+        };
+    }
+
+    // Dedicated State Flags Analysis Table (NEW)
+    if (analysisData.stateFlags?.summary) {
+        tables.stateFlags = {
+            title: "State Flags Analysis",
+            headers: ["Flag Type", "Count", "% of States", "Examples"],
+            rows: [
+                ["Navigation", analysisData.stateFlags.summary.navigationCount, 
+                    ((analysisData.stateFlags.summary.navigationCount / analysisData.transitionPatterns.summary.totalStates) * 100).toFixed(1) + '%',
+                    analysisData.stateFlags.statesByFlags.isNavigation.length > 0 ? 
+                        `States ${analysisData.stateFlags.statesByFlags.isNavigation.slice(0, 3).join(', ')}` : 'None'],
+                ["Reload", analysisData.stateFlags.summary.reloadCount,
+                    ((analysisData.stateFlags.summary.reloadCount / analysisData.transitionPatterns.summary.totalStates) * 100).toFixed(1) + '%',
+                    analysisData.stateFlags.statesByFlags.isReload.length > 0 ? 
+                        `States ${analysisData.stateFlags.statesByFlags.isReload.slice(0, 3).join(', ')}` : 'None'],
+                ["Initial", analysisData.stateFlags.summary.initialCount,
+                    ((analysisData.stateFlags.summary.initialCount / analysisData.transitionPatterns.summary.totalStates) * 100).toFixed(1) + '%',
+                    analysisData.stateFlags.statesByFlags.isInitial.length > 0 ? 
+                        `States ${analysisData.stateFlags.statesByFlags.isInitial.slice(0, 3).join(', ')}` : 'None'],
+                ["Loading", analysisData.stateFlags.summary.loadingStateCount,
+                    ((analysisData.stateFlags.summary.loadingStateCount / analysisData.transitionPatterns.summary.totalStates) * 100).toFixed(1) + '%',
+                    analysisData.stateFlags.statesByFlags.isPartOfLoading.length > 0 ? 
+                        `States ${analysisData.stateFlags.statesByFlags.isPartOfLoading.slice(0, 3).join(', ')}` : 'None'],
+                ["Final", analysisData.stateFlags.summary.finalStateCount,
+                    ((analysisData.stateFlags.summary.finalStateCount / analysisData.transitionPatterns.summary.totalStates) * 100).toFixed(1) + '%',
+                    analysisData.stateFlags.statesByFlags.isFinalState.length > 0 ? 
+                        `States ${analysisData.stateFlags.statesByFlags.isFinalState.slice(0, 3).join(', ')}` : 'None']
+            ]
+        };
+    }
+
+    // Loading Sequences Table (NEW)
+    if (analysisData.stateFlags?.loadingSequences && analysisData.stateFlags.loadingSequences.length > 0) {
+        tables.loadingSequences = {
+            title: "Loading State Sequences",
+            headers: ["Sequence", "Start State", "End State", "Duration (ms)", "States Count"],
+            rows: analysisData.stateFlags.loadingSequences.map((seq, idx) => [
+                `Sequence ${idx + 1}`,
+                seq.startStateId,
+                seq.endStateId,
+                seq.duration,
+                seq.states.length
+            ])
+        };
+    }
+
+    // Comprehensive State Transitions Table (NEW) - combines URL changes with state flags
+    if (analysisData.transitionPatterns?.urlTransitions && analysisData.transitionPatterns?.domTransitions) {
+        const allTransitions = [
+            ...analysisData.transitionPatterns.urlTransitions.map(t => ({
+                ...t,
+                isUrlChange: true,
+                isDomChange: true
+            })),
+            ...analysisData.transitionPatterns.domTransitions.map(t => ({
+                ...t,
+                fromUrl: t.url,
+                toUrl: t.url,
+                isUrlChange: false,
+                isDomChange: true
+            }))
+        ].sort((a, b) => {
+            // Sort by state number
+            return a.fromStateNumber - b.fromStateNumber;
+        });
+
+        tables.stateTransitions = {
+            title: "State Transitions with Flags",
+            headers: ["From URL", "To URL", "URL Change", "DOM Change", "Time (sec)", "Navigation", "Loading"],
+            rows: allTransitions.map(transition => {
+                // Get state information to check flags
+                const toStateIndex = transition.toStateNumber - 1;
+                const isNavigation = analysisData.stateFlags?.statesByFlags?.isNavigation?.includes(toStateIndex) || false;
+                const isLoading = analysisData.stateFlags?.statesByFlags?.isPartOfLoading?.includes(toStateIndex) || false;
+                
+                return [
+                    transition.fromUrl,
+                    transition.toUrl,
+                    transition.isUrlChange ? "Yes" : "No",
+                    transition.isDomChange ? "Yes" : "No",
+                    (transition.timeBetweenMs / 1000).toFixed(2),
+                    isNavigation ? "Yes" : "No",
+                    isLoading ? "Yes" : "No"
+                ];
+            })
         };
     }
 
@@ -563,60 +673,6 @@ function generateHtmlTableStructures(analysisData) {
         };
     }
     
-    // NEW: State Flag Analysis Table
-    if (analysisData.stateFlags?.summary) {
-        tables.stateFlags = {
-            title: "State Flag Analysis",
-            headers: ["Flag Type", "Count", "Percent of States"],
-            rows: [
-                ["Navigation", analysisData.stateFlags.summary.navigationCount, 
-                 ((analysisData.stateFlags.summary.navigationCount / Math.max(1, analysisData.stateFlags.summary.navigationCount + 
-                   analysisData.stateFlags.summary.reloadCount + 
-                   analysisData.stateFlags.summary.initialCount + 
-                   analysisData.stateFlags.summary.loadingStateCount + 
-                   analysisData.stateFlags.summary.finalStateCount)) * 100).toFixed(1) + '%'],
-                ["Reload", analysisData.stateFlags.summary.reloadCount, 
-                 ((analysisData.stateFlags.summary.reloadCount / Math.max(1, analysisData.stateFlags.summary.navigationCount + 
-                   analysisData.stateFlags.summary.reloadCount + 
-                   analysisData.stateFlags.summary.initialCount + 
-                   analysisData.stateFlags.summary.loadingStateCount + 
-                   analysisData.stateFlags.summary.finalStateCount)) * 100).toFixed(1) + '%'],
-                ["Initial", analysisData.stateFlags.summary.initialCount, 
-                 ((analysisData.stateFlags.summary.initialCount / Math.max(1, analysisData.stateFlags.summary.navigationCount + 
-                   analysisData.stateFlags.summary.reloadCount + 
-                   analysisData.stateFlags.summary.initialCount + 
-                   analysisData.stateFlags.summary.loadingStateCount + 
-                   analysisData.stateFlags.summary.finalStateCount)) * 100).toFixed(1) + '%'],
-                ["Loading", analysisData.stateFlags.summary.loadingStateCount, 
-                 ((analysisData.stateFlags.summary.loadingStateCount / Math.max(1, analysisData.stateFlags.summary.navigationCount + 
-                   analysisData.stateFlags.summary.reloadCount + 
-                   analysisData.stateFlags.summary.initialCount + 
-                   analysisData.stateFlags.summary.loadingStateCount + 
-                   analysisData.stateFlags.summary.finalStateCount)) * 100).toFixed(1) + '%'],
-                ["Final", analysisData.stateFlags.summary.finalStateCount, 
-                 ((analysisData.stateFlags.summary.finalStateCount / Math.max(1, analysisData.stateFlags.summary.navigationCount + 
-                   analysisData.stateFlags.summary.reloadCount + 
-                   analysisData.stateFlags.summary.initialCount + 
-                   analysisData.stateFlags.summary.loadingStateCount + 
-                   analysisData.stateFlags.summary.finalStateCount)) * 100).toFixed(1) + '%']
-            ]
-        };
-    }
-    
-    // NEW: Loading Sequence Table
-    if (analysisData.stateFlags?.loadingSequences && analysisData.stateFlags.loadingSequences.length > 0) {
-        tables.loadingSequences = {
-            title: "Page Loading Sequences",
-            headers: ["Start State", "End State", "States Count", "Duration (sec)"],
-            rows: analysisData.stateFlags.loadingSequences.map(sequence => [
-                sequence.startStateId,
-                sequence.endStateId,
-                sequence.states.length,
-                (sequence.duration / 1000).toFixed(2)
-            ])
-        };
-    }
-    
     // NEW: Form Interaction Transitions Table
     if (analysisData.formTransitions?.fieldTransitions) {
         const fieldData = Object.entries(analysisData.formTransitions.fieldTransitions)
@@ -663,6 +719,60 @@ function generateHtmlTableStructures(analysisData) {
                 (data.maxMs / 1000).toFixed(2),
                 (data.totalTimeMs / 1000).toFixed(2),
                 data.transitions
+            ])
+        };
+    }
+  
+    // NEW: URL Flow Diagram Data for better visualization
+    if (analysisData.transitionPatterns?.urlTransitions && analysisData.transitionPatterns.urlTransitions.length > 0) {
+        // Create a directed graph structure of URL navigation
+        const urlGraph = {};
+        const uniqueUrls = new Set();
+        
+        // Build the graph
+        analysisData.transitionPatterns.urlTransitions.forEach(transition => {
+            const fromUrl = transition.fromUrl;
+            const toUrl = transition.toUrl;
+            
+            uniqueUrls.add(fromUrl);
+            uniqueUrls.add(toUrl);
+            
+            if (!urlGraph[fromUrl]) {
+                urlGraph[fromUrl] = {};
+            }
+            
+            if (!urlGraph[fromUrl][toUrl]) {
+                urlGraph[fromUrl][toUrl] = 0;
+            }
+            
+            urlGraph[fromUrl][toUrl]++;
+        });
+        
+        // Convert to a tabular format for the report
+        const flowData = [];
+        Object.keys(urlGraph).forEach(fromUrl => {
+            Object.keys(urlGraph[fromUrl]).forEach(toUrl => {
+                const count = urlGraph[fromUrl][toUrl];
+                flowData.push({
+                    fromUrl,
+                    toUrl,
+                    count
+                });
+            });
+        });
+        
+        // Sort by frequency
+        flowData.sort((a, b) => b.count - a.count);
+        
+        // Create the table
+        tables.urlFlowDiagram = {
+            title: "URL Navigation Flow Diagram Data",
+            headers: ["From URL", "To URL", "Count", "Flow Direction"],
+            rows: flowData.map(data => [
+                data.fromUrl,
+                data.toUrl,
+                data.count,
+                `${data.fromUrl} → ${data.toUrl}`
             ])
         };
     }

@@ -88,6 +88,27 @@ async function executeGeminiRequest(prompt, model) {
       
       console.log(`[Gemini] Truncated prompt length: ${truncatedPrompt.length} characters`);
     }
+    
+    // Modify prompt to explicitly request verbose output
+    truncatedPrompt = truncatedPrompt.replace('You are an Expert User Session Analyst', 
+      'You are an Expert User Session Analyst with a focus on EXTREMELY DETAILED and COMPREHENSIVE reporting');
+    
+    // Add more explicit instructions to the end of the prompt
+    truncatedPrompt += `\n\nIMPORTANT FINAL INSTRUCTIONS:
+1. Your analysis MUST be extremely detailed and comprehensive - aim for at least 3000 words
+2. ALWAYS include multiple paragraphs about each major section
+3. Every table provided in the data MUST be thoroughly analyzed with multiple observations
+4. ALWAYS include at least 8-10 detailed data tables in your response using proper Markdown formatting
+5. Format your analysis with clear headings, subheadings, and bullet points
+6. Create summary tables for important metrics even if they weren't in the original data
+7. If there are any inconsistencies in the data, trust the URL information in the tables rather than any summary counts
+8. For each session, create an ASCII diagram showing the flow between URLs (e.g. index.html → page2.html → page3.html → index.html)
+9. Present data visually whenever possible using ASCII charts or structured tables
+10. Your final report should be one of the most detailed analyses you can produce
+11. Quantity AND quality are both highly valued - a short report will be considered incomplete
+12. ENSURE you include detailed analysis of state flags (loading, complete, navigation) in the report
+13. THOROUGHLY analyze every URL visited in each session, including the frequency and patterns
+14. ALWAYS create flow diagrams showing user navigation patterns between URLs`;
 
     const response = await axios.post(
       `${GEMINI_API_URL}?key=${GEMINI_API_KEY}`,
@@ -95,16 +116,24 @@ async function executeGeminiRequest(prompt, model) {
         contents: [{
           role: 'user',
           parts: [{ text: truncatedPrompt }]
-        }]
+        }],
+        generationConfig: {
+          temperature: 0.7, // Increased from default to encourage more verbose output
+          topP: 0.95,
+          topK: 40,
+          maxOutputTokens: 8192 // Request more tokens in the response
+        }
       },
       {
         headers: {
           'Content-Type': 'application/json'
-        }
+        },
+        timeout: 120000 // Increase timeout to 120 seconds (2 minutes) for large requests
       }
     );
     const content = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
     console.log("[Gemini] Successfully received response from Gemini.");
+    console.log(`[Gemini] Response length: ${content?.length || 0} characters`);
     return content || 'No content returned from Gemini';
   } catch (error) {
     console.error(`[Gemini] Error with Gemini model ${model}. Status: ${error.response?.status}. Message: ${error.message}`);
@@ -160,7 +189,7 @@ Sessions Analyzed: ${sessionData.sessionCount}
     prompt += `  States: ${session.states.length}\n`;
     if (session.sessionAnalysis?.summary) {
       const summary = session.sessionAnalysis.summary;
-      prompt += `  Unique URLs: ${summary.uniqueUrls}\n`;
+      prompt += `  Unique URLs: ${summary.uniqueUrlCount || 'Not recorded'}\n`;
       if (summary.mostCommonTransitionTrigger) {
         prompt += `  Most Common Transition: ${summary.mostCommonTransitionTrigger.type} (${summary.mostCommonTransitionTrigger.count} occurrences)\n`;
       }
@@ -437,6 +466,7 @@ async function performBasicAnalysis(userId) {
   console.log(`[Orchestrator] Starting basic analysis for userId: ${userId}`);
   try {
     // Step 1: Fetch and prepare raw session data
+    console.log(`[Orchestrator] STEP 1: Fetching and preparing raw session data for ${userId}`);
     let sessionData = await fetchAndPrepareSessionData(userId);
     if (sessionData.sessionCount < 1) {
       console.log(`[Orchestrator] No valid sessions found for user ${userId}`);
@@ -448,24 +478,40 @@ async function performBasicAnalysis(userId) {
       };
     }
     console.log(`[Orchestrator] Found ${sessionData.sessionCount} valid raw sessions to analyze`);
+    console.log(`[Orchestrator] Session data size: ${JSON.stringify(sessionData).length} characters`);
 
     // Step 2: Perform Stage 1 Detailed Event Processing
+    console.log(`[Orchestrator] STEP 2: Beginning Stage 1 Detailed Event Processing`);
     const processedSessions = [];
+    let sessionCounter = 0;
     for (const session of sessionData.enrichedSessions) {
+      sessionCounter++;
+      console.log(`[Orchestrator] Processing session ${sessionCounter}/${sessionData.enrichedSessions.length}`);
       const processedSession = await processSessionForDetailedEvents(session);
       processedSessions.push(processedSession);
+      console.log(`[Orchestrator] Completed processing session ${sessionCounter}`);
     }
+    
     // Update sessionData to use the sessions processed by Stage 1
     sessionData.enrichedSessions = processedSessions;
     console.log(`[Orchestrator] Completed Stage 1 Detailed Event Processing for ${processedSessions.length} sessions.`);
+    console.log(`[Orchestrator] Processed session data size: ${JSON.stringify(sessionData).length} characters`);
 
     // Step 3: Generate a summary prompt with the enhanced session analysis data
+    console.log(`[Orchestrator] STEP 3: Generating summary prompt and requesting AI analysis`);
     const summaryPrompt = generateSummaryPrompt(sessionData);
+    console.log(`[Orchestrator] Summary prompt generated with ${summaryPrompt.length} characters`);
+    
     const model = selectModel();
+    console.log(`[Orchestrator] Selected model: ${model}`);
+    
+    console.log(`[Orchestrator] Sending request to AI model...`);
     const analysisResult = await executeModelRequest(summaryPrompt, model);
+    console.log(`[Orchestrator] AI analysis complete. Response length: ${analysisResult.length} characters`);
       
     // Extract HTML table structures from the processed sessions for direct client-side rendering
     const htmlTables = processedSessions.map(session => session.sessionAnalysis?.htmlTables || {});
+    console.log(`[Orchestrator] Extracted ${Object.keys(htmlTables).length} HTML tables from processed sessions`);
       
     return {
       success: true,
@@ -482,6 +528,7 @@ async function performBasicAnalysis(userId) {
     };
   } catch (error) {
     console.error(`[Orchestrator] Error in analysis pipeline: ${error.message}`);
+    console.error(`[Orchestrator] Error stack: ${error.stack}`);
     return {
       success: false,
       message: `Error performing analysis: ${error.message}`,
@@ -706,4 +753,4 @@ function extractSessionFeatures(session) {
 
 module.exports = {
   performBasicAnalysis
-}; 
+};

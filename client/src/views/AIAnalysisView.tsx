@@ -110,11 +110,11 @@ const AIAnalysisView: React.FC = () => {
       interval = window.setInterval(() => {
         setAnalysisProgress(prev => {
           // Define stages based on progress percentage
-          const newProgress = Math.min(prev + (Math.random() * 3), 99);
+          const newProgress = Math.min(prev + (Math.random() * 5), 95); // Increased increment and max to 95%
           
-          if (newProgress < 33) {
+          if (newProgress < 30) {
             setAnalysisStage('Gathering raw session data...');
-          } else if (newProgress < 66) {
+          } else if (newProgress < 60) {
             setAnalysisStage('Processing detailed events (Stage 1)...');
           } else {
             setAnalysisStage('Generating AI analysis report...');
@@ -122,7 +122,7 @@ const AIAnalysisView: React.FC = () => {
           
           return newProgress;
         });
-      }, 800);
+      }, 600); // Slightly faster updates
       
       return () => {
         if (interval) {
@@ -324,9 +324,9 @@ const AIAnalysisView: React.FC = () => {
                 }}
               />
               <p className="mt-4 text-gray-600 text-center">
-                {analysisProgress < 33 ? 'Fetching all user session records and event data.' : 
-                 analysisProgress < 66 ? 'Stage 1: Programmatically extracting detailed features from events...' : 
-                 'Generating comprehensive AI synthesis based on processed data...'}
+                {analysisProgress < 30 ? 'Gathering raw session data...' : 
+                 analysisProgress < 60 ? 'Processing detailed events (Stage 1)...' : 
+                 'Generating AI analysis report...'}
               </p>
             </div>
           )}

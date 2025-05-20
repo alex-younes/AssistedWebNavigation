@@ -50,7 +50,7 @@
 
 .markdown-body table thead tr {
   background-color: #3f51b5; /* Primary color */
-  color: white;
+  color: #2c3e50; /* Changed from white to a dark color for better contrast */
   text-align: left;
   font-weight: bold;
 }

@@ -30,7 +30,8 @@ const initializeState = async () => {
       'lastStateHash',
       'username', // NEW: Load username
       'finalStateCounter', // ADDED: Load finalStateCounter
-      'sessionStateCounter' // ADDED: Load sessionStateCounter
+      'sessionStateCounter', // ADDED: Load sessionStateCounter
+      'sessionStateHashes' // ADDED: Load sessionStateHashes
     ]);
     
     if (result.recordingStatus) recordingStatus = result.recordingStatus;
@@ -38,20 +39,23 @@ const initializeState = async () => {
     if (result.username) username = result.username; // NEW: Set username
     if (result.currentSessionId) {
       currentSessionId = result.currentSessionId;
-      // Only restore counters if we are resuming an active session
+      // Only restore counters and hashes if we are resuming an active recording session
       if (recordingStatus === 'recording') {
         finalStateCounter = result.finalStateCounter || 0;
         sessionStateCounter = result.sessionStateCounter || 0;
-        console.log('[Extension] Restored counters for active session:', { finalStateCounter, sessionStateCounter });
+        sessionStateHashes = result.sessionStateHashes || {}; // Restore or default to empty
+        console.log('[Extension] Restored counters and hashes for active session:', { finalStateCounter, sessionStateCounter, sessionStateHashesCount: Object.keys(sessionStateHashes).length });
       } else {
-        // If not recording, counters should be 0 for the next session start
+        // If not recording, counters and hashes should be reset for the next session start
         finalStateCounter = 0;
         sessionStateCounter = 0;
+        sessionStateHashes = {};
       }
     } else {
-      // No current session, so counters should definitely be 0
+      // No current session, so counters and hashes should definitely be reset
       finalStateCounter = 0;
       sessionStateCounter = 0;
+      sessionStateHashes = {};
     }
     
     // Handle API base URL with proper format checking
@@ -123,7 +127,8 @@ const saveState = async () => {
       lastStateId,
       lastStateHash,
       finalStateCounter, // ADDED: Save finalStateCounter
-      sessionStateCounter // ADDED: Save sessionStateCounter
+      sessionStateCounter, // ADDED: Save sessionStateCounter
+      sessionStateHashes // ADDED: Save sessionStateHashes
     };
     
     console.log('[Extension] Saving state to storage:', { 
@@ -499,178 +504,83 @@ const saveDOMState = async (state) => {
         console.log(`[Extension][DUPLICATION DEBUG] Is special event: ${isSpecialEvent}, isNavigation=${state.isNavigation}, isReload=${state.isReload}, isInitial=${state.isInitial}, hasInteractionInfo=${state.interactionInfo !== undefined}`);
         
         // Check if we've seen this hash before
+        console.log(`[Extension][StateNumDebug] Processing state.hash: "${state.hash}" (typeof: ${typeof state.hash})`);
         const existingStateId = state.hash && sessionStateHashes[state.hash];
-        console.log(`[Extension][DUPLICATION DEBUG] Existing state for hash ${state.hash}: ${existingStateId || 'none'}`);
+        // console.log(`[Extension][StateNumDebug] sessionStateHashes content for this hash ("${state.hash}"): ${existingStateId || 'NOT FOUND'}`);
+        // console.log(`[Extension][StateNumDebug] Current finalStateCounter BEFORE logic: ${finalStateCounter}`);
         
-        // Handle special events and duplicates
-        if ((isSpecialEvent || state.isDuplicate) && existingStateId) {
-          let eventType = '';
-          if (state.isNavigation) eventType = 'navigation';
-          else if (state.isReload) eventType = 'reload';
-          else if (state.isInitial) eventType = 'initial load';
-          else if (state.interactionInfo) eventType = `interaction: ${state.interactionInfo.trigger}`;
-          else eventType = 'duplicate';
-          
-          console.log(`[Extension][DUPLICATION DEBUG] Special event (${eventType}) with EXISTING hash: ${state.hash}, using existing stateId: ${existingStateId}`);
-          
-          state.stateId = existingStateId;
-          
-          // Extract state number from the existing ID
-          if (existingStateId.includes('loading_')) {
-            // For loading states like "loading_index.html_1"
+        const timestamp = Date.now(); // Define timestamp for potential use in new state IDs
+
+        if (existingStateId) {
+            // Hash is known: Re-use original stateId and stateNumber.
+            console.log(`[Extension] Known hash "${state.hash}". Reusing existingStateId: "${existingStateId}"`);
+            state.stateId = existingStateId;
+            
+            // Extract state number from the existing ID (e.g., state_1_timestamp -> 1)
+            // Ensure a fallback if parsing fails, though format should be consistent.
             const parts = existingStateId.split('_');
-            const loadingNum = parseInt(parts[parts.length - 1]);
-            state.stateNumber = finalStateCounter + loadingNum/10; // For example: 1.1
+            let parsedStateNum = 0;
+            if (parts.length > 1 && !isNaN(parseInt(parts[1]))) {
+                parsedStateNum = parseInt(parts[1]);
+            }
+            state.stateNumber = parsedStateNum;
             
-            // Update finalStateCounter if this base number is higher
-            finalStateCounter = Math.max(finalStateCounter, Math.floor(state.stateNumber));
-            console.log(`[Extension][DUPLICATION DEBUG] Extracted loading state number: ${state.stateNumber}, updated finalStateCounter: ${finalStateCounter}`);
-          } else {
-            // For final states like "state_2_1234567890"
-            const stateNum = parseInt(existingStateId.split('_')[1]);
-            state.stateNumber = stateNum;
-            
-            // Update finalStateCounter if this state number is higher
-            finalStateCounter = Math.max(finalStateCounter, stateNum);
-            console.log(`[Extension][DUPLICATION DEBUG] Extracted final state number: ${state.stateNumber}, updated finalStateCounter: ${finalStateCounter}`);
-          }
-          
-          // Mark as duplicate, but don't skip saving
-          state.isNewState = false;
-          
-          if (state.loadingInfo) {
-            state.loadingInfo.isDuplicate = true;
-            if (state.isNavigation) state.loadingInfo.isNavigation = true;
-            if (state.isReload) state.loadingInfo.isReload = true;
-            if (state.isInitial) state.loadingInfo.isInitial = true;
-            if (state.interactionInfo) state.loadingInfo.isInteraction = true;
-          }
-        }
-        // Handle new special events
-        else if (isSpecialEvent) {
-          let eventType = '';
-          if (state.isNavigation) eventType = 'navigation';
-          else if (state.isReload) eventType = 'reload';
-          else if (state.isInitial) eventType = 'initial load';
-          else if (state.interactionInfo) eventType = `interaction: ${state.interactionInfo.trigger}`;
-          
-          console.log(`[Extension][DUPLICATION DEBUG] Special event (${eventType}) with NEW hash: ${state.hash}`);
-          
-          // Increment the state counter for this session
-          sessionStateCounter++;
-          console.log(`[Extension][DUPLICATION DEBUG] Incremented sessionStateCounter to: ${sessionStateCounter}`);
-          
-          // NEW: Check if this is a loading state
-          const isLoading = state.loadingInfo?.isPartOfLoading === true;
-          
-          // NEW: Generate stateId with loading indicator if needed
-          const timestamp = Date.now();
-          
-          if (isLoading) {
-            // Format: loading_index.html_1, loading_register.html_1, etc.
-            const loadingNumber = sessionStateCounter % 10 || 1;
-            const url = new URL(state.url);
-            const pageName = url.pathname.split('/').pop() || 'index.html';
-            state.stateId = `loading_${pageName}_${loadingNumber}`;
-            
-            // Set stateNumber to match loading format
-            state.stateNumber = finalStateCounter + loadingNumber/10; // For example: 1.1, 1.2, etc.
-            
-            console.log(`[Extension][DUPLICATION DEBUG] Created loading state ID: ${state.stateId}, stateNumber: ${state.stateNumber}, pageName: ${pageName}, loadingNumber: ${loadingNumber}`);
-          } else {
-            // Increment final state counter for new final states
-            finalStateCounter++;
-            
-            // Format: state_1, state_2, state_3, etc. for final states
-            state.stateId = `state_${finalStateCounter}_${timestamp}`;
-            state.stateNumber = finalStateCounter; // Whole number for final states
-            
-            console.log(`[Extension][DUPLICATION DEBUG] Created final state ID: ${state.stateId}, stateNumber: ${state.stateNumber}, finalStateCounter: ${finalStateCounter}`);
-          }
-          
-          state.isNewState = true;
-          
-          if (state.loadingInfo) {
-            if (state.isNavigation) state.loadingInfo.isNavigation = true;
-            if (state.isReload) state.loadingInfo.isReload = true;
-            if (state.isInitial) state.loadingInfo.isInitial = true;
-            if (state.interactionInfo) state.loadingInfo.isInteraction = true;
-          }
-          
-          if (state.hash) {
-            sessionStateHashes[state.hash] = state.stateId;
-            console.log(`[Extension][DUPLICATION DEBUG] Added new hash to tracking: ${state.hash} -> ${state.stateId}`);
-          }
-        }
-        // Handle duplicate regular states
-        else if (existingStateId) {
-          console.log(`[Extension][DUPLICATION DEBUG] Duplicate regular state with hash: ${state.hash}, existing stateId: ${existingStateId}`);
-          
-          // Create a new state based on the duplicate, but with isNewState=false
-          state.stateId = existingStateId + '_dup_' + Date.now();
-          console.log(`[Extension][DUPLICATION DEBUG] Generated duplicate stateId: ${state.stateId}`);
-          
-          // Extract state number from the existing ID
-          if (existingStateId.includes('loading_')) {
-            // For loading states like "loading_index.html_1"
-            const parts = existingStateId.split('_');
-            const loadingNum = parseInt(parts[parts.length - 1]);
-            state.stateNumber = finalStateCounter + loadingNum/10; // For example: 1.1
-            console.log(`[Extension][DUPLICATION DEBUG] Using loading state number for duplicate: ${state.stateNumber} from ${existingStateId}`);
-          } else {
-            // For final states like "state_2_1234567890"
-            const stateNum = parseInt(existingStateId.split('_')[1]);
-            state.stateNumber = stateNum;
-            console.log(`[Extension][DUPLICATION DEBUG] Using final state number for duplicate: ${state.stateNumber} from ${existingStateId}`);
-          }
-          
-          // Mark as duplicate, but don't skip saving
-          state.isNewState = false;
-        }
-        // Handle new regular states
-        else {
-          console.log(`[Extension][DUPLICATION DEBUG] New regular state with hash: ${state.hash}`);
-          
-          // Increment the state counter for this session
-          sessionStateCounter++;
-          console.log(`[Extension][DUPLICATION DEBUG] Incremented sessionStateCounter to: ${sessionStateCounter}`);
-          
-          // NEW: Check if this is a loading state
-          const isLoading = state.loadingInfo?.isPartOfLoading === true;
-          
-          // NEW: Generate stateId with loading indicator if needed
-          const timestamp = Date.now();
-          
-          if (isLoading) {
-            // Format: loading_index.html_1, loading_register.html_1, etc.
-            const loadingNumber = sessionStateCounter % 10 || 1;
-            const url = new URL(state.url);
-            const pageName = url.pathname.split('/').pop() || 'index.html';
-            state.stateId = `loading_${pageName}_${loadingNumber}`;
-            
-            // Set stateNumber to match loading format
-            state.stateNumber = finalStateCounter + loadingNumber/10; // For example: 1.1, 1.2, etc.
-            
-            console.log(`[Extension][DUPLICATION DEBUG] Created loading state ID: ${state.stateId}, stateNumber: ${state.stateNumber}, pageName: ${pageName}, loadingNumber: ${loadingNumber}`);
-          } else {
-            // Increment final state counter for new final states
-            finalStateCounter++;
-            
-            // Format: state_1, state_2, state_3, etc. for final states
-            state.stateId = `state_${finalStateCounter}_${timestamp}`;
-            state.stateNumber = finalStateCounter; // Whole number for final states
-            
-            console.log(`[Extension][DUPLICATION DEBUG] Created final state ID: ${state.stateId}, stateNumber: ${state.stateNumber}, finalStateCounter: ${finalStateCounter}`);
-          }
-          
-          state.isNewState = true;
-          
-          if (state.hash) {
-            sessionStateHashes[state.hash] = state.stateId;
-            console.log(`[Extension][DUPLICATION DEBUG] Added hash to tracking: ${state.hash} -> ${state.stateId}`);
-          }
+            finalStateCounter = Math.max(finalStateCounter, parsedStateNum); // Ensure finalStateCounter doesn't go backward.
+            state.isNewState = false;
+
+            // Update loadingInfo flags if this known state is part of a new navigation context, etc.
+            if (state.loadingInfo) {
+                state.loadingInfo.isDuplicate = true; // Mark this instance as a duplicate visit
+                if (state.isNavigation) state.loadingInfo.isNavigation = true;
+                if (state.isReload) state.loadingInfo.isReload = true;
+                if (state.isInitial) state.loadingInfo.isInitial = true;
+            }
+
+        } else {
+            // Hash is new (or state.hash was null): Treat as a new state for numbering and ID.
+            console.log(`[Extension] New hash "${state.hash || '(no hash provided)'}" or hash not found in sessionStateHashes.`);
+            state.isNewState = true; // Mark as a new state for this session context
+
+            const isActualLoadingState = state.loadingInfo?.isPartOfLoading === true && saveLoadingStates;
+
+            if (isActualLoadingState) {
+                // This is a new intermediate loading state.
+                sessionStateCounter++; // Use a separate counter for loading state IDs/sub-numbers if needed.
+                const loadingNumberSuffix = sessionStateCounter % 10 || 1;
+                const url = new URL(state.url);
+                const pageName = url.pathname.split('/').pop() || 'index.html';
+                // Make loading state IDs distinct and include a timestamp for uniqueness if multiple occur for same pageName and loadingNumberSuffix.
+                state.stateId = `loading_${pageName}_${loadingNumberSuffix}_${timestamp}`;
+                // Assign a fractional state number based on current finalStateCounter to show sequence.
+                state.stateNumber = finalStateCounter + (loadingNumberSuffix / 10.0);
+                console.log(`[Extension] New loading state: ID "${state.stateId}", Number ${state.stateNumber}`);
+                // Do NOT add to sessionStateHashes, as that's for mapping a final DOM hash to its canonical final stateId.
+            } else {
+                // This is a new "final" state (genuinely new hash, or a loading state considered final).
+                finalStateCounter++;
+                state.stateId = `state_${finalStateCounter}_${timestamp}`;
+                state.stateNumber = finalStateCounter;
+                console.log(`[Extension] New final state: ID "${state.stateId}", Number ${state.stateNumber}. finalStateCounter incremented to ${finalStateCounter}`);
+                if (state.hash) {
+                    sessionStateHashes[state.hash] = state.stateId;
+                    console.log(`[Extension] Stored in sessionStateHashes: ["${state.hash}"] = "${state.stateId}"`);
+                }
+            }
+            // Apply flags like isNavigation to loadingInfo for new states
+            if (state.loadingInfo) {
+                if (state.isNavigation) state.loadingInfo.isNavigation = true;
+                if (state.isReload) state.loadingInfo.isReload = true;
+                if (state.isInitial) state.loadingInfo.isInitial = true;
+            }
         }
         
+        // // After all the if/else if/else blocks that assign state.stateId and state.stateNumber:
+        // console.log(`[Extension][StateNumDebug] Assigned stateId: "${state.stateId}", Assigned stateNumber: ${state.stateNumber}`);
+        // console.log(`[Extension][StateNumDebug] finalStateCounter AFTER logic: ${finalStateCounter}`);
+        // if (state.hash && state.isNewState && state.stateId && !state.stateId.startsWith('loading_')) { // Check state.stateId exists
+        //     console.log(`[Extension][StateNumDebug] Storing in sessionStateHashes: sessionStateHashes["${state.hash}"] = "${state.stateId}"`);
+        // }
+
         // Calculate time difference directly from state timestamps if we have a previous state
         const calculatedTimeSincePrevious = calculateTimeDifference(state.timestamp, state.previousStateId);
 
@@ -839,6 +749,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case 'startRecording':
       (async () => {
         try {
+          // ADDED CHECK: If already recording a session, don't start a new one.
+          // This prevents accidental session resets if the UI sends 'startRecording' erroneously.
+          if (recordingStatus === 'recording' && currentSessionId) {
+            console.warn(`[Extension] 'startRecording' received but already recording session: ${currentSessionId}. Aborting new session start.`);
+            sendResponse({ 
+              success: false, 
+              error: 'Already recording a session.', 
+              currentSessionId: currentSessionId,
+              status: recordingStatus 
+            });
+            return; // Exit without starting a new session
+          }
+
+          // If not already recording, or if currentSessionId is null (e.g., after a stop or error),
+          // proceed to start a new session.
           const sessionId = 'session_' + Date.now();
           const result = await startRecordingSession(sessionId);
           sendResponse(result);

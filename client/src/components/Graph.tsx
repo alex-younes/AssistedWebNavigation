@@ -1330,32 +1330,41 @@ const Graph = () => {
       
       // Update the nodes and edges with the new state
       setNodes(prevNodes => {
-        // Check if we already have this state
         const existingNodeIndex = prevNodes.findIndex(node => node.id === newState.stateId);
         
         if (existingNodeIndex >= 0) {
-          // Update existing node
-          const updatedNodes = [...prevNodes];
-          const nodeToUpdate = { ...updatedNodes[existingNodeIndex] };
-          
-          // Add the new state to history if not already present
-          const nodeData = nodeToUpdate.data;
-          const stateExists = nodeData.history.some(state => 
-            state.timestamp === newState.timestamp
-          );
-          
-          if (!stateExists) {
-            nodeData.history = [...nodeData.history, newState];
-            nodeData.instanceCount = nodeData.history.length;
-          }
-          
-          // Update the latest timestamp if needed
-          if (new Date(newState.timestamp) > new Date(nodeData.latestTimestamp)) {
-            nodeData.latestTimestamp = newState.timestamp;
-          }
-          
-          updatedNodes[existingNodeIndex] = { ...nodeToUpdate, data: nodeData };
-          return updatedNodes;
+          // Node with this stateId already exists. Update its history and mark it as the latest.
+          return prevNodes.map((node, index) => {
+            if (index === existingNodeIndex) {
+              // This is the node to update.
+              const updatedData = { ...node.data }; // Make a copy of its current data
+
+              // Add to history if new occurrence (check timestamp and hash)
+              const stateExistsInHistory = updatedData.history.some(
+                historyState => 
+                  historyState.timestamp === newState.timestamp && 
+                  historyState.hash === newState.hash 
+              );
+              if (!stateExistsInHistory) {
+                updatedData.history = [...updatedData.history, newState].sort(
+                  (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+                );
+                updatedData.instanceCount = updatedData.history.length;
+              }
+
+              // Update latest timestamp for this node
+              if (new Date(newState.timestamp) > new Date(updatedData.latestTimestamp)) {
+                updatedData.latestTimestamp = newState.timestamp;
+              }
+              
+              // Mark this node as latest
+              updatedData.isLatest = true;
+              
+              return { ...node, data: updatedData };
+            }
+            // For all other nodes, mark them as not latest
+            return { ...node, data: { ...node.data, isLatest: false } };
+          });
         } else {
           // It's a new state, add it to the graph
           // Find the max position of existing nodes to place the new one
@@ -1406,14 +1415,15 @@ const Graph = () => {
         // Target node (newState.stateId) is assumed to be handled by the setNodes call just prior to this.
         // Thus, we don't explicitly check for targetNodeExists against the current 'nodes' closure here.
         
-        // Check if the edge already exists (this check was in the original code)
-        const existingEdge = prevEdges.find(edge => 
-          edge.source === newState.previousStateId && edge.target === newState.stateId
+        // Check if an edge already exists between these two nodes, in either direction
+        const undirectedExistingEdge = prevEdges.find(edge =>
+          (edge.source === newState.previousStateId && edge.target === newState.stateId) ||  // Current direction
+          (edge.source === newState.stateId && edge.target === newState.previousStateId)     // Reverse direction
         );
         
-        if (existingEdge) {
-          console.log('[Socket] Edge already exists:', existingEdge.id);
-          return prevEdges; // Return current edges if edge already exists
+        if (undirectedExistingEdge) {
+          console.log(`[Socket] An edge connecting ${newState.previousStateId} and ${newState.stateId} already exists (ID: ${undirectedExistingEdge.id}). Not creating a new one.`);
+          return prevEdges; 
         }
         
         // Create a new edge

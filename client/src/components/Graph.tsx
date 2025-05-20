@@ -928,6 +928,7 @@ const StateHistoryPanel = ({
           <h3 className="font-bold text-lg">{state.title}</h3>
           <p className="text-sm text-gray-600">State #{state.stateNumber} • {state.instanceCount} instances</p>
           <p className="text-sm text-gray-600">URL: {state.url}</p>
+          <p className="text-sm text-gray-600 break-all" title={state.hash}>Hash: {state.hash}</p>
         </div>
         
         <div className="border-t border-gray-200 pt-4">

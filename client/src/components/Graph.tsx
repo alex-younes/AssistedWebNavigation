@@ -1388,18 +1388,38 @@ const Graph = () => {
       
       // Add edge from the latest previous node if it exists
       setEdges(prevEdges => {
-        if (prevEdges.length === 0 || !newState.previousStateId) return prevEdges;
+        // If there's no previous state ID, we can't create an edge
+        if (!newState.previousStateId) {
+          console.log('[Socket] New state does not have a previousStateId, cannot create edge.');
+          return prevEdges; // Return current edges if no previous state ID
+        }
+
+        // Check if the source and target nodes for the new edge exist in the current nodes state.
+        // Accessing 'nodes' from the outer scope, which should be up-to-date for the source node.
+        const sourceNodeExists = nodes.some(node => node.id === newState.previousStateId);
+        // const targetNodeExists = nodes.some(node => node.id === newState.stateId); // This check is removed
+
+        if (!sourceNodeExists) {
+          console.warn(`[Socket] Source node ${newState.previousStateId} for new edge to target ${newState.stateId} not found in current nodes state. Skipping edge creation.`);
+          return prevEdges; // Return current edges if source node doesn't exist
+        }
+        // Target node (newState.stateId) is assumed to be handled by the setNodes call just prior to this.
+        // Thus, we don't explicitly check for targetNodeExists against the current 'nodes' closure here.
         
-        // Check if the edge already exists
+        // Check if the edge already exists (this check was in the original code)
         const existingEdge = prevEdges.find(edge => 
           edge.source === newState.previousStateId && edge.target === newState.stateId
         );
         
-        if (existingEdge) return prevEdges;
+        if (existingEdge) {
+          console.log('[Socket] Edge already exists:', existingEdge.id);
+          return prevEdges; // Return current edges if edge already exists
+        }
         
         // Create a new edge
+        console.log(`[Socket] Creating new edge from ${newState.previousStateId} to ${newState.stateId}`);
         const newEdge = createEdge(newState.previousStateId, newState.stateId);
-        return [...prevEdges, newEdge];
+        return [...prevEdges, newEdge]; // Return new edges array
       });
     };
     
@@ -1411,7 +1431,7 @@ const Graph = () => {
       socket.off('newState', handleNewState);
       leaveSession();
     };
-  }, [socket, isConnected, sessionId, joinSession, leaveSession, createNode, createEdge, realTimeUpdatesEnabled]);
+  }, [socket, isConnected, sessionId, joinSession, leaveSession, createNode, createEdge, realTimeUpdatesEnabled, nodes]);
 
   // Fetch states for the session
   const fetchSessionStates = useCallback(async () => {

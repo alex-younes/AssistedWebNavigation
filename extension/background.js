@@ -28,13 +28,31 @@ const initializeState = async () => {
       'saveLoadingStates',
       'lastStateId', 
       'lastStateHash',
-      'username' // NEW: Load username
+      'username', // NEW: Load username
+      'finalStateCounter', // ADDED: Load finalStateCounter
+      'sessionStateCounter' // ADDED: Load sessionStateCounter
     ]);
     
     if (result.recordingStatus) recordingStatus = result.recordingStatus;
     if (result.userId) userId = result.userId;
     if (result.username) username = result.username; // NEW: Set username
-    if (result.currentSessionId) currentSessionId = result.currentSessionId;
+    if (result.currentSessionId) {
+      currentSessionId = result.currentSessionId;
+      // Only restore counters if we are resuming an active session
+      if (recordingStatus === 'recording') {
+        finalStateCounter = result.finalStateCounter || 0;
+        sessionStateCounter = result.sessionStateCounter || 0;
+        console.log('[Extension] Restored counters for active session:', { finalStateCounter, sessionStateCounter });
+      } else {
+        // If not recording, counters should be 0 for the next session start
+        finalStateCounter = 0;
+        sessionStateCounter = 0;
+      }
+    } else {
+      // No current session, so counters should definitely be 0
+      finalStateCounter = 0;
+      sessionStateCounter = 0;
+    }
     
     // Handle API base URL with proper format checking
     if (result.apiBaseUrl) {
@@ -103,7 +121,9 @@ const saveState = async () => {
       apiBaseUrl: API_BASE_URL,
       saveLoadingStates,
       lastStateId,
-      lastStateHash
+      lastStateHash,
+      finalStateCounter, // ADDED: Save finalStateCounter
+      sessionStateCounter // ADDED: Save sessionStateCounter
     };
     
     console.log('[Extension] Saving state to storage:', { 

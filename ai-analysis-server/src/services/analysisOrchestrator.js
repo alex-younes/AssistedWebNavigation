@@ -10,6 +10,8 @@ const axios = require('axios');
 const Groq = require('groq-sdk');
 const { processSessionForDetailedEvents } = require('./analysisStages/stage1_detailedEventProcessor');
 const { processSessionForNonTransitionalEvents } = require('./analysisStages/stage2_nonTransitionalEventProcessor');
+const { analyzePainPoints } = require('./analysisStages/stage3_painPointQA');
+const { generateUxHelp } = require('./analysisStages/stage4_uxHelpGenerator');
 
 // Get the main backend URL from environment or use default
 const MAIN_BACKEND_URL = process.env.MAIN_BACKEND_URL || 'http://localhost:3001';
@@ -170,6 +172,14 @@ IMPORTANT GUIDELINES:
 3. Identify specific patterns like navigation loops, form interactions, and state transition behaviors
 4. Generate your report with Markdown formatting including tables and bullet points
 5. Structure your analysis as a data scientist would - with observations backed by the data
+6. DO NOT discuss missing data, limitations in the data, or system issues of any kind
+7. DO NOT include any sections about "Network Performance Considerations" or "Missing Data and Limitations"
+8. FOCUS SOLELY on what the user did and their behavior patterns - not what data is available or missing
+
+Your analysis should prioritize the USER'S experience and behavior, not the quality or completeness of the data. For example:
+- Instead of "The absence of state flags limits analysis", say "The user spent 45 seconds navigating between products"
+- Instead of "Network performance data is unknown", say "The user completed page transitions in an average of 2.3 seconds"
+- Instead of "Limited number of sessions restricts findings", say "Across the available sessions, the user showed a pattern of..."
 
 User ID: ${sessionData.enrichedSessions[0]?.userId}
 Sessions Analyzed: ${sessionData.sessionCount}
@@ -265,7 +275,7 @@ Sessions Analyzed: ${sessionData.sessionCount}
           });
         }
         
-        // Form Interactions Table (if has data)
+        // Form Interaction Summary Table
         if (analysis.htmlTables.formInteractions && analysis.htmlTables.formInteractions.rows && analysis.htmlTables.formInteractions.rows.length > 0) {
           const table = analysis.htmlTables.formInteractions;
           prompt += `\n#### ${table.title}\n`;
@@ -276,30 +286,8 @@ Sessions Analyzed: ${sessionData.sessionCount}
           });
         }
         
-        // NEW: Add Form Behavior Analysis Table
-        if (analysis.htmlTables.formBehaviors) {
-          const table = analysis.htmlTables.formBehaviors;
-          prompt += `\n#### ${table.title}\n`;
-          prompt += `| ${table.headers.join(' | ')} |\n`;
-          prompt += `| ${table.headers.map(() => '---').join(' | ')} |\n`;
-          table.rows.forEach(row => {
-            prompt += `| ${row.join(' | ')} |\n`;
-          });
-        }
-        
-        // NEW: Add Form Sequence Table if available
-        if (analysis.htmlTables.formSequence) {
-          const table = analysis.htmlTables.formSequence;
-          prompt += `\n#### ${table.title}\n`;
-          prompt += `| ${table.headers.join(' | ')} |\n`;
-          prompt += `| ${table.headers.map(() => '---').join(' | ')} |\n`;
-          table.rows.forEach(row => {
-            prompt += `| ${row.join(' | ')} |\n`;
-          });
-        }
-        
-        // NEW: Add Network Performance Table
-        if (analysis.htmlTables.networkPerformance) {
+        // Add network performance table if it exists
+        if (analysis.htmlTables.networkPerformance && analysis.htmlTables.networkPerformance.rows && analysis.htmlTables.networkPerformance.rows.length > 0) {
           const table = analysis.htmlTables.networkPerformance;
           prompt += `\n#### ${table.title}\n`;
           prompt += `| ${table.headers.join(' | ')} |\n`;
@@ -309,42 +297,9 @@ Sessions Analyzed: ${sessionData.sessionCount}
           });
         }
         
-        // NEW: Add DOM Fingerprint Table
-        if (analysis.htmlTables.domFingerprints) {
+        // Add DOM fingerprint transitions table if exists
+        if (analysis.htmlTables.domFingerprints && analysis.htmlTables.domFingerprints.rows && analysis.htmlTables.domFingerprints.rows.length > 0) {
           const table = analysis.htmlTables.domFingerprints;
-          prompt += `\n#### ${table.title}\n`;
-          prompt += `| ${table.headers.join(' | ')} |\n`;
-          prompt += `| ${table.headers.map(() => '---').join(' | ')} |\n`;
-          table.rows.forEach(row => {
-            prompt += `| ${row.join(' | ')} |\n`;
-          });
-        }
-        
-        // NEW: Add State Flag Analysis Table
-        if (analysis.htmlTables.stateFlags) {
-          const table = analysis.htmlTables.stateFlags;
-          prompt += `\n#### ${table.title}\n`;
-          prompt += `| ${table.headers.join(' | ')} |\n`;
-          prompt += `| ${table.headers.map(() => '---').join(' | ')} |\n`;
-          table.rows.forEach(row => {
-            prompt += `| ${row.join(' | ')} |\n`;
-          });
-        }
-        
-        // NEW: Add Loading Sequences Table
-        if (analysis.htmlTables.loadingSequences && analysis.htmlTables.loadingSequences.rows && analysis.htmlTables.loadingSequences.rows.length > 0) {
-          const table = analysis.htmlTables.loadingSequences;
-          prompt += `\n#### ${table.title}\n`;
-          prompt += `| ${table.headers.join(' | ')} |\n`;
-          prompt += `| ${table.headers.map(() => '---').join(' | ')} |\n`;
-          table.rows.forEach(row => {
-            prompt += `| ${row.join(' | ')} |\n`;
-          });
-        }
-        
-        // NEW: Add Form Transition Analysis Table
-        if (analysis.htmlTables.formTransitions && analysis.htmlTables.formTransitions.rows && analysis.htmlTables.formTransitions.rows.length > 0) {
-          const table = analysis.htmlTables.formTransitions;
           prompt += `\n#### ${table.title}\n`;
           prompt += `| ${table.headers.join(' | ')} |\n`;
           prompt += `| ${table.headers.map(() => '---').join(' | ')} |\n`;
@@ -398,61 +353,36 @@ Sessions Analyzed: ${sessionData.sessionCount}
     }
   });
 
+  // Analysis requirements
   prompt += `\n## Analysis Requirements
 
-Based on the data provided above, create a comprehensive analysis report that:
+Based on the detailed session data above, create a comprehensive analysis report that:
 
-1. STRICTLY focuses on the USER BEHAVIOR across the session(s) - NOT on website design recommendations. 
-   Describe what the user did, not what the website should do better.
+1. Summarizes the overall user journey and behavioral patterns
+   - Overview of the session flow and state transitions
+   - URL navigation sequences and patterns
+   - Time spent on different pages/states
+   - Form interaction behaviors
 
-2. Analyzes the state transition tables to identify how users navigated between pages:
-   - What URLs did they visit most?
-   - What types of transitions were most common (user interactions vs. navigations)?
-   - How much time did they spend on different pages?
+2. Identifies key behavioral patterns like:
+   - Navigation loops or repeated page visits
+   - Form interaction sequences and potential issues
+   - Timing anomalies (unusually long or short page visits)
+   - Transition triggers (what caused state changes)
 
-3. Identifies navigation patterns:
-   - Did they exhibit navigation loops (revisiting the same URLs)?
-   - How many states did it take them to accomplish tasks?
-   - What was their primary navigation flow?
+3. Assesses user engagement and task completion:
+   - Did the user complete apparent tasks/flows?
+   - Were there abandoned processes or forms?
+   - How efficient was the user's navigation?
+   - What does the timing data tell us about the user's focus?
 
-4. Analyzes form interaction behavior:
-   - How did users interact with form fields?
-   - Were there fields that required multiple corrections?
-   - What was the sequence of form field completion?
-   - Were there delays between field interactions?
-   - IMPORTANT: Use the form transitions and form timings tables to identify correction patterns and struggles
+4. Provides actionable insights about this user's behavior:
+   - Where did the user spend the most time?
+   - What navigation patterns are most common?
+   - Which forms or fields had the most interactions?
+   - How does user behavior change across multiple sessions?
 
-5. Considers network performance impact:
-   - Did network conditions correlate with user behavior?
-   - Were there performance issues that affected interaction timing?
-   - How did page loading times compare across different states?
-
-6. Examines DOM state changes:
-   - How did the page state change during user interactions?
-   - Were there recurring patterns in DOM fingerprints?
-   - What transitions happened within the same URL?
-
-7. NEW: Analyzes state flag transitions for better state change understanding:
-   - What percentage of states were loading vs. stable states?
-   - How many loading sequences occurred and what was their duration?
-   - Did navigation state changes correlate with user activity?
-   - What is the relationship between DOM changes and loading states?
-
-8. NEW: Detects form field transition patterns:
-   - How did users correct their inputs?
-   - What was the timing between field interactions? 
-   - Which fields took the longest to complete?
-   - Were there fields where users struggled or made repeated changes?
-   - Can you identify "thinking time" between key interactions?
-
-9. Provides concrete, data-backed observations about user behavior:
-   - Example: "The user spent an average of 45 seconds on the homepage before navigating to other pages via user interactions."
-   - Example: "The user showed a navigation loop pattern, returning to the homepage 5 times during the session."
-   - Example: "The user made 3 corrections to the email field, suggesting possible confusion or validation issues."
-   - Example: "The loading sequences averaged 2.5 seconds, with network conditions impacting page transitions."
-   - Example: "Form completion showed a pattern of quick initial entries followed by multiple corrections on validation fields."
-
-Your report should read like a professional data analyst's findings about user behavior - factual, detailed, and based entirely on the data provided. Focus especially on the transitions between states and what they reveal about user patterns.
+IMPORTANT: Your analysis should focus ONLY on the user's behavior (what they did) and NOT on missing data, system limitations, or technical implementation. The goal is to understand the user's experience, not evaluate the tracking system or website design.
 `;
 
   return prompt;
@@ -463,13 +393,15 @@ Your report should read like a professional data analyst's findings about user b
  * @param {string} userId - User ID to analyze sessions for
  * @returns {Promise<object>} Basic analysis results
  */
-async function performBasicAnalysis(userId) {
+async function performBasicAnalysis(userId, preparedSessionData = null) {
   const analysisStartTime = Date.now(); // Add start time
   console.log(`[Orchestrator] Starting basic analysis (Stage 1) for userId: ${userId}`);
   try {
-    // Step 1: Fetch and prepare raw session data
-    console.log(`[Orchestrator] STEP 1: Fetching and preparing raw session data for ${userId}`);
-    let sessionData = await fetchAndPrepareSessionData(userId);
+    let sessionData = preparedSessionData;
+    if (!sessionData) {
+      console.log(`[Orchestrator] STEP 1: Fetching and preparing raw session data for ${userId}`);
+      sessionData = await fetchAndPrepareSessionData(userId);
+    }
     if (sessionData.sessionCount < 1) {
       console.log(`[Orchestrator] No valid sessions found for user ${userId}`);
       return {
@@ -552,13 +484,15 @@ async function performBasicAnalysis(userId) {
  * @param {string} userId - User ID to analyze sessions for
  * @returns {Promise<object>} Stage 2 analysis results
  */
-async function performStage2Analysis(userId) {
+async function performStage2Analysis(userId, preparedSessionData = null) {
   const analysisStartTime = Date.now(); // Add start time
   console.log(`[Orchestrator] Starting Stage 2 analysis for userId: ${userId}`);
   try {
-    // Step 1: Fetch and prepare raw session data again (as Stage 2 is called separately)
-    console.log(`[Orchestrator] STEP 1: Fetching and preparing raw session data for ${userId}`);
-    let sessionData = await fetchAndPrepareSessionData(userId);
+    let sessionData = preparedSessionData;
+    if (!sessionData) {
+      console.log(`[Orchestrator] STEP 1: Fetching and preparing raw session data for ${userId}`);
+      sessionData = await fetchAndPrepareSessionData(userId);
+    }
     if (sessionData.sessionCount < 1) {
       console.log(`[Orchestrator] No valid sessions found for user ${userId}`);
       return {
@@ -727,7 +661,6 @@ Sessions Analyzed: ${sessionData.sessionCount}
         if (summary.clickEvents) {
           prompt += `- Click Events: ${summary.clickEvents}\n`;
           prompt += `  - Dead Clicks: ${summary.deadClickCount || 0}\n`;
-          prompt += `  - Repeated Clicks: ${summary.repeatedClickCount || 0}\n`;
         }
         
         if (summary.scrollEvents) {
@@ -1213,25 +1146,45 @@ function extractSessionFeatures(session) {
 }
 
 async function performFullAnalysis(userId) {
-  console.log(`[Orchestrator] Starting FULL analysis (Stage 1 + Stage 2) for userId: ${userId}`);
+  console.log(`[Orchestrator] Starting FULL analysis (Stages 1-4) for userId: ${userId}`);
   const fullAnalysisStartTime = Date.now();
   let stage1ResultData = null;
   let stage2ResultData = null;
+  let stage3ResultData = null;
+  let stage4ResultData = null;
   let sessionCountForResponse = 0;
+  let sessionDataForStages = null;
 
   try {
+    // --- Fetch and Prepare Data (Common for all stages) ---
+    console.log(`[Orchestrator] FULL Analysis: Fetching and preparing session data for ${userId}`);
+    const initialSessionData = await fetchAndPrepareSessionData(userId);
+    if (!initialSessionData || initialSessionData.sessionCount < 1) {
+      console.log(`[Orchestrator] No valid sessions found for user ${userId}`);
+      return {
+        success: false,
+        message: `No valid sessions found for user ${userId}`,
+        userId,
+        sessionCount: 0,
+        analysisTime: ((Date.now() - fullAnalysisStartTime) / 1000).toFixed(2),
+      };
+    }
+    sessionDataForStages = initialSessionData;
+    sessionCountForResponse = sessionDataForStages.sessionCount;
+    console.log(`[Orchestrator] Found ${sessionCountForResponse} valid raw sessions to analyze.`);
+
     // --- Stage 1 Analysis ---    
     console.log(`[Orchestrator] FULL Analysis: Running Stage 1 for ${userId}`);
-    stage1ResultData = await performBasicAnalysis(userId);
-    sessionCountForResponse = stage1ResultData.sessionCount || 0;
+    stage1ResultData = await performBasicAnalysis(userId, sessionDataForStages);
+    sessionCountForResponse = stage1ResultData.sessionCount || sessionCountForResponse;
 
     if (!stage1ResultData.success) {
       console.error(`[Orchestrator] FULL Analysis: Stage 1 failed for ${userId}.`);
-      // Even if stage 1 fails, we might want to convey this to the client specifically.
       return {
         success: false,
-        message: `Stage 1 analysis failed: ${stage1ResultData.message || 'Unknown error'}`, 
+        message: `Stage 1 analysis failed: ${stage1ResultData.message || 'Unknown error'}`,
         userId,
+        sessionCount: sessionCountForResponse,
         stage1Error: stage1ResultData.error || stage1ResultData.message,
         analysisStagesCompleted: stage1ResultData.analysisStagesCompleted || [],
         modelsUsed: stage1ResultData.modelsUsed || [],
@@ -1242,78 +1195,149 @@ async function performFullAnalysis(userId) {
 
     // --- Stage 2 Analysis ---    
     console.log(`[Orchestrator] FULL Analysis: Running Stage 2 for ${userId}`);
-    stage2ResultData = await performStage2Analysis(userId);
-    // Update session count if it was somehow missed or different (should be same)
-    if (stage2ResultData.sessionCount) sessionCountForResponse = stage2ResultData.sessionCount; 
+    stage2ResultData = await performStage2Analysis(userId, sessionDataForStages);
 
     if (!stage2ResultData.success) {
       console.error(`[Orchestrator] FULL Analysis: Stage 2 failed for ${userId}.`);
       return {
         success: true, // Stage 1 succeeded
-        message: `Stage 1 completed, but Stage 2 analysis failed: ${stage2ResultData.message || 'Unknown error'}`, 
+        message: `Stage 1 completed, but Stage 2 analysis failed: ${stage2ResultData.message || 'Unknown error'}`,
         userId,
         sessionCount: sessionCountForResponse,
         stage1Report: stage1ResultData.report,
         stage1ModelsUsed: stage1ResultData.modelsUsed,
         stage1AnalysisTime: stage1ResultData.analysisTime,
         stage2Error: stage2ResultData.error || stage2ResultData.message,
-        analysisStagesCompleted: [...(stage1ResultData.analysisStagesCompleted || []), ...(stage2ResultData.analysisStagesCompletedBeforeError || [])].filter((v, i, a) => a.indexOf(v) === i),
-        modelsUsed: stage1ResultData.modelsUsed || [], // Only stage 1 models if stage 2 failed
+        analysisStagesCompleted: [...(stage1ResultData.analysisStagesCompleted || [])].filter((v, i, a) => a.indexOf(v) === i),
+        modelsUsed: stage1ResultData.modelsUsed || [],
         analysisTime: ((Date.now() - fullAnalysisStartTime) / 1000).toFixed(2),
       };
     }
     console.log(`[Orchestrator] FULL Analysis: Stage 2 completed successfully for ${userId}.`);
 
+    // --- Stage 3 Analysis (Pain Point Q&A) --- 
+    console.log(`[Orchestrator] FULL Analysis: Running Stage 3 (Pain Point Q&A) for ${userId}`);
+    stage3ResultData = await analyzePainPoints(sessionDataForStages, stage1ResultData, stage2ResultData);
+
+    if (!stage3ResultData.success) {
+      console.error(`[Orchestrator] FULL Analysis: Stage 3 failed for ${userId}.`);
+      return {
+        success: true, // Stage 1 & 2 succeeded
+        message: `Stages 1 & 2 completed, but Stage 3 (Pain Point Q&A) failed: ${stage3ResultData.message || 'Unknown error'}`,
+        userId,
+        sessionCount: sessionCountForResponse,
+        stage1Report: stage1ResultData.report,
+        stage2Report: stage2ResultData.report,
+        stage3Error: stage3ResultData.error || stage3ResultData.message,
+        analysisStagesCompleted: [...(stage1ResultData.analysisStagesCompleted || []), ...(stage2ResultData.analysisStagesCompleted || [])].filter((v, i, a) => a.indexOf(v) === i),
+        modelsUsed: [...(stage1ResultData.modelsUsed || []), ...(stage2ResultData.modelsUsed || [])].filter((obj, index, self) => index === self.findIndex((o) => o.model === obj.model && o.stage === obj.stage)),
+        analysisTime: ((Date.now() - fullAnalysisStartTime) / 1000).toFixed(2),
+      };
+    }
+    console.log(`[Orchestrator] FULL Analysis: Stage 3 completed successfully for ${userId}.`);
+
+    // --- Stage 4 Analysis (UX Help Generation) --- 
+    console.log(`[Orchestrator] FULL Analysis: Running Stage 4 (UX Help Generation) for ${userId}`);
+    stage4ResultData = await generateUxHelp(sessionDataForStages, stage1ResultData, stage2ResultData, stage3ResultData);
+
+    if (!stage4ResultData.success) {
+      console.error(`[Orchestrator] FULL Analysis: Stage 4 failed for ${userId}.`);
+      return {
+        success: true, // Stage 1, 2 & 3 succeeded
+        message: `Stages 1, 2 & 3 completed, but Stage 4 (UX Help Generation) failed: ${stage4ResultData.message || 'Unknown error'}`,
+        userId,
+        sessionCount: sessionCountForResponse,
+        stage1Report: stage1ResultData.report,
+        stage2Report: stage2ResultData.report,
+        stage3Report: stage3ResultData.report,
+        stage4Error: stage4ResultData.error || stage4ResultData.message,
+        analysisStagesCompleted: [...(stage1ResultData.analysisStagesCompleted || []), ...(stage2ResultData.analysisStagesCompleted || []), ...(stage3ResultData.analysisStagesCompleted || [])].filter((v, i, a) => a.indexOf(v) === i),
+        modelsUsed: [...(stage1ResultData.modelsUsed || []), ...(stage2ResultData.modelsUsed || []), ...(stage3ResultData.modelsUsed || [])].filter((obj, index, self) => index === self.findIndex((o) => o.model === obj.model && o.stage === obj.stage)),
+        analysisTime: ((Date.now() - fullAnalysisStartTime) / 1000).toFixed(2),
+      };
+    }
+    console.log(`[Orchestrator] FULL Analysis: Stage 4 completed successfully for ${userId}.`);
+
+    // --- Combine Results --- 
     const fullAnalysisEndTime = Date.now();
     const totalAnalysisTime = ((fullAnalysisEndTime - fullAnalysisStartTime) / 1000).toFixed(2);
 
     const combinedModels = [];
     const modelSignature = new Set();
-    (stage1ResultData.modelsUsed || []).forEach(m => {
-        if(!modelSignature.has(m.model + m.stage)) {
-            combinedModels.push(m); modelSignature.add(m.model + m.stage);
+    [stage1ResultData, stage2ResultData, stage3ResultData, stage4ResultData].forEach(stageResult => {
+      (stageResult.modelsUsed || []).forEach(m => {
+        if (!modelSignature.has(m.model + m.stage)) {
+          combinedModels.push(m);
+          modelSignature.add(m.model + m.stage);
         }
+      });
     });
-    (stage2ResultData.modelsUsed || []).forEach(m => {
-        if(!modelSignature.has(m.model + m.stage)) {
-            combinedModels.push(m); modelSignature.add(m.model + m.stage);
+
+    const combinedStagesCompleted = [];
+    const stageSignature = new Set();
+    [stage1ResultData, stage2ResultData, stage3ResultData, stage4ResultData].forEach(stageResult => {
+        (stageResult.analysisStagesCompleted || []).forEach(s => {
+            if(!stageSignature.has(s)) {
+                combinedStagesCompleted.push(s); stageSignature.add(s);
+            }
+        });
+        // Add current stage if not already present from its own result
+        if (stageResult.modelsUsed && stageResult.modelsUsed.length > 0) {
+            const stageNameFromModel = stageResult.modelsUsed[0].stage.replace(/ /g, '') + '_Completed'; // Example: Stage1_Completed
+            // This is a heuristic; actual stage names might need to be derived more robustly
+            // For now, let's assume the stage processor itself adds its completion marker.
+            // If not, we would add it here.
+            // Example: if (!stageSignature.has(stageNameFromModel)) { combinedStagesCompleted.push(stageNameFromModel); stageSignature.add(stageNameFromModel); }
         }
     });
 
     return {
       success: true,
-      message: "Full analysis complete. Reports for Stage 1 and Stage 2 are available.",
-      stage1Report: stage1ResultData.report,
-      stage2Report: stage2ResultData.report,
+      message: "Full analysis (Stages 1-4) complete.",
       userId,
       sessionCount: sessionCountForResponse,
+      stage1Report: stage1ResultData.report,
+      stage2Report: stage2ResultData.report,
+      stage3Report: stage3ResultData.report,
+      stage4Report: stage4ResultData.report,
       modelsUsed: combinedModels,
       analysisTime: totalAnalysisTime,
-      analysisStagesCompleted: [...(stage1ResultData.analysisStagesCompleted || []), ...(stage2ResultData.analysisStagesCompleted || [])].filter((v, i, a) => a.indexOf(v) === i),
+      analysisStagesCompleted: combinedStagesCompleted,
       _meta: {
-          stage1Meta: stage1ResultData._meta, // Assuming _meta is populated by individual stages
+          stage1Meta: stage1ResultData._meta,
           stage2Meta: stage2ResultData._meta,
-          rateLimitStatus: stage2ResultData._meta?.rateLimitStatus || stage1ResultData._meta?.rateLimitStatus,
+          stage3Meta: stage3ResultData._meta, 
+          stage4Meta: stage4ResultData._meta,
+          rateLimitStatus: stage4ResultData._meta?.rateLimitStatus || stage3ResultData._meta?.rateLimitStatus || stage2ResultData._meta?.rateLimitStatus || stage1ResultData._meta?.rateLimitStatus,
           stageResultSizes: {
             ...(stage1ResultData._meta?.stageResultSizes || {}),
             ...(stage2ResultData._meta?.stageResultSizes || {}),
+            ...(stage3ResultData._meta?.stageResultSizes || {}),
+            ...(stage4ResultData._meta?.stageResultSizes || {}),
           }
       }
     };
 
   } catch (error) {
-    console.error(`[Orchestrator] Critical error in performFullAnalysis for userId ${userId}: ${error.message}`);
+    console.error(`[Orchestrator] Critical error in performFullAnalysis (Stages 1-4) for userId ${userId}: ${error.message}`);
     console.error(error.stack);
     return {
       success: false,
-      message: `Critical error during full analysis: ${error.message}`, 
+      message: `Critical error during full analysis: ${error.message}`,
       userId,
+      sessionCount: sessionCountForResponse,
       error: error.message,
       stage1Report: stage1ResultData?.success ? stage1ResultData.report : null,
-      stage1Error: !stage1ResultData?.success ? (stage1ResultData?.message || error.message) : null,
+      stage1Error: !stage1ResultData?.success ? (stage1ResultData?.message || (stage2ResultData?.success ? null : error.message)) : null,
       stage2Report: stage2ResultData?.success ? stage2ResultData.report : null,
-      stage2Error: !stage2ResultData?.success ? (stage2ResultData?.message || (stage1ResultData?.success ? error.message : null)) : null,
+      stage2Error: !stage2ResultData?.success ? (stage2ResultData?.message || (stage1ResultData?.success && !stage3ResultData?.success ? null : error.message)) : null,
+      stage3Report: stage3ResultData?.success ? stage3ResultData.report : null,
+      stage3Error: !stage3ResultData?.success ? (stage3ResultData?.message || (stage2ResultData?.success && !stage4ResultData?.success ? null: error.message)) : null,
+      stage4Report: stage4ResultData?.success ? stage4ResultData.report : null,
+      stage4Error: !stage4ResultData?.success ? (stage4ResultData?.message || error.message) : null,
       analysisTime: ((Date.now() - fullAnalysisStartTime) / 1000).toFixed(2),
+      modelsUsed: [stage1ResultData?.modelsUsed, stage2ResultData?.modelsUsed, stage3ResultData?.modelsUsed, stage4ResultData?.modelsUsed].filter(Boolean).flat(),
+      analysisStagesCompleted: [stage1ResultData?.analysisStagesCompleted, stage2ResultData?.analysisStagesCompleted, stage3ResultData?.analysisStagesCompleted, stage4ResultData?.analysisStagesCompleted].filter(Boolean).flat().filter((v,i,a) => a.indexOf(v) === i)
     };
   }
 }

@@ -13,11 +13,15 @@ import './AIAnalysisView.css'; // Import custom CSS for tables
 interface AnalysisResult {
   success: boolean;
   userId: string;
-  report?: string; // Main overview message
+  report?: string; // Main overview message (might be deprecated if stages have own reports)
   stage1Report?: string;
   stage2Report?: string;
+  stage3Report?: string; // Added for Stage 3
+  stage4Report?: string; // Added for Stage 4
   stage1Error?: string;
   stage2Error?: string;
+  stage3Error?: string; // Added for Stage 3
+  stage4Error?: string; // Added for Stage 4
   reportLength?: number;
   modelsUsed?: Array<{stage: string, model: string, fallback?: boolean}>;
   stage1ModelsUsed?: Array<{stage: string, model: string, fallback?: boolean}>; // For when stage 2 fails
@@ -37,8 +41,8 @@ interface AnalysisResult {
     stageResultSizes?: {
       stage1?: number;
       stage2?: number;
-      stage3?: number;
-      stage4?: number;
+      stage3?: number; // Added for Stage 3
+      stage4?: number; // Added for Stage 4
       final?: number;
     }
   };
@@ -61,9 +65,11 @@ const AIAnalysisView: React.FC = () => {
   const [fullAnalysisResult, setFullAnalysisResult] = useState<AnalysisResult | null>(null);
   const [stage1ReportContent, setStage1ReportContent] = useState<string | null>(null);
   const [stage2ReportContent, setStage2ReportContent] = useState<string | null>(null);
+  const [stage3ReportContent, setStage3ReportContent] = useState<string | null>(null); // Added for Stage 3
+  const [stage4ReportContent, setStage4ReportContent] = useState<string | null>(null); // Added for Stage 4
   const [fullAnalysisError, setFullAnalysisError] = useState<string | null>(null);
   
-  const [activeTab, setActiveTab] = useState<'stage1' | 'stage2' | 'none'>('none');
+  const [activeTab, setActiveTab] = useState<'stage1' | 'stage2' | 'stage3' | 'stage4' | 'none'>('none'); // Added stage3 & stage4
 
   // Get the analysis server URL from environment variables
   const ANALYSIS_API_URL = import.meta.env.VITE_ANALYSIS_API_URL || 'http://localhost:3100';
@@ -98,6 +104,8 @@ const AIAnalysisView: React.FC = () => {
       setFullAnalysisResult(null);
       setStage1ReportContent(null);
       setStage2ReportContent(null);
+      setStage3ReportContent(null); // Reset Stage 3
+      setStage4ReportContent(null); // Reset Stage 4
       setFullAnalysisError(null);
       setActiveTab('none');
     } else {
@@ -105,6 +113,8 @@ const AIAnalysisView: React.FC = () => {
       setFullAnalysisResult(null);
       setStage1ReportContent(null);
       setStage2ReportContent(null);
+      setStage3ReportContent(null); // Reset Stage 3
+      setStage4ReportContent(null); // Reset Stage 4
       setFullAnalysisError(null);
       setActiveTab('none');
     }
@@ -115,18 +125,20 @@ const AIAnalysisView: React.FC = () => {
       setFullAnalysisProgress(0);
       let currentProgress = 0;
       analysisProgressInterval = window.setInterval(() => {
-        currentProgress += Math.random() * 2.5; // Slower overall progress for two stages
-        if (currentProgress >= 100) currentProgress = 99; // Don't hit 100 until result comes
+        currentProgress += Math.random() * 1.8; // Adjusted for four stages
+        if (currentProgress >= 100) currentProgress = 99; 
         setFullAnalysisProgress(currentProgress);
 
-        if (currentProgress < 40) {
+        if (currentProgress < 25) {
           setFullAnalysisProgressText('Running Stage 1: Detailed Event Analysis...');
-        } else if (currentProgress < 80) {
+        } else if (currentProgress < 50) {
           setFullAnalysisProgressText('Running Stage 2: Non-Transitional Behavior...');
+        } else if (currentProgress < 75) {
+          setFullAnalysisProgressText('Running Stage 3: Pain Point Q&A...'); // Added Stage 3 text
         } else {
-          setFullAnalysisProgressText('Finalizing reports...');
+          setFullAnalysisProgressText('Running Stage 4: UX Help Generation & Finalizing...'); // Added Stage 4 text
         }
-      }, 400); // Slower interval
+      }, 400); 
 
       return () => {
         if (analysisProgressInterval) clearInterval(analysisProgressInterval);
@@ -151,9 +163,11 @@ const AIAnalysisView: React.FC = () => {
       setFullAnalysisResult(null);
       setStage1ReportContent(null);
       setStage2ReportContent(null);
+      setStage3ReportContent(null); // Reset Stage 3
+      setStage4ReportContent(null); // Reset Stage 4
       setActiveTab('none');
       setFullAnalysisProgress(0);
-      setFullAnalysisProgressText('Initiating full analysis...');
+      setFullAnalysisProgressText('Initiating full analysis (Stages 1-4)...');
       
       const response = await axios.post(`${ANALYSIS_API_URL}/api/analysis/user/${selectedUser.userId}/full`);
       const resultData = response.data as AnalysisResult;
@@ -161,14 +175,24 @@ const AIAnalysisView: React.FC = () => {
 
       if (resultData.stage1Report) setStage1ReportContent(resultData.stage1Report);
       if (resultData.stage2Report) setStage2ReportContent(resultData.stage2Report);
+      if (resultData.stage3Report) setStage3ReportContent(resultData.stage3Report); // Set Stage 3 report
+      if (resultData.stage4Report) setStage4ReportContent(resultData.stage4Report); // Set Stage 4 report
 
       if (resultData.success) {
-        setActiveTab(resultData.stage1Report ? 'stage1' : (resultData.stage2Report ? 'stage2' : 'none'));
+        // Determine the first available tab with content
+        if (resultData.stage1Report) setActiveTab('stage1');
+        else if (resultData.stage2Report) setActiveTab('stage2');
+        else if (resultData.stage3Report) setActiveTab('stage3');
+        else if (resultData.stage4Report) setActiveTab('stage4');
+        else setActiveTab('none');
       } else {
         setFullAnalysisError(resultData.message || resultData.error || "Full analysis completed with errors.");
-        // If stage 1 has a report despite overall failure, show it.
-        if (resultData.stage1Report && !resultData.stage2Error) setActiveTab('stage1');
-        else if (resultData.stage2Report) setActiveTab('stage2'); // Or stage 2 if available
+        // If any stage has a report despite overall failure, show it.
+        if (resultData.stage1Report && !resultData.stage2Error && !resultData.stage3Error && !resultData.stage4Error) setActiveTab('stage1');
+        else if (resultData.stage2Report && !resultData.stage3Error && !resultData.stage4Error) setActiveTab('stage2');
+        else if (resultData.stage3Report && !resultData.stage4Error) setActiveTab('stage3');
+        else if (resultData.stage4Report) setActiveTab('stage4');
+        else setActiveTab('none');
       }
     } catch (error) {
       let errorMessage = 'An unknown error occurred during Full Analysis.';
@@ -187,7 +211,7 @@ const AIAnalysisView: React.FC = () => {
     }
   };
 
-  const handleTabChange = (event: React.SyntheticEvent, newValue: 'stage1' | 'stage2') => {
+  const handleTabChange = (event: React.SyntheticEvent, newValue: 'stage1' | 'stage2' | 'stage3' | 'stage4') => {
     setActiveTab(newValue);
   };
 
@@ -302,9 +326,9 @@ const AIAnalysisView: React.FC = () => {
           
           <div className="grid grid-cols-1 gap-4 mb-6">
             <div className="p-4 border rounded-md bg-gray-50">
-              <h3 className="text-lg font-medium mb-2">Full Analysis (Stage 1 & 2)</h3>
+              <h3 className="text-lg font-medium mb-2">Full Analysis (Stages 1-4)</h3>
               <p className="text-sm text-gray-600 mb-4">
-                Runs detailed event analysis followed by non-transitional behavior analysis.
+                Runs detailed event analysis, non-transitional behavior, pain point Q&A, and UX help generation.
               </p>
               <Button
                 variant="contained"
@@ -315,7 +339,7 @@ const AIAnalysisView: React.FC = () => {
                   '&:hover': { backgroundColor: isAnalyzingFull ? '#9CA3AF' : '#059669' } // Tailwind green-600
                 }}
               >
-                {isAnalyzingFull ? 'Running Full Analysis...' : 'Run Full Analysis (Stage 1 & 2)'}
+                {isAnalyzingFull ? 'Running Full Analysis...' : 'Run Full Analysis (Stages 1-4)'}
               </Button>
             </div>
           </div>
@@ -359,8 +383,10 @@ const AIAnalysisView: React.FC = () => {
               
               <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 2 }}>
                 <Tabs value={activeTab === 'none' ? false : activeTab} onChange={handleTabChange} aria-label="analysis stages tabs">
-                  <Tab label="Stage 1: Detailed Events" value="stage1" disabled={!stage1ReportContent && !fullAnalysisResult.stage1Error} />
-                  <Tab label="Stage 2: Non-Transitional" value="stage2" disabled={!stage2ReportContent && !fullAnalysisResult.stage2Error} />
+                  <Tab label="Stage 1: Detailed Events" value="stage1" disabled={!stage1ReportContent && !fullAnalysisResult?.stage1Error} />
+                  <Tab label="Stage 2: Non-Transitional" value="stage2" disabled={!stage2ReportContent && !fullAnalysisResult?.stage2Error} />
+                  <Tab label="Stage 3: Pain Point Q&A" value="stage3" disabled={!stage3ReportContent && !fullAnalysisResult?.stage3Error} />
+                  <Tab label="Stage 4: UX Help" value="stage4" disabled={!stage4ReportContent && !fullAnalysisResult?.stage4Error} />
                 </Tabs>
               </Box>
               
@@ -397,13 +423,23 @@ const AIAnalysisView: React.FC = () => {
                     <div className="p-4 text-red-700 bg-red-100 rounded-md"><h3 className="font-semibold">Stage 2 Error:</h3><p>{fullAnalysisResult.stage2Error}</p>{stage2ReportContent && <><Divider sx={{my:2}}/> <ReactMarkdown rehypePlugins={[rehypeRaw]} remarkPlugins={[remarkGfm]}>{stage2ReportContent}</ReactMarkdown></>}</div> :
                     <ReactMarkdown rehypePlugins={[rehypeRaw]} remarkPlugins={[remarkGfm]}>{stage2ReportContent || "Stage 2 report not available or not selected."}</ReactMarkdown>
                   )}
+                  {activeTab === 'stage3' && (
+                    fullAnalysisResult.stage3Error ? 
+                    <div className="p-4 text-red-700 bg-red-100 rounded-md"><h3 className="font-semibold">Stage 3 Error:</h3><p>{fullAnalysisResult.stage3Error}</p>{stage3ReportContent && <><Divider sx={{my:2}}/> <ReactMarkdown rehypePlugins={[rehypeRaw]} remarkPlugins={[remarkGfm]}>{stage3ReportContent}</ReactMarkdown></>}</div> :
+                    <ReactMarkdown rehypePlugins={[rehypeRaw]} remarkPlugins={[remarkGfm]}>{stage3ReportContent || "Stage 3 report (Pain Point Q&A) not available or not selected."}</ReactMarkdown>
+                  )}
+                  {activeTab === 'stage4' && (
+                    fullAnalysisResult.stage4Error ? 
+                    <div className="p-4 text-red-700 bg-red-100 rounded-md"><h3 className="font-semibold">Stage 4 Error:</h3><p>{fullAnalysisResult.stage4Error}</p>{stage4ReportContent && <><Divider sx={{my:2}}/> <ReactMarkdown rehypePlugins={[rehypeRaw]} remarkPlugins={[remarkGfm]}>{stage4ReportContent}</ReactMarkdown></>}</div> :
+                    <ReactMarkdown rehypePlugins={[rehypeRaw]} remarkPlugins={[remarkGfm]}>{stage4ReportContent || "Stage 4 report (UX Help Generation) not available or not selected."}</ReactMarkdown>
+                  )}
                   {activeTab === 'none' && <Typography>Select a stage tab to view its report.</Typography>}
                 </div>
               </Box>
             </Paper>
           )}
 
-          {fullAnalysisResult && !fullAnalysisResult.success && !fullAnalysisResult.stage1Report && !fullAnalysisResult.stage2Report && (
+          {fullAnalysisResult && !fullAnalysisResult.success && !fullAnalysisResult.stage1Report && !fullAnalysisResult.stage2Report && !fullAnalysisResult.stage3Report && !fullAnalysisResult.stage4Report && (
             <div className="p-4 mb-6 text-amber-700 bg-amber-100 rounded-md">
               <h3 className="font-semibold">Analysis Unavailable</h3>
               <p>{fullAnalysisResult.message || "No analysis could be performed. Please try again."}</p>

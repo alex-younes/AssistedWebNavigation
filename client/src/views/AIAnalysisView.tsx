@@ -5,7 +5,7 @@ import ReactMarkdown from 'react-markdown';
 import rehypeRaw from 'rehype-raw';
 import remarkGfm from 'remark-gfm';
 // import { useParams } from 'react-router-dom'; // Commented out or remove this line
-import { Typography, Box, Paper, LinearProgress, Chip, Stack, Tooltip, Divider, Tabs, Tab, Button } from '@mui/material';
+import { Typography, Box, Paper, LinearProgress, Divider, Tabs, Tab, Button } from '@mui/material';
 import { useTheme } from '@mui/material/styles';
 import './AIAnalysisView.css'; // Import custom CSS for tables
 
@@ -217,66 +217,6 @@ const AIAnalysisView: React.FC = () => {
 
   const theme = useTheme();
 
-  // Helper to render model chips
-  const renderModelChips = (models: Array<{stage: string, model: string, fallback?: boolean}> | undefined) => {
-    if (!models || models.length === 0) return null;
-    return (
-      <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', gap: 1, mb: 2 }}>
-        {models.map((model, index) => (
-          <Tooltip key={index} title={getModelDescription(model.model)} placement="top">
-            <Chip label={`${model.stage}: ${getModelDisplayName(model.model)}`} color={getModelColor(model.model)} variant="outlined" size="small"
-              sx={{ backgroundColor: `${theme.palette.primary.main}15`, fontWeight: 'medium' }}
-            />
-          </Tooltip>
-        ))}
-      </Stack>
-    );
-  };
-  
-  // Helper functions for model display
-  const getModelDisplayName = (model: string | undefined): string => {
-    if (!model) return 'Unknown Model';
-    
-    // Extract friendly names from model identifiers
-    if (model.includes('claude-3-opus')) return 'Claude 3 Opus';
-    if (model.includes('claude-3-sonnet')) return 'Claude 3 Sonnet';
-    if (model.includes('claude-3-haiku')) return 'Claude 3 Haiku';
-    if (model.includes('gpt-4')) return 'GPT-4';
-    if (model.includes('llama-3.1-8b')) return 'Llama 3.1 8B';
-    if (model.includes('llama-3.3-70b')) return 'Llama 3.3 70B';
-    if (model.includes('llama-3')) return 'Llama 3';
-    if (model.includes('mistral-saba')) return 'Mistral Saba';
-    if (model.includes('deepseek')) return 'DeepSeek';
-    if (model.includes('gemma')) return 'Gemma 2';
-    return model.split('/').pop()?.split('-')[0] || model;
-  };
-  
-  const getModelColor = (model: string | undefined): "primary" | "secondary" | "default" | "error" | "info" | "success" | "warning" => {
-    if (!model) return 'default';
-    
-    if (model.includes('claude-3-opus')) return 'primary';
-    if (model.includes('gpt-4')) return 'secondary';
-    if (model.includes('deepseek')) return 'info';
-    if (model.includes('llama')) return 'success';
-    if (model.includes('mistral')) return 'warning';
-    return 'default';
-  };
-  
-  const getModelDescription = (model: string | undefined): string => {
-    if (!model) return 'AI model for analysis';
-    
-    if (model.includes('claude-3-opus')) return 'Anthropic\'s most powerful model for comprehensive analysis';
-    if (model.includes('claude-3-sonnet')) return 'Balanced power and speed for detailed analysis';
-    if (model.includes('claude-3-haiku')) return 'Fast analysis for specific metrics';
-    if (model.includes('deepseek')) return 'Specialized for deep behavioral analysis';
-    if (model.includes('llama-3.1-8b')) return 'Fast, efficient model for metrics analysis';
-    if (model.includes('llama-3.3-70b')) return 'Powerful model for comprehensive synthesis';
-    if (model.includes('llama-3')) return 'Meta\'s efficient model for metrics and patterns';
-    if (model.includes('mistral-saba')) return 'Powerful model for behavioral analysis';
-    if (model.includes('gemma')) return 'Google\'s Gemma model for temporal analysis';
-    return 'AI model for specialized analysis tasks';
-  };
-
   return (
     <div className="space-y-8">
       {/* User Selection Section */}
@@ -374,13 +314,6 @@ const AIAnalysisView: React.FC = () => {
                   </Typography>)}
               </div>
 
-              {renderModelChips(fullAnalysisResult.modelsUsed)}
-              {fullAnalysisResult.analysisStagesCompleted && (
-                  <div className="mb-4">
-                    <Typography variant="subtitle2" component="div" sx={{ mb: 1, color: 'text.secondary' }}>Analysis Stages Run:</Typography>
-                    <Stack direction="row" spacing={1}>{fullAnalysisResult.analysisStagesCompleted.map((stage, index) => (<Chip key={index} label={stage.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())} variant="outlined" size="small" sx={{ backgroundColor: `${theme.palette.info.main}20`, borderColor: `${theme.palette.info.main}80`, color: theme.palette.info.dark, fontWeight: 'medium' }}/>))}</Stack>
-                  </div>)}
-              
               <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 2 }}>
                 <Tabs value={activeTab === 'none' ? false : activeTab} onChange={handleTabChange} aria-label="analysis stages tabs">
                   <Tab label="Stage 1: Detailed Events" value="stage1" disabled={!stage1ReportContent && !fullAnalysisResult?.stage1Error} />

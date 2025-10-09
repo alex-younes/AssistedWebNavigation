@@ -1,4 +1,4 @@
-# AI‑Assisted Web Navigation — Research Prototype (Archived)
+# AI‑Assisted Web Navigation, Research Prototype (Archived)
 
 > Research project (legacy). This repository archives an earlier prototype created as part of a Final Year Project. It is retained for showcase and reference and is not a production assistant.
 

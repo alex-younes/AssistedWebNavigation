@@ -1,103 +1,39 @@
-# FYP Tracker Extension
+# AI‑Assisted Web Navigation — Research Prototype (Archived)
 
-This extension tracks user interactions on web pages for analytics and research purposes.
+> Research project (legacy). This repository archives an earlier prototype created as part of a Final Year Project. It is retained for showcase and reference and is not a production assistant.
 
-## Setup Instructions
+## Project Overview
+This research explored how user interaction patterns and page structure (DOM) could inform clear, step‑by‑step guidance on the web. The prototype collected interaction data in controlled tests and prepared it for offline analysis to study navigation patterns and points of friction.
 
-### 1. Backend Setup
+## Vision
+Make the web easier to use by learning from how people actually navigate it. The long‑term idea is a helpful assistant that offers concise, contextual guidance, reduces confusion, speeds up task completion, and improves accessibility across different websites.
 
-#### Prerequisites
-- Node.js (v14 or higher)
-- MongoDB (local installation or MongoDB Atlas account)
+## What This Could Unlock
+- Faster task completion on complex sites through clear, contextual prompts
+- Smoother onboarding and self‑serve support experiences
+- More accessible journeys with simple step‑by‑step cues
+- Data‑informed UX decisions grounded in real interaction patterns
 
-#### Installation
-1. Navigate to the backend directory:
-   ```
-   cd backend
-   ```
+## Example Use Cases (Future)
+- Guiding new users through multi‑step onboarding flows
+- Helping customers complete checkout or account tasks with fewer errors
+- Recommending the next likely step when users appear stuck
+- Surfacing the most relevant UI element when pages are dense or dynamic
 
-2. Install dependencies:
-   ```
-   npm install
-   ```
+## Key Ideas Explored in the Research
+- Interaction patterns correlate with successful task completion
+- Page structure helps identify what matters and when to show it
+- Lightweight visual cues and simple messages can reduce friction
+- Insights from sessions can inform future guidance and UX improvements
 
-3. Create a `.env` file in the backend directory with the following content:
-   ```
-   PORT=3000
-   DEBUG=true
-   NODE_ENV=development
-   MONGO_URI=mongodb://localhost:27017/fypTracker
-   ```
+## What Remains Future Work
+- Real‑time assistant behavior across a wider range of sites
+- Product hardening, privacy controls, and broader evaluation
+- Feedback loops to continuously improve guidance quality
 
-4. Set up MongoDB:
-   - If using a local MongoDB installation, make sure MongoDB service is running
-   - If using MongoDB Atlas, update the MONGO_URI in the `.env` file with your connection string
+## Current Status
+This is an older, research‑only prototype aimed at testing ideas around data collection and analysis in controlled settings. It is not positioned as a finished product or live assistant.
 
-5. Start the backend server:
-   ```
-   npm start
-   ```
+## Research Materials
+Some research PDFs and documentation are available here: [Google Drive](https://drive.google.com/drive/folders/1RjCxAApFSnJZLwxsFSva3BsP5GcW3GRx?usp=sharing)
 
-6. Verify the server is running by accessing the health endpoint:
-   ```
-   http://localhost:3000/health
-   ```
-
-### 2. Extension Setup
-
-1. Open Chrome and navigate to `chrome://extensions/`
-
-2. Enable "Developer mode" (toggle in the top-right corner)
-
-3. Click "Load unpacked" and select the `extension` directory
-
-4. The extension should now appear in your browser toolbar
-
-5. Click on the extension icon and configure the server address:
-   - Enter the IP address shown in the backend console output
-   - Set the port to match your `.env` file (default: 3000)
-   - Click "Save Settings"
-
-6. Test the connection by clicking "Test Connection"
-
-## Usage
-
-1. Navigate to a website you want to track
-
-2. Click the extension icon and click "Start Recording"
-
-3. Your interactions will now be tracked and sent to the backend server
-
-4. To stop recording, click the extension icon and click "Stop Recording"
-
-5. View recorded sessions in the backend dashboard (if implemented)
-
-## Troubleshooting
-
-### Extension Not Recording
-- Ensure the backend server is running
-- Check that the server address is correctly configured in the extension
-- Make sure you're on a valid webpage (not a chrome:// or extension:// page)
-- Check the browser console for any error messages
-
-### Connection Issues
-- Verify MongoDB is running if using a local installation
-- Check that the MONGO_URI in the `.env` file is correct
-- Ensure no other service is using the same port (default: 3000)
-- Check firewall settings if connecting from a different device
-
-### Database Issues
-- Check MongoDB connection status in the backend console logs
-- Verify the database and collections are created correctly in MongoDB Compass
-
-## Development
-
-To reload the extension after making changes:
-1. Go to `chrome://extensions/`
-2. Find the FYP Tracker extension
-3. Click the refresh icon
-
-To debug issues:
-1. Right-click the extension icon and select "Inspect popup" to debug the popup
-2. Open DevTools on any page and check the console for content script logs
-3. Review backend server logs for API and database issues 

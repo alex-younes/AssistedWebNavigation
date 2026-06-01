@@ -1,39 +1,48 @@
-# AI‑Assisted Web Navigation, Research Prototype (Archived)
+# Assisted Web Navigation
 
-> Research project (legacy). This repository archives an earlier prototype created as part of a Final Year Project. It is retained for showcase and reference and is not a production assistant.
+AI-assisted web navigation research prototype for helping users complete tasks on complex websites through contextual, step-by-step guidance.
 
-## Project Overview
-This research explored how user interaction patterns and page structure (DOM) could inform clear, step‑by‑step guidance on the web. The prototype collected interaction data in controlled tests and prepared it for offline analysis to study navigation patterns and points of friction.
+## Status
 
-## Vision
-Make the web easier to use by learning from how people actually navigate it. The long‑term idea is a helpful assistant that offers concise, contextual guidance, reduces confusion, speeds up task completion, and improves accessibility across different websites.
+This project began as a Final Year Project research prototype and is now being actively resumed as an open-source project. The current repository contains the original prototype, research materials, and early implementation work. The next phase focuses on turning the research prototype into a maintainable developer project with clearer architecture, privacy controls, tests, and a practical roadmap.
 
-## What This Could Unlock
-- Faster task completion on complex sites through clear, contextual prompts
-- Smoother onboarding and self‑serve support experiences
-- More accessible journeys with simple step‑by‑step cues
-- Data‑informed UX decisions grounded in real interaction patterns
+## Project Goal
 
-## Example Use Cases (Future)
-- Guiding new users through multi‑step onboarding flows
-- Helping customers complete checkout or account tasks with fewer errors
-- Recommending the next likely step when users appear stuck
-- Surfacing the most relevant UI element when pages are dense or dynamic
+Many websites are difficult to navigate, especially for users dealing with dense interfaces, multi-step flows, accessibility barriers, or unfamiliar layouts. Assisted Web Navigation explores how page structure, DOM signals, and user interaction patterns can be used to generate helpful guidance while a user navigates the web.
 
-## Key Ideas Explored in the Research
-- Interaction patterns correlate with successful task completion
-- Page structure helps identify what matters and when to show it
-- Lightweight visual cues and simple messages can reduce friction
-- Insights from sessions can inform future guidance and UX improvements
+The long-term goal is to build an assistant that can:
 
-## What Remains Future Work
-- Real‑time assistant behavior across a wider range of sites
-- Product hardening, privacy controls, and broader evaluation
-- Feedback loops to continuously improve guidance quality
+- Understand page structure and user intent
+- Detect when users may be stuck
+- Suggest the next useful action
+- Provide concise step-by-step guidance
+- Improve accessibility and self-service support workflows
 
-## Current Status
-This is an older, research‑only prototype aimed at testing ideas around data collection and analysis in controlled settings. It is not positioned as a finished product or live assistant.
+## Why This Matters
 
-## Research Materials
-Some research PDFs and documentation are available here: [Google Drive](https://drive.google.com/drive/folders/1RjCxAApFSnJZLwxsFSva3BsP5GcW3GRx?usp=sharing)
+Web navigation problems affect accessibility, onboarding, checkout flows, account management, government services, education platforms, and other important online workflows. This project explores an open-source approach to making web experiences easier to understand and complete.
 
+## Current Repository
+
+The repository currently includes:
+
+- Browser/client prototype code
+- Backend services
+- AI analysis server components
+- Research documentation
+- Earlier experiments from the original prototype
+
+This is not yet a production assistant. It is an active research-to-product open-source effort.
+
+## Roadmap
+
+Planned work includes:
+
+- Clean up the project structure and setup instructions
+- Add a working local demo flow
+- Document architecture and data flow
+- Add privacy and security notes
+- Improve DOM/page analysis
+- Add tests for core navigation logic
+- Create issues for contributor-friendly tasks
+- Explore AI-assisted guidance generation

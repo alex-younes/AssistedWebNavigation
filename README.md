@@ -46,3 +46,12 @@ Planned work includes:
 - Add tests for core navigation logic
 - Create issues for contributor-friendly tasks
 - Explore AI-assisted guidance generation
+
+## Research Materials
+
+The original research and planning materials are included in this repository:
+
+- [Project specification](Doc.pdf)
+- [Research presentation](research.pdf)
+
+These documents explain the original problem statement, system scope, DOM analysis approach, user behavior tracking model, architecture, and planned navigation-assistance workflow.
